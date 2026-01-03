@@ -13,8 +13,27 @@ export AIRSPOT_WORKSPACE="${AIRSPOT_WORKSPACE:-$(dirname "$SCRIPT_DIR")}"
 export AIRSPOT_PROJECT_DIR="$AIRSPOT_WORKSPACE/application"
 export AIRSPOT_BUILD_DIR="$AIRSPOT_PROJECT_DIR/build"
 export AIRSPOT_BOARD="nrf54l15dk/nrf54l05/cpuapp"
+
+# NCS Toolchain Configuration
+NCS_TOOLCHAIN_DIR="/opt/nordic/ncs/toolchains/322ac893fe"
 export ZEPHYR_TOOLCHAIN_VARIANT=zephyr
-export ZEPHYR_SDK_INSTALL_DIR=/opt/nordic/ncs/toolchains/322ac893fe/opt/zephyr-sdk
+export ZEPHYR_SDK_INSTALL_DIR="$NCS_TOOLCHAIN_DIR/opt/zephyr-sdk"
+
+# Add NCS toolchain to PATH (must come before homebrew to use NCS cmake)
+# Force reset PATH with NCS toolchain at the front
+NCS_PATH="$NCS_TOOLCHAIN_DIR/Cellar/cmake/3.21.0/bin"
+NCS_PATH="$NCS_PATH:$NCS_TOOLCHAIN_DIR/bin"
+NCS_PATH="$NCS_PATH:$NCS_TOOLCHAIN_DIR/usr/bin"
+NCS_PATH="$NCS_PATH:$NCS_TOOLCHAIN_DIR/usr/local/bin"
+NCS_PATH="$NCS_PATH:$NCS_TOOLCHAIN_DIR/opt/bin"
+NCS_PATH="$NCS_PATH:$NCS_TOOLCHAIN_DIR/opt/nanopb/generator-bin"
+NCS_PATH="$NCS_PATH:$NCS_TOOLCHAIN_DIR/nrfutil/bin"
+NCS_PATH="$NCS_PATH:$NCS_TOOLCHAIN_DIR/opt/zephyr-sdk/arm-zephyr-eabi/bin"
+NCS_PATH="$NCS_PATH:$NCS_TOOLCHAIN_DIR/opt/zephyr-sdk/riscv64-zephyr-elf/bin"
+
+if [[ ":$PATH:" != *":$NCS_TOOLCHAIN_DIR/Cellar/cmake:"* ]]; then
+    export PATH="$NCS_PATH:$PATH"
+fi
 
 # Colors
 _RED='\033[0;31m'
@@ -106,12 +125,12 @@ airspot_build() {
 airspot_flash() {
     # Check for hex file in sysbuild location or regular location
     local hex_file=""
-    if [ -f "$AIRSPOT_BUILD_DIR/application/zephyr/zephyr.hex" ]; then
+    if [ -f "$AIRSPOT_BUILD_DIR/merged.hex" ]; then
+        hex_file="$AIRSPOT_BUILD_DIR/merged.hex"
+    elif [ -f "$AIRSPOT_BUILD_DIR/application/zephyr/zephyr.hex" ]; then
         hex_file="$AIRSPOT_BUILD_DIR/application/zephyr/zephyr.hex"
     elif [ -f "$AIRSPOT_BUILD_DIR/zephyr/zephyr.hex" ]; then
         hex_file="$AIRSPOT_BUILD_DIR/zephyr/zephyr.hex"
-    elif [ -f "$AIRSPOT_BUILD_DIR/merged.hex" ]; then
-        hex_file="$AIRSPOT_BUILD_DIR/merged.hex"
     fi
     
     if [ -z "$hex_file" ]; then
@@ -247,7 +266,7 @@ airspot_memory() {
     echo ""
     _print_info "Memory Usage"
     echo "══════════════════════════════════════"
-    /opt/nordic/ncs/toolchains/322ac893fe/opt/zephyr-sdk/arm-zephyr-eabi/bin/arm-zephyr-eabi-size "$elf_file"
+    "$ZEPHYR_SDK_INSTALL_DIR/arm-zephyr-eabi/bin/arm-zephyr-eabi-size" "$elf_file"
     echo ""
 }
 
