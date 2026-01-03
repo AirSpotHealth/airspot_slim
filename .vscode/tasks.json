@@ -1,0 +1,59 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "AirSpot: Build",
+      "type": "shell",
+      "command": "source scripts/airspot && airspot build",
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "AirSpot: Flash",
+      "type": "shell",
+      "command": "source scripts/airspot && airspot flash",
+      "problemMatcher": []
+    },
+    {
+      "label": "AirSpot: Build + Flash",
+      "type": "shell",
+      "command": "source scripts/airspot && airspot bf",
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "AirSpot: Build + Flash + Logs",
+      "type": "shell",
+      "command": "source scripts/airspot && airspot bfl",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "AirSpot: Logs",
+      "type": "shell",
+      "command": "source scripts/airspot && airspot logs",
+      "problemMatcher": []
+    },
+    {
+      "label": "AirSpot: Reset Device",
+      "type": "shell",
+      "command": "source scripts/airspot && airspot reset",
+      "problemMatcher": []
+    },
+    {
+      "label": "AirSpot: Clean",
+      "type": "shell",
+      "command": "source scripts/airspot && airspot clean",
+      "problemMatcher": []
+    },
+    {
+      "label": "AirSpot: Device Info",
+      "type": "shell",
+      "command": "source scripts/airspot && airspot info",
+      "problemMatcher": []
+    }
+  ]
+}

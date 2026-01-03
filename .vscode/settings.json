@@ -1,0 +1,16 @@
+{
+  "nrf-connect.applications": ["${workspaceFolder}/application"],
+  "terminal.integrated.shellIntegration.enabled": true,
+  "terminal.integrated.env.osx": {
+    "AIRSPOT_ENV": "loaded",
+    "AIRSPOT_NO_AUTO_MENU": "1"
+  },
+  "terminal.integrated.profiles.osx": {
+    "zsh (AirSpot)": {
+      "path": "zsh",
+      "args": ["-c", "ZDOTDIR=${workspaceFolder}/.vscode exec zsh"]
+    }
+  },
+  "terminal.integrated.defaultProfile.osx": "zsh (AirSpot)",
+  "cmake.sourceDirectory": "/Users/nirajbhatt/airspot/Airspot_firmware/airspot/airspot_slim/application"
+}

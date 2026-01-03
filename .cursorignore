@@ -1,0 +1,14 @@
+# Add directories or file patterns to ignore during indexing (e.g. foo/ or *.csv)
+external/*
+
+# Ignore .vscode directory
+.vscode/*
+
+# Ignore .git directory
+.git/*
+
+# Ignore .gitignore file
+.gitignore
+
+# Ignore .cursorignore file
+.cursorignore

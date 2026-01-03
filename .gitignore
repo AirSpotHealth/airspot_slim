@@ -1,0 +1,53 @@
+# Build directories
+build/
+build_*/
+
+# Zephyr/Nordic specific
+.west/
+bootloader/
+modules/
+tools/
+zephyr/
+
+# VS Code workspace files (keep settings but ignore user-specific files)
+.vscode/.zsh_history
+.vscode/.zcompdump*
+.vscode/.zshrc.zwc
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Editor backups
+*~
+*.swp
+*.swo
+*.bak
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+
+# Logs
+*.log
+
+# Compiled Object files
+*.o
+*.elf
+*.hex
+*.bin
+*.map
+
+# Dependencies
+.cache/
+
+# JLink
+JLink*.log
+
+_current
