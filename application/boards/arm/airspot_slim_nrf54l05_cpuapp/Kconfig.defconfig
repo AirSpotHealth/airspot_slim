@@ -1,0 +1,10 @@
+# Copyright (c) 2025 AirSpot
+# SPDX-License-Identifier: Apache-2.0
+
+if BOARD_AIRSPOT_SLIM_NRF54L05_CPUAPP
+
+config BOARD
+	default "airspot_slim_nrf54l05_cpuapp"
+
+endif # BOARD_AIRSPOT_SLIM_NRF54L05_CPUAPP
+

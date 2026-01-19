@@ -1,0 +1,57 @@
+/*
+ * MCUboot Child Image Device Tree Overlay
+ * Enables external flash access for DFU secondary slot
+ */
+
+/* Enable SPI00 for external flash in MCUboot - manufacturer verified configuration */
+&spi00 {
+	status = "okay";
+	pinctrl-0 = <&spi00_custom>;
+	pinctrl-1 = <&spi00_custom_sleep>;
+	pinctrl-names = "default", "sleep";
+	cs-gpios = <&gpio2 5 GPIO_ACTIVE_LOW>;
+
+	/* AT25XE161D - 2MB SPI NOR Flash */
+	at25xe161d: at25xe161d@0 {
+		compatible = "jedec,spi-nor";
+		reg = <0>;
+		spi-max-frequency = <2000000>;  /* 2 MHz - manufacturer verified */
+		jedec-id = [1f 46 0c];  /* Manufacturer verified JEDEC ID */
+		size = <DT_SIZE_M(2)>;  /* 2 MB */
+	};
+};
+
+/ {
+	chosen {
+		nordic,pm-ext-flash = &at25xe161d;
+	};
+};
+
+/* Pin control for SPI00 - manufacturer verified */
+&pinctrl {
+	spi00_custom: spi00_custom {
+		group2 {
+			psels = <NRF_PSEL(SPIM_SCK, 2, 1)>;
+			nordic,drive-mode = <NRF_DRIVE_S0S1>;
+		};
+
+		group3 {
+			psels = <NRF_PSEL(SPIM_MOSI, 2, 2)>;
+			nordic,drive-mode = <NRF_DRIVE_S0S1>;
+		};
+
+		group1 {
+			psels = <NRF_PSEL(SPIM_MISO, 2, 4)>;
+			nordic,drive-mode = <NRF_DRIVE_S0S1>;
+		};
+	};
+
+	spi00_custom_sleep: spi00_custom_sleep {
+		group1 {
+			psels = <NRF_PSEL(SPIM_SCK, 2, 1)>,
+			        <NRF_PSEL(SPIM_MISO, 2, 4)>,
+			        <NRF_PSEL(SPIM_MOSI, 2, 2)>;
+			low-power-enable;
+		};
+	};
+};

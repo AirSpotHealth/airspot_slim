@@ -1,0 +1,8 @@
+# Copyright (c) 2025 AirSpot
+# SPDX-License-Identifier: Apache-2.0
+
+config BOARD_AIRSPOT_SLIM_NRF54L05_CPUAPP
+	bool "AirSpot Slim nRF54L05 Application MCU"
+	depends on SOC_NRF54L05_CPUAPP
+	select SOC_NRF54L05_CPUAPP
+

@@ -1,0 +1,30 @@
+# AirSpot Slim Firmware Configuration
+
+mainmenu "AirSpot Slim Configuration"
+
+source "Kconfig.zephyr"
+
+# AirSpot-specific configuration
+menu "AirSpot Configuration"
+
+config AIRSPOT_LOG_LEVEL
+	int "AirSpot log level"
+	default 3
+	range 0 4
+	help
+	  Set log level for AirSpot modules:
+	  0 = OFF
+	  1 = ERROR
+	  2 = WARNING
+	  3 = INFO
+	  4 = DEBUG
+
+config AIRSPOT_BUTTON_LONG_PRESS_TIMEOUT_MS
+	int "Button long press timeout (ms)"
+	default 3000
+	range 1000 10000
+	help
+	  Timeout in milliseconds for detecting long button press.
+
+endmenu
+

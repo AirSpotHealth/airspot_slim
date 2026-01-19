@@ -50,4 +50,5 @@ env/
 # JLink
 JLink*.log
 
-_current
+_old_firmware
+/application/.cache

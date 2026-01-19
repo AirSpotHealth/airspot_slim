@@ -18,9 +18,15 @@ export AIRSPOT_BOARD="nrf54l15dk/nrf54l05/cpuapp"
 NCS_TOOLCHAIN_DIR="/opt/nordic/ncs/toolchains/322ac893fe"
 export ZEPHYR_TOOLCHAIN_VARIANT=zephyr
 export ZEPHYR_SDK_INSTALL_DIR="$NCS_TOOLCHAIN_DIR/opt/zephyr-sdk"
+export ZEPHYR_BASE="$AIRSPOT_WORKSPACE/external/zephyr"
 
-# Add NCS toolchain to PATH (must come before homebrew to use NCS cmake)
-# Force reset PATH with NCS toolchain at the front
+# Source Zephyr environment (provides west build command)
+if [ -f "$ZEPHYR_BASE/zephyr-env.sh" ]; then
+    source "$ZEPHYR_BASE/zephyr-env.sh" 2>/dev/null
+fi
+
+# Add NCS toolchain to PATH but keep system git (NCS git is broken on macOS)
+# System git must come BEFORE NCS toolchain paths
 NCS_PATH="$NCS_TOOLCHAIN_DIR/Cellar/cmake/3.21.0/bin"
 NCS_PATH="$NCS_PATH:$NCS_TOOLCHAIN_DIR/bin"
 NCS_PATH="$NCS_PATH:$NCS_TOOLCHAIN_DIR/usr/bin"
@@ -32,7 +38,8 @@ NCS_PATH="$NCS_PATH:$NCS_TOOLCHAIN_DIR/opt/zephyr-sdk/arm-zephyr-eabi/bin"
 NCS_PATH="$NCS_PATH:$NCS_TOOLCHAIN_DIR/opt/zephyr-sdk/riscv64-zephyr-elf/bin"
 
 if [[ ":$PATH:" != *":$NCS_TOOLCHAIN_DIR/Cellar/cmake:"* ]]; then
-    export PATH="$NCS_PATH:$PATH"
+    # Put system paths first so system git is used (NCS git missing remote-https)
+    export PATH="/usr/bin:/opt/homebrew/bin:$NCS_PATH:$PATH"
 fi
 
 # Colors
@@ -48,6 +55,20 @@ _print_error() { echo -e "${_RED}✗${_NC} $1"; }
 _print_info() { echo -e "${_BLUE}ℹ${_NC} $1"; }
 _print_warning() { echo -e "${_YELLOW}⚠${_NC} $1"; }
 
+_find_jlinkexe() {
+    if command -v JLinkExe &> /dev/null; then
+        command -v JLinkExe
+        return 0
+    fi
+    local jlink
+    jlink=$(ls -1 /Applications/SEGGER/JLink_*/JLinkExe 2>/dev/null | sort | tail -n 1)
+    if [ -n "$jlink" ]; then
+        echo "$jlink"
+        return 0
+    fi
+    return 1
+}
+
 # Main airspot command function
 airspot() {
     local cmd=$1
@@ -59,6 +80,9 @@ airspot() {
             ;;
         flash)
             airspot_flash "$@"
+            ;;
+        ports)
+            airspot_ports
             ;;
         logs)
             airspot_logs "$@"
@@ -110,7 +134,21 @@ airspot_build() {
     _print_info "Building AirSpot Slim firmware..."
     cd "$AIRSPOT_PROJECT_DIR"
     
-    west build -b "$AIRSPOT_BOARD" --pristine
+    # Ensure system git is used (NCS git has issues)
+    export PATH="/usr/bin:/opt/homebrew/bin:$PATH"
+    
+    local pristine=""
+    
+    # Check for --clean or --pristine flag
+    for arg in "$@"; do
+        case "$arg" in
+            --clean|--pristine)
+                pristine="--pristine"
+                ;;
+        esac
+    done
+    
+    west build -b "$AIRSPOT_BOARD" --no-sysbuild $pristine
     
     if [ $? -eq 0 ]; then
         _print_success "Build complete!"
@@ -140,9 +178,32 @@ airspot_flash() {
     
     cd "$AIRSPOT_PROJECT_DIR"
     _print_info "Flashing $hex_file..."
-    
-    nrfjprog --program "$hex_file" --sectorerase --verify --reset -f NRF54L
-    
+
+    if command -v nrfjprog &> /dev/null; then
+        nrfjprog --program "$hex_file" --sectorerase --verify --reset -f NRF54L
+    else
+        local jlinkexe
+        jlinkexe="$(_find_jlinkexe)"
+        if [ -n "$jlinkexe" ]; then
+            _print_warning "nrfjprog not found. Falling back to JLinkExe."
+        cat > /tmp/jlink_flash.jlink <<EOF
+device NRF54L05_XXAA
+si SWD
+speed 4000
+r
+loadfile $hex_file
+r
+q
+EOF
+            "$jlinkexe" -CommandFile /tmp/jlink_flash.jlink
+        rm -f /tmp/jlink_flash.jlink
+        else
+            _print_error "No flash tool found (nrfjprog or JLinkExe)."
+            _print_info "Install Nordic nRF Command Line Tools or SEGGER J-Link."
+            return 1
+        fi
+    fi
+
     if [ $? -eq 0 ]; then
         _print_success "Flash complete!"
         sleep 0.5
@@ -152,16 +213,89 @@ airspot_flash() {
     fi
 }
 
-# Logs/Monitor command (using RTT over SWD)
-airspot_logs() {
+_airspot_list_uart_ports() {
+    ls /dev/cu.usbmodem* /dev/cu.usbserial* /dev/tty.usbmodem* /dev/tty.usbserial* 2>/dev/null
+}
+
+airspot_ports() {
+    echo ""
+    _print_info "Detected UART ports"
+    echo "══════════════════════════════════════"
+    local ports
+    ports="$(_airspot_list_uart_ports)"
+    if [ -z "$ports" ]; then
+        _print_warning "No UART ports found."
+        return 1
+    fi
+    echo "$ports"
+    echo ""
+}
+
+_airspot_logs_uart() {
+    local port="${1}"
+    local baud="${2:-115200}"
+
+    if [ -z "$port" ]; then
+        local ports
+        ports="$(_airspot_list_uart_ports)"
+        if [ -z "$ports" ]; then
+            port=""
+        else
+            local count
+            count=$(echo "$ports" | wc -l | tr -d ' ')
+            if [ "$count" -eq 1 ]; then
+                port="$ports"
+            else
+                _print_info "Multiple UART ports detected:"
+                local i=1
+                while IFS= read -r line; do
+                    echo "  $i) $line"
+                    i=$((i + 1))
+                done <<< "$ports"
+                echo -n "Select port [1-$((i - 1))] (default 1): "
+                read selection
+                if [ -z "$selection" ]; then
+                    selection=1
+                fi
+                port=$(echo "$ports" | sed -n "${selection}p")
+            fi
+        fi
+    fi
+
+    if [ -z "$port" ]; then
+        _print_error "No UART device found. Pass port explicitly."
+        airspot_ports
+        _print_info "Example: airspot logs uart /dev/tty.usbmodemXXXX 115200"
+        return 1
+    fi
+
+    _print_info "UART Monitor (serial)"
+    _print_info "Port: $port"
+    _print_info "Baud: $baud"
+    _print_warning "Press Ctrl+C to exit"
+    echo ""
+
+    if command -v screen &> /dev/null; then
+        screen "$port" "$baud"
+    elif command -v picocom &> /dev/null; then
+        picocom -b "$baud" "$port"
+    elif command -v minicom &> /dev/null; then
+        minicom -b "$baud" -D "$port"
+    else
+        _print_error "No serial monitor found (screen/picocom/minicom)."
+        return 1
+    fi
+}
+
+_airspot_logs_rtt() {
     _print_info "RTT Monitor (SEGGER Real-Time Transfer over SWD)"
     _print_warning "Press Ctrl+C to exit"
     echo ""
-    
+
     _print_info "Resetting device..."
     nrfjprog --reset -f NRF54L 2>/dev/null
     sleep 0.5
-    
+
     if command -v JLinkRTTLogger &> /dev/null; then
         _print_info "Starting RTT logger..."
         JLinkRTTLogger -Device NRF54L05_XXAA -If SWD -Speed 4000 -RTTChannel 0
@@ -183,6 +317,25 @@ EOF
         _print_info "Download from: https://www.segger.com/downloads/jlink/"
         return 1
     fi
+}
+
+# Logs/Monitor command (default UART; optional RTT)
+airspot_logs() {
+    local mode="${1:-uart}"
+    [[ $# -gt 0 ]] && shift
+
+    case "$mode" in
+        uart)
+            _airspot_logs_uart "$@"
+            ;;
+        rtt)
+            _airspot_logs_rtt "$@"
+            ;;
+        *)
+            _print_error "Unknown logs mode: $mode (use: uart|rtt)"
+            return 1
+            ;;
+    esac
 }
 
 # Erase command
@@ -285,7 +438,7 @@ airspot_menu() {
         echo "  4) Build + Flash + Logs"
         echo ""
         echo -e "${_GREEN}MONITORING:${_NC}"
-        echo "  5) Logs/Monitor (RTT)"
+        echo "  5) Logs/Monitor (UART default)"
         echo ""
         echo -e "${_GREEN}DEVICE:${_NC}"
         echo "  6) Reset"
@@ -330,7 +483,7 @@ AirSpot Slim Development Tool
 COMMANDS:
   airspot build             - Build firmware
   airspot flash             - Flash firmware to device
-  airspot logs              - View RTT logs (with reset)
+  airspot logs [uart|rtt]   - View logs (UART default)
   airspot monitor           - Alias for logs
   airspot erase [-y]        - Erase entire chip
   airspot reset             - Reset device
@@ -347,7 +500,9 @@ SHORTCUTS:
 EXAMPLES:
   airspot build             # Build firmware
   airspot flash             # Flash to device
-  airspot logs              # View RTT logs
+  airspot logs              # View UART logs
+  airspot logs rtt          # View RTT logs
+  airspot logs uart /dev/tty.usbmodemXXXX 115200
   airspot bfl               # Build, flash, and view logs
   airspot erase -y          # Erase chip without confirmation
 

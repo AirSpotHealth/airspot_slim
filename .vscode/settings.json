@@ -1,5 +1,8 @@
 {
-  "nrf-connect.applications": ["${workspaceFolder}/application"],
+  "nrf-connect.applications": [
+    "${workspaceFolder}/application",
+    "${workspaceFolder}/test_app"
+  ],
   "terminal.integrated.shellIntegration.enabled": true,
   "terminal.integrated.env.osx": {
     "AIRSPOT_ENV": "loaded",
@@ -12,5 +15,15 @@
     }
   },
   "terminal.integrated.defaultProfile.osx": "zsh (AirSpot)",
-  "cmake.sourceDirectory": "/Users/nirajbhatt/airspot/Airspot_firmware/airspot/airspot_slim/application"
+  "cmake.sourceDirectory": "/Users/nirajbhatt/airspot/Airspot_firmware/airspot/airspot_slim/application",
+  "files.associations": {
+    "mesh_sensor.h": "c",
+    "ratio": "c",
+    "system_error": "c",
+    "array": "c",
+    "functional": "c",
+    "tuple": "c",
+    "type_traits": "c",
+    "utility": "c"
+  }
 }

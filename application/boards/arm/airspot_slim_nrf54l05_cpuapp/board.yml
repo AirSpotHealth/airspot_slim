@@ -1,0 +1,9 @@
+board:
+  name: airspot_slim_nrf54l05_cpuapp
+  full_name: AirSpot Slim nRF54L05
+  vendor: airspot
+  socs:
+    - name: nrf54l05
+      variants:
+        - name: cpuapp
+          cpucluster: cpu0

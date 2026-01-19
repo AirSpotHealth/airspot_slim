@@ -1,0 +1,179 @@
+// To get started, press Ctrl+Space to bring up the completion menu and view the available nodes.
+
+// You can also use the buttons in the sidebar to perform actions on nodes.
+// Actions currently available include:
+
+// * Enabling / disabling the node
+// * Adding the bus to a bus
+// * Removing the node
+// * Connecting ADC channels
+
+// For more help, browse the DeviceTree documentation at https://docs.zephyrproject.org/latest/guides/dts/index.html
+// You can also visit the nRF DeviceTree extension documentation at https://docs.nordicsemi.com/bundle/nrf-connect-vscode/page/guides/ncs_configure_app.html#devicetree-support-in-the-extension
+
+/ {
+	// Simple GPIO on pin P2.09 (existing LED) and additional GPIOs
+	my_gpio: my_gpio {
+		compatible = "gpio-keys";
+
+		// Original LED on P2.09
+		my_gpio_pin: my_gpio_pin {
+			gpios = <&gpio2 9 GPIO_ACTIVE_HIGH>;
+			label = "MY_GPIO";
+		};
+
+		// Additional LEDs on P2.08 and P2.06
+		ah01_led1_pin: ah01_led1_pin {
+			gpios = <&gpio2 8 GPIO_ACTIVE_HIGH>;
+			label = "AH01_LED1";
+		};
+
+		ah01_led2_pin: ah01_led2_pin {
+			gpios = <&gpio2 6 GPIO_ACTIVE_HIGH>;
+			label = "AH01_LED2";
+		};
+
+		ah01_adc_en_pin: ah01_adc_en_pin {
+			gpios = <&gpio1 4 GPIO_ACTIVE_HIGH>;
+			label = "AH01_ADC_EN";
+		};
+
+		// Button on P2.10
+		ah01_button_pin: ah01_button_pin {
+			/* Assuming active-low button with pull-up */
+			gpios = <&gpio2 10 (GPIO_ACTIVE_HIGH)>;
+			label = "AH01_BUTTON";
+		};
+	};
+
+    	zephyr,user {
+		io-channels = <&adc 1>;
+	};
+};
+
+// I2C configuration on pins P0.03 (SCL) and P0.04 (SDA)
+&i2c30 {
+	status = "okay";
+	pinctrl-0 = <&i2c0_custom>;
+	pinctrl-1 = <&i2c0_custom_sleep>;
+	pinctrl-names = "default", "sleep";
+	// Test I2C device
+	i2c_test_device: test_device@48 {
+		compatible = "zephyr,i2c-test";
+		reg = <0x48>;
+		label = "I2C_TEST_DEVICE";
+	};
+};
+
+
+
+&uart20 {
+	status = "okay";
+	current-speed = <115200>;
+	pinctrl-0 = <&uart20_custom>;
+	pinctrl-1 = <&uart20_custom_sleep>;
+	pinctrl-names = "default", "sleep";
+};
+
+// Custom pinctrl for I2C pins P0.03 (SCL) and P0.04 (SDA)
+&pinctrl {
+	i2c0_custom: i2c0_custom {
+		group1 {
+			psels = <NRF_PSEL(TWIM_SDA, 0, 4)>,  // P0.04 SDA
+			       <NRF_PSEL(TWIM_SCL, 0, 3)>;   // P0.03 SCL
+			bias-pull-up;  // Enable internal pull-ups
+		};
+	};
+
+	i2c0_custom_sleep: i2c0_custom_sleep {
+		group1 {
+			psels = <NRF_PSEL(TWIM_SDA, 0, 4)>,  // P0.04 SDA
+			       <NRF_PSEL(TWIM_SCL, 0, 3)>;   // P0.03 SCL
+			low-power-enable;
+		};
+	};
+
+	uart20_custom: uart20_custom {
+		group1 {
+			psels = <NRF_PSEL(UART_TX, 1, 2)>,  // P1.02 TX
+			       <NRF_PSEL(UART_RX, 1, 3)>;   // P1.03 RX
+		};
+	};
+
+	uart20_custom_sleep: uart20_custom_sleep {
+		group1 {
+			psels = <NRF_PSEL(UART_TX, 1, 2)>,  // P1.02 TX
+			       <NRF_PSEL(UART_RX, 1, 3)>;   // P1.03 RX
+			low-power-enable;
+		};
+	};
+};
+
+&uicr {
+	nfct-pins-as-gpios;
+};
+
+
+&adc {
+	#address-cells = <1>;
+	#size-cells = <0>;
+	status = "okay";
+	channel@1 {
+		reg = <1>;
+		zephyr,gain = "ADC_GAIN_2_7";
+		zephyr,reference = "ADC_REF_INTERNAL";
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+		zephyr,input-positive = <NRF_SAADC_AIN1>; /* P1.06 */
+		zephyr,resolution = <12>;
+		zephyr,oversampling = <8>;
+	};
+};
+
+// SPI configuration for AT25XE161D flash on custom pins
+// CS: P2.05, CLK: P2.01, MISO: P2.04, MOSI: P2.02
+// Using SPI00 (not SPI30, which conflicts with I2C30)
+&spi00 {
+	status = "okay";
+	pinctrl-0 = <&spi00_custom>;
+	pinctrl-1 = <&spi00_custom_sleep>;
+	pinctrl-names = "default", "sleep";
+	cs-gpios = <&gpio2 5 GPIO_ACTIVE_LOW>;
+
+	at25xe161d: at25xe161d@0 {
+		compatible = "jedec,spi-nor";
+		reg = <0>;
+		spi-max-frequency = <2000000>;
+		jedec-id = [1f 46 0c];
+		size = <DT_SIZE_M(2)>;
+	};
+};
+
+&pinctrl {
+	spi00_custom: spi00_custom {
+
+      group2 {
+         psels = <NRF_PSEL(SPIM_SCK, 2, 1)>;
+         nordic,drive-mode = <NRF_DRIVE_S0S1>;
+      };
+
+      group3 {
+         psels = <NRF_PSEL(SPIM_MOSI, 2, 2)>;
+         nordic,drive-mode = <NRF_DRIVE_S0S1>;
+      };
+
+      group1 {
+         psels = <NRF_PSEL(SPIM_MISO, 2, 4)>;
+         nordic,drive-mode = <NRF_DRIVE_S0S1>;
+      };
+	};
+
+	spi00_custom_sleep: spi00_custom_sleep {
+		group1 {
+			psels = <NRF_PSEL(SPIM_SCK, 2, 1)>,
+			        <NRF_PSEL(SPIM_MISO, 2, 4)>,
+			        <NRF_PSEL(SPIM_MOSI, 2, 2)>;
+			low-power-enable;
+		};
+	};
+};
+

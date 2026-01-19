@@ -1,0 +1,227 @@
+/*
+ * Minimal Device Tree Overlay for Incremental App
+ * Start with just UART for logging
+ * Add other peripherals as features are added
+ */
+
+/* ============================================================================
+ * UICR Configuration - Enable NFC pins as GPIOs
+ * ============================================================================ */
+&uicr {
+	nfct-pins-as-gpios;
+};
+
+/* ============================================================================
+ * UART20 Configuration - Console Logging
+ * TX: P1.02, RX: P1.03
+ * ============================================================================ */
+&nfct {
+	status = "disabled";
+};
+
+&uart20 {
+	status = "okay";
+	current-speed = <115200>;
+	pinctrl-0 = <&uart20_custom>;
+	pinctrl-1 = <&uart20_custom_sleep>;
+	pinctrl-names = "default", "sleep";
+};
+
+/* ============================================================================
+ * Pin Control Configuration
+ * ============================================================================ */
+&pinctrl {
+	/* UART20 pins: TX=P1.02, RX=P1.03 */
+	uart20_custom: uart20_custom {
+		group1 {
+			psels = <NRF_PSEL(UART_TX, 1, 2)>,
+					<NRF_PSEL(UART_RX, 1, 3)>;
+		};
+	};
+
+	uart20_custom_sleep: uart20_custom_sleep {
+		group1 {
+			psels = <NRF_PSEL(UART_TX, 1, 2)>,
+					<NRF_PSEL(UART_RX, 1, 3)>;
+			low-power-enable;
+		};
+	};
+};
+
+/* ============================================================================
+ * Phase 2: LEDs
+ * FIXED: Changed from GPIO1 (P1.06-08) to GPIO2 (P2.09, P2.08, P2.06)
+ * to avoid conflict with SPI flash control pins (P1.11 HOLD, P1.13 WP)
+ * ============================================================================ */
+/ {
+	leds: leds {
+		compatible = "gpio-leds";
+		led0: led_0 {
+			gpios = <&gpio2 9 GPIO_ACTIVE_HIGH>;  /* P2.09 - matches working config */
+			label = "LED 1";
+		};
+		led1: led_1 {
+			gpios = <&gpio2 8 GPIO_ACTIVE_HIGH>;  /* P2.08 - matches working config */
+			label = "LED 2";
+		};
+		led2: led_2 {
+			gpios = <&gpio2 6 GPIO_ACTIVE_HIGH>;  /* P2.06 - matches working config */
+			label = "LED 3";
+		};
+	};
+
+	/* Button on P2.10 (matches working minimal UART config) */
+	buttons {
+		compatible = "gpio-keys";
+		sw0: button_0 {
+			gpios = <&gpio2 10 GPIO_ACTIVE_HIGH>;  /* P2.10 - matches working config */
+			label = "Button 0";
+			zephyr,code = <INPUT_KEY_0>;
+		};
+	};
+};
+
+/* ============================================================================
+ * Phase 3: I2C Configuration - Sensors (SHT40, STCC4, LPS22HH)
+ * Using i2c30 with P0.03 (SCL), P0.04 (SDA) - matches manufacturer config
+ * ============================================================================ */
+&i2c30 {
+	status = "okay";
+	pinctrl-0 = <&i2c30_default>;
+	pinctrl-1 = <&i2c30_sleep>;
+	pinctrl-names = "default", "sleep";
+	clock-frequency = <I2C_BITRATE_FAST>;
+};
+
+&pinctrl {
+	/* I2C30 pins: SCL=P0.03, SDA=P0.04 (manufacturer verified) */
+	i2c30_default: i2c30_default {
+		group1 {
+			psels = <NRF_PSEL(TWIM_SDA, 0, 4)>, /* P0.04 SDA */
+			        <NRF_PSEL(TWIM_SCL, 0, 3)>;   /* P0.03 SCL */
+			bias-pull-up;  /* Enable internal pull-ups */
+		};
+	};
+
+	i2c30_sleep: i2c30_sleep {
+		group1 {
+			psels = <NRF_PSEL(TWIM_SDA, 0, 4)>, /* P0.04 SDA */
+			        <NRF_PSEL(TWIM_SCL, 0, 3)>;   /* P0.03 SCL */
+			low-power-enable;
+		};
+	};
+
+	/* SPI00 pins - exact match with manufacturer working config */
+	/* Candidate A (spi00): CLK=P2.01, MOSI=P2.02, MISO=P2.04, CS=P2.05 */
+	spi00_custom: spi00_custom {
+		group2 {
+			psels = <NRF_PSEL(SPIM_SCK, 2, 1)>;
+			nordic,drive-mode = <NRF_DRIVE_S0S1>;
+		};
+
+		group3 {
+			psels = <NRF_PSEL(SPIM_MOSI, 2, 2)>;
+			nordic,drive-mode = <NRF_DRIVE_S0S1>;
+		};
+
+		group1 {
+			psels = <NRF_PSEL(SPIM_MISO, 2, 4)>;
+			nordic,drive-mode = <NRF_DRIVE_S0S1>;
+		};
+	};
+
+	spi00_custom_sleep: spi00_custom_sleep {
+		group1 {
+			psels = <NRF_PSEL(SPIM_SCK, 2, 1)>,
+			        <NRF_PSEL(SPIM_MISO, 2, 4)>,
+			        <NRF_PSEL(SPIM_MOSI, 2, 2)>;
+			low-power-enable;
+		};
+	};
+
+};
+
+/* ============================================================================
+ * Phase 4: SPI Configuration - External Flash (AT25XE161D)
+ * SIMPLIFIED to match working flash_test exactly
+ * ============================================================================ */
+
+&spi00 {
+	status = "okay";
+	pinctrl-0 = <&spi00_custom>;
+	pinctrl-1 = <&spi00_custom_sleep>;
+	pinctrl-names = "default", "sleep";
+	cs-gpios = <&gpio2 5 GPIO_ACTIVE_LOW>;
+
+	/* External flash node (matches flash_test) */
+	at25xe161d: at25xe161d@0 {
+		compatible = "jedec,spi-nor";
+		reg = <0>;
+		spi-max-frequency = <2000000>;
+		jedec-id = [ 1f 46 0c  ];
+		size = <DT_SIZE_M(2)>;
+	};
+};
+
+/* Ensure flash control pins are HIGH before any flash access */
+&gpio1 {
+	flash_wp: flash_wp {
+		gpio-hog;
+		gpios = <13 GPIO_ACTIVE_HIGH>;
+		output-high;
+	};
+
+	flash_hold: flash_hold {
+		gpio-hog;
+		gpios = <11 GPIO_ACTIVE_HIGH>;
+		output-high;
+	};
+};
+
+/* ============================================================================
+ * Phase 7: ADC Configuration - Battery Monitoring
+ * Based on working _working_minimal_uart configuration
+ * ADC Input: P1.05 (AIN1) - Battery voltage via 0.6x voltage divider
+ * ADC Enable: P1.04 - Controls MOSFET to enable voltage divider
+ * ============================================================================ */
+
+/ {
+	/* Power management pins */
+	power_pins: power_pins {
+		compatible = "gpio-keys";
+
+		/* ADC enable pin - controls battery voltage divider MOSFET */
+		batt_adc_en: batt_adc_en {
+			gpios = <&gpio1 4 GPIO_ACTIVE_HIGH>;  /* P1.04 */
+			label = "BATT_ADC_EN";
+		};
+
+		/* Qi charging status pin - active low */
+		qi_chg_status: qi_chg_status {
+			gpios = <&gpio0 0 GPIO_ACTIVE_LOW>;   /* P0.00 */
+			label = "QI_CHG_STATUS";
+		};
+	};
+
+	/* Reference for ADC io-channels (required for adc_dt_spec) */
+	zephyr,user {
+		io-channels = <&adc 1>;
+	};
+};
+
+&adc {
+	#address-cells = <1>;
+	#size-cells = <0>;
+	status = "okay";
+
+	/* Battery voltage ADC channel */
+	channel@1 {
+		reg = <1>;
+		zephyr,gain = "ADC_GAIN_1_4";          /* 1/4 gain for higher voltage range */
+		zephyr,reference = "ADC_REF_INTERNAL"; /* 0.6V internal reference */
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+		zephyr,input-positive = <NRF_SAADC_AIN1>; /* P1.05 - Battery ADC */
+		zephyr,resolution = <12>;
+		zephyr,oversampling = <8>;             /* 8x oversampling for stability */
+	};
+};

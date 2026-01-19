@@ -1,0 +1,39 @@
+# Static Partition Manager Configuration for AirSpot Slim
+#
+# Internal RRAM (nRF54L05): 512KB total, ~500KB usable (0x7D000)
+# External Flash (AT25XE161D): 2MB
+#
+# Layout:
+#   0x00000 - 0x10000: MCUboot bootloader (64KB)
+#   0x10000 - 0x6F000: [GAP] App/mcuboot_primary (380KB) - dynamically resolved
+#   0x6F000 - 0x7D000: settings_storage (56KB)
+#
+# External: mcuboot_secondary for OTA updates
+
+# =============================================================================
+# Internal Flash - Static Partitions
+# =============================================================================
+
+# MCUboot bootloader at start
+mcuboot:
+  address: 0x0
+  size: 0x10000
+  region: flash_primary
+
+# Settings/NVS storage at end of flash
+# Note: Leave gap between mcuboot and settings_storage for app
+settings_storage:
+  address: 0x6F000
+  size: 0xE000
+  region: flash_primary
+
+# =============================================================================
+# External Flash - DFU Secondary Slot
+# =============================================================================
+
+# MCUboot secondary slot on external flash for OTA updates
+mcuboot_secondary:
+  address: 0x0
+  size: 0x64000
+  device: at25xe161d
+  region: external_flash
