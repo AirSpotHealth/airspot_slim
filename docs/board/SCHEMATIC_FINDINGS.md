@@ -82,19 +82,19 @@ All sensors share the same I2C bus:
 
 ## 📊 Comparison: Original vs New Hardware
 
-| Feature | Original (nRF52832) | New (nRF54L05) | Status |
-|---------|-------------------|----------------|--------|
-| **MCU** | nRF52832 | nRF54L05 | ✅ Changed |
-| **CO2 Sensor** | SCD4x (0x64) | SCD4x (0x64) | ✅ Same |
-| **Temp/Humidity** | ❌ None | ✅ SHT40 (0x44) | 🆕 **NEW** |
-| **Pressure** | ❌ None | ✅ LPS22HH (0x5D) | 🆕 **NEW** |
-| **Flash** | ZB25D16 (assumed) | STCC4-D-R3 | ⚠️ Changed |
-| **Display** | ✅ ST7301 LCD | ❌ None | ❌ Removed |
-| **LEDs** | ❌ None | ✅ RGB LED | 🆕 **NEW** |
-| **Button** | ✅ Single | ✅ Single | ✅ Same |
-| **Buzzer** | ✅ PWM | ❓ Unknown | ❓ To verify |
-| **Vibrator** | ✅ GPIO | ❓ Unknown | ❓ To verify |
-| **Charging** | USB | Qi Wireless | ✅ Changed |
+| Feature           | Original (nRF52832) | New (nRF54L05)   | Status      |
+| ----------------- | ------------------- | ---------------- | ----------- |
+| **MCU**           | nRF52832            | nRF54L05         | ✅ Changed   |
+| **CO2 Sensor**    | SCD4x (0x64)        | SCD4x (0x64)     | ✅ Same      |
+| **Temp/Humidity** | ❌ None              | ✅ SHT40 (0x44)   | 🆕 **NEW**   |
+| **Pressure**      | ❌ None              | ✅ LPS22HH (0x5D) | 🆕 **NEW**   |
+| **Flash**         | ZB25D16 (assumed)   | STCC4-D-R3       | ⚠️ Changed   |
+| **Display**       | ✅ ST7301 LCD        | ❌ None           | ❌ Removed   |
+| **LEDs**          | ❌ None              | ✅ RGB LED        | 🆕 **NEW**   |
+| **Button**        | ✅ Single            | ✅ Single         | ✅ Same      |
+| **Buzzer**        | ✅ PWM               | ❓ Unknown        | ❓ To verify |
+| **Vibrator**      | ✅ GPIO              | ❓ Unknown        | ❓ To verify |
+| **Charging**      | USB                 | Qi Wireless      | ✅ Changed   |
 
 ## 🔧 Implementation Impact
 
