@@ -79,6 +79,11 @@
 			zephyr,code = <INPUT_KEY_0>;
 		};
 	};
+
+	/* External flash for DFU secondary slot */
+	chosen {
+		nordic,pm-ext-flash = &at25xe161d;
+	};
 };
 
 /* ============================================================================

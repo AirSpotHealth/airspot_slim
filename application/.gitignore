@@ -1,1 +1,5 @@
 build*/
+
+# Signing keys - NEVER commit these!
+keys/
+*.pem

@@ -3,7 +3,7 @@
  * Enables external flash access for DFU secondary slot
  */
 
-/* Enable SPI00 for external flash in MCUboot - manufacturer verified configuration */
+/* Enable SPI00 for external flash in MCUboot */
 &spi00 {
 	status = "okay";
 	pinctrl-0 = <&spi00_custom>;
@@ -15,9 +15,9 @@
 	at25xe161d: at25xe161d@0 {
 		compatible = "jedec,spi-nor";
 		reg = <0>;
-		spi-max-frequency = <2000000>;  /* 2 MHz - manufacturer verified */
-		jedec-id = [1f 46 0c];  /* Manufacturer verified JEDEC ID */
-		size = <DT_SIZE_M(2)>;  /* 2 MB */
+		spi-max-frequency = <2000000>;
+		jedec-id = [1f 46 0c];
+		size = <DT_SIZE_M(2)>;
 	};
 };
 
@@ -27,7 +27,7 @@
 	};
 };
 
-/* Pin control for SPI00 - manufacturer verified */
+/* Pin control for SPI00 */
 &pinctrl {
 	spi00_custom: spi00_custom {
 		group2 {

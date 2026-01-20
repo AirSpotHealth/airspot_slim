@@ -165,12 +165,12 @@ int main(void) {
   printk("\n\n");
   printk("========================================\n");
   printk("AirSpot Slim Firmware v%s\n", AIRSPOT_FIRMWARE_VERSION_STRING);
-  printk("Phase 8: BLE NUS + App Protocol\n");
+  printk("Phase 9: MCUboot DFU + OTA Updates\n");
   printk("========================================\n");
 
   LOG_INF("========================================");
   LOG_INF("AirSpot Slim Firmware v%s", AIRSPOT_FIRMWARE_VERSION_STRING);
-  LOG_INF("Phase 8: BLE NUS + App Protocol");
+  LOG_INF("Phase 9: MCUboot DFU + OTA Updates");
   LOG_INF("========================================");
 
   /* Ensure flash control pins are HIGH */

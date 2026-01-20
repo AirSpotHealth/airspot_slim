@@ -203,11 +203,25 @@ See [docs/firmware/BUILD_INSTRUCTIONS.md](./docs/firmware/BUILD_INSTRUCTIONS.md)
 | **User Settings**    | ✅ Working | NVS-backed persistence              |
 | **BLE Mode Service** | ✅ Working | Peripheral/Mesh switching           |
 
+### ✅ Phase 9: MCUboot DFU + OTA Updates
+
+| Feature             | Status     | Notes                              |
+| ------------------- | ---------- | ---------------------------------- |
+| **MCUboot**         | ✅ Working | 41KB bootloader                    |
+| **MCUmgr over BLE** | ✅ Working | SMP protocol for firmware upload   |
+| **OTA Updates**     | ✅ Ready   | Use nRF Connect Device Manager app |
+| **Signed Images**   | ✅ Working | RSA-2048 signature verification    |
+
+**OTA Update Process:**
+
+1. Build generates `dfu_application.zip`
+2. Use **nRF Connect Device Manager** app ([iOS](https://apps.apple.com/app/nrf-connect-device-manager/id1519423539) / [Android](https://play.google.com/store/apps/details?id=no.nordicsemi.android.nrfconnectdevicemanager))
+3. Connect to device, select DFU, upload zip
+
 ### 🚧 Planned (Next Steps)
 
 - Power management optimization
 - Factory testing mode
-- MCUboot DFU re-enable
 
 ### ❌ Removed from Original
 
@@ -226,7 +240,7 @@ See [docs/firmware/BUILD_INSTRUCTIONS.md](./docs/firmware/BUILD_INSTRUCTIONS.md)
 
 ## Development Status
 
-**Current Phase**: Phase 8 - BLE NUS + App Protocol (Complete)
+**Current Phase**: Phase 9 - MCUboot DFU + OTA Updates (Complete)
 
 See [docs/firmware/IMPLEMENTATION_PLAN.md](./docs/firmware/IMPLEMENTATION_PLAN.md) for detailed migration plan.
 See [docs/firmware/SENSORS.md](./docs/firmware/SENSORS.md) for sensor driver documentation.
@@ -260,5 +274,5 @@ See [docs/README.md](./docs/README.md) for complete documentation index.
 
 ---
 
-**Version**: 0.8.0 (Phase 8 - BLE NUS + App Protocol)  
-**Last Updated**: 2026-01-20
+**Version**: 0.9.0 (Phase 9 - MCUboot DFU + OTA Updates)  
+**Last Updated**: 2026-01-21
