@@ -7,6 +7,7 @@ Firmware for the AirSpot Slim device based on nRF54L05 and STCC4 Slim hardware.
 This firmware is a migration from the nRF52832-based firmware to the new nRF54L05 platform using nRF Connect SDK with Zephyr RTOS.
 
 **Key Differences from Original Firmware:**
+
 - ✅ **MCU**: nRF54L05 (ARM Cortex-M33, dual-core)
 - ✅ **SDK**: nRF Connect SDK (Zephyr RTOS)
 - ✅ **Qi Charging**: Wireless charging support
@@ -97,19 +98,23 @@ application/
 ### Code Organization
 
 **`include/` - Public Headers**
+
 - `airspot/`: AirSpot-specific definitions (version, board)
 - `drivers/`: Driver interfaces (LED, button, etc.)
 - `services/`: Service interfaces (BLE, power management, etc.)
 
 **`src/` - Source Files**
+
 - `main.c`: Application entry point
 - `drivers/`: Driver implementations
 - `services/`: Service implementations
 
 **`boards/` - Board Configuration**
+
 - Device tree overlays for hardware configuration
 
 **`docs/` - Documentation**
+
 - `board/`: Hardware documentation (pin assignments, schematics)
 - `firmware/`: Firmware documentation (build, architecture, implementation)
 - `datasheets/`: Schematics and component datasheets
@@ -128,6 +133,7 @@ https://developer.nordicsemi.com/nRF_Connect_SDK/doc/latest/nrf/getting_started.
 ### 2. Build the Project
 
 #### Using Build Script (Recommended)
+
 ```bash
 cd application
 
@@ -145,11 +151,13 @@ source setup_env.sh
 ```
 
 #### Using VS Code Extension
+
 1. Open VS Code in the `airspot_slim/` directory (workspace root)
 2. Use the nRF Connect extension to build and flash
 3. The extension is configured automatically
 
 #### Using West (from workspace root)
+
 ```bash
 cd airspot_slim
 west build -b nrf54l15dk/nrf54l05/cpuapp application
@@ -169,8 +177,8 @@ See [docs/firmware/BUILD_INSTRUCTIONS.md](./docs/firmware/BUILD_INSTRUCTIONS.md)
 
 ### ✅ Implemented & Working
 
-| Feature          | Status     | Notes                                  |
-| ---------------- | ---------- | -------------------------------------- |
+| Feature          | Status      | Notes                                  |
+| ---------------- | ----------- | -------------------------------------- |
 | **BLE**          | ✅ Working  | Basic BLE advertising and connection   |
 | **DFU**          | ✅ Ready    | MCUboot support (temporarily disabled) |
 | **Button**       | ✅ Working  | Polling mode (press/long-press)        |
@@ -184,11 +192,22 @@ See [docs/firmware/BUILD_INSTRUCTIONS.md](./docs/firmware/BUILD_INSTRUCTIONS.md)
 | **Battery ADC**  | ✅ Verified | ~98% accuracy (P1.05/AIN1)             |
 | **Qi Charging**  | 🔶 Untested | Driver ready, needs HW test (P0.00)    |
 
+### ✅ Phase 8: BLE NUS + App Protocol
+
+| Feature              | Status     | Notes                               |
+| -------------------- | ---------- | ----------------------------------- |
+| **NUS Service**      | ✅ Working | Nordic UART Service for app comms   |
+| **Protocol Handler** | ✅ Working | All commands implemented            |
+| **Sensor Manager**   | ✅ Working | Periodic measurements with callback |
+| **Data Logging**     | ✅ Working | CO2 history to SPI flash            |
+| **User Settings**    | ✅ Working | NVS-backed persistence              |
+| **BLE Mode Service** | ✅ Working | Peripheral/Mesh switching           |
+
 ### 🚧 Planned (Next Steps)
 
-- BLE protocol implementation (NUS + app commands)
-- Power management
-- Factory testing
+- Power management optimization
+- Factory testing mode
+- MCUboot DFU re-enable
 
 ### ❌ Removed from Original
 
@@ -207,7 +226,7 @@ See [docs/firmware/BUILD_INSTRUCTIONS.md](./docs/firmware/BUILD_INSTRUCTIONS.md)
 
 ## Development Status
 
-**Current Phase**: Phase 7 - Battery & Qi Charging (Battery ADC Verified)
+**Current Phase**: Phase 8 - BLE NUS + App Protocol (Complete)
 
 See [docs/firmware/IMPLEMENTATION_PLAN.md](./docs/firmware/IMPLEMENTATION_PLAN.md) for detailed migration plan.
 See [docs/firmware/SENSORS.md](./docs/firmware/SENSORS.md) for sensor driver documentation.
@@ -241,6 +260,5 @@ See [docs/README.md](./docs/README.md) for complete documentation index.
 
 ---
 
-**Version**: 0.7.0 (Phase 7 - Battery ADC Verified, Qi Untested)  
+**Version**: 0.8.0 (Phase 8 - BLE NUS + App Protocol)  
 **Last Updated**: 2026-01-20
-

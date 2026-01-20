@@ -60,31 +60,25 @@ LOG_MODULE_REGISTER(lps22hh, LOG_LEVEL_DBG);
 static bool initialized = false;
 static lps22hh_data_t last_data = {.pressure = 0, .temperature = NAN};
 
-static int lps22hh_write_reg(uint8_t reg, uint8_t value)
-{
+static int lps22hh_write_reg(uint8_t reg, uint8_t value) {
   uint8_t buf[2] = {reg, value};
   return i2c_bus_write(I2C_ADDR_LPS22HH, buf, 2);
 }
 
-static int lps22hh_read_reg(uint8_t reg, uint8_t *value)
-{
+static int lps22hh_read_reg(uint8_t reg, uint8_t *value) {
   return i2c_bus_write_read(I2C_ADDR_LPS22HH, &reg, 1, value, 1);
 }
 
-static int lps22hh_read_regs(uint8_t reg, uint8_t *data, size_t len)
-{
+static int lps22hh_read_regs(uint8_t reg, uint8_t *data, size_t len) {
   return i2c_bus_write_read(I2C_ADDR_LPS22HH, &reg, 1, data, len);
 }
 
-int lps22hh_init(void)
-{
-  if (initialized)
-  {
+int lps22hh_init(void) {
+  if (initialized) {
     return 0;
   }
 
-  if (!i2c_bus_is_ready())
-  {
+  if (!i2c_bus_is_ready()) {
     LOG_ERR("I2C bus not ready");
     return -ENODEV;
   }
@@ -92,14 +86,12 @@ int lps22hh_init(void)
   /* Read WHO_AM_I */
   uint8_t id;
   int ret = lps22hh_read_id(&id);
-  if (ret)
-  {
+  if (ret) {
     LOG_ERR("Failed to read LPS22HH ID: %d", ret);
     return ret;
   }
 
-  if (id != LPS22HH_WHO_AM_I_VALUE)
-  {
+  if (id != LPS22HH_WHO_AM_I_VALUE) {
     LOG_ERR("Invalid LPS22HH ID: 0x%02X (expected 0x%02X)", id,
             LPS22HH_WHO_AM_I_VALUE);
     return -ENODEV;
@@ -108,20 +100,15 @@ int lps22hh_init(void)
   /* Trigger BOOT to reload factory calibration data */
   /* This is essential for proper sensor operation */
   ret = lps22hh_write_reg(LPS22HH_REG_CTRL_REG2, LPS22HH_CTRL2_BOOT);
-  if (ret)
-  {
+  if (ret) {
     LOG_WRN("Failed to trigger BOOT: %d", ret);
-  }
-  else
-  {
+  } else {
     /* Wait for BOOT to complete (bit should self-clear) */
     uint8_t ctrl2;
-    for (int i = 0; i < 50; i++)
-    {
+    for (int i = 0; i < 50; i++) {
       k_msleep(10);
       ret = lps22hh_read_reg(LPS22HH_REG_CTRL_REG2, &ctrl2);
-      if (ret == 0 && !(ctrl2 & LPS22HH_CTRL2_BOOT))
-      {
+      if (ret == 0 && !(ctrl2 & LPS22HH_CTRL2_BOOT)) {
         LOG_DBG("BOOT completed after %d ms", (i + 1) * 10);
         break;
       }
@@ -133,16 +120,14 @@ int lps22hh_init(void)
   /* Configure: auto-increment + low-noise in CTRL_REG2 */
   ret = lps22hh_write_reg(LPS22HH_REG_CTRL_REG2,
                           LPS22HH_CTRL2_IF_ADD_INC | LPS22HH_CTRL2_LOW_NOISE);
-  if (ret)
-  {
+  if (ret) {
     LOG_ERR("Failed to write CTRL_REG2: %d", ret);
     return ret;
   }
 
   /* Configure: BDU enabled in CTRL_REG1 (ODR=0 for one-shot mode) */
   ret = lps22hh_write_reg(LPS22HH_REG_CTRL_REG1, LPS22HH_CTRL1_BDU);
-  if (ret)
-  {
+  if (ret) {
     LOG_WRN("Failed to write CTRL_REG1: %d", ret);
   }
 
@@ -151,20 +136,16 @@ int lps22hh_init(void)
   return 0;
 }
 
-int lps22hh_read_id(uint8_t *id)
-{
-  if (!id)
-  {
+int lps22hh_read_id(uint8_t *id) {
+  if (!id) {
     return -EINVAL;
   }
   return lps22hh_read_reg(LPS22HH_REG_WHO_AM_I, id);
 }
 
-int lps22hh_soft_reset(void)
-{
+int lps22hh_soft_reset(void) {
   int ret = lps22hh_write_reg(LPS22HH_REG_CTRL_REG2, LPS22HH_CTRL2_SWRESET);
-  if (ret)
-  {
+  if (ret) {
     return ret;
   }
 
@@ -173,11 +154,9 @@ int lps22hh_soft_reset(void)
 
   /* Verify reset is complete */
   uint8_t val;
-  for (int i = 0; i < 10; i++)
-  {
+  for (int i = 0; i < 10; i++) {
     ret = lps22hh_read_reg(LPS22HH_REG_CTRL_REG2, &val);
-    if (ret == 0 && !(val & LPS22HH_CTRL2_SWRESET))
-    {
+    if (ret == 0 && !(val & LPS22HH_CTRL2_SWRESET)) {
       return 0;
     }
     k_msleep(1);
@@ -186,16 +165,13 @@ int lps22hh_soft_reset(void)
   return -ETIMEDOUT;
 }
 
-int lps22hh_set_odr(lps22hh_odr_t odr)
-{
-  if (!initialized)
-  {
+int lps22hh_set_odr(lps22hh_odr_t odr) {
+  if (!initialized) {
     return -ENODEV;
   }
 
   uint8_t odr_bits;
-  switch (odr)
-  {
+  switch (odr) {
   case LPS22HH_ODR_ONE_SHOT:
     odr_bits = 0;
     break;
@@ -228,42 +204,33 @@ int lps22hh_set_odr(lps22hh_odr_t odr)
                            (odr_bits << 4) | LPS22HH_CTRL1_BDU);
 }
 
-int lps22hh_trigger_one_shot(void)
-{
-  if (!initialized)
-  {
+int lps22hh_trigger_one_shot(void) {
+  if (!initialized) {
     return -ENODEV;
   }
 
   uint8_t val;
   int ret = lps22hh_read_reg(LPS22HH_REG_CTRL_REG2, &val);
-  if (ret)
-  {
+  if (ret) {
     return ret;
   }
 
   return lps22hh_write_reg(LPS22HH_REG_CTRL_REG2, val | LPS22HH_CTRL2_ONE_SHOT);
 }
 
-int lps22hh_read(lps22hh_data_t *data)
-{
-  if (!initialized)
-  {
+int lps22hh_read(lps22hh_data_t *data) {
+  if (!initialized) {
     return -ENODEV;
   }
-  if (!data)
-  {
+  if (!data) {
     return -EINVAL;
   }
 
   /* Trigger one-shot measurement */
   int ret = lps22hh_trigger_one_shot();
-  if (ret)
-  {
+  if (ret) {
     LOG_WRN("Failed to trigger one-shot: %d", ret);
-  }
-  else
-  {
+  } else {
     /* Wait for measurement to complete */
     uint8_t status;
     for (int i = 0; i < 50; i++) /* Max 500ms wait */
@@ -280,15 +247,13 @@ int lps22hh_read(lps22hh_data_t *data)
   /* Read pressure + temperature (5 bytes from PRESS_OUT_XL) */
   uint8_t raw[5];
   ret = lps22hh_read_regs(LPS22HH_REG_PRESS_OUT_XL, raw, 5);
-  if (ret)
-  {
+  if (ret) {
     return ret;
   }
 
   /* Pressure: 24-bit signed, LSB = 1/4096 hPa */
   int32_t press_raw = (int32_t)((raw[2] << 16) | (raw[1] << 8) | raw[0]);
-  if (press_raw & 0x800000)
-  { /* Sign extend */
+  if (press_raw & 0x800000) { /* Sign extend */
     press_raw |= 0xFF000000;
   }
   data->pressure = (float)press_raw / 4096.0f;
@@ -299,7 +264,8 @@ int lps22hh_read(lps22hh_data_t *data)
 
   last_data = *data;
 
-  LOG_DBG("LPS22HH: %.2f hPa, %.2f°C", (double)data->pressure, (double)data->temperature);
+  LOG_DBG("LPS22HH: %.2f hPa, %.2f°C", (double)data->pressure,
+          (double)data->temperature);
   return 0;
 }
 

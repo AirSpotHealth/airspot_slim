@@ -5,7 +5,8 @@
  *
  * Mesh Sensor Model Implementation
  *
- * Publishes CO2 sensor data over Bluetooth Mesh using the standard Sensor Model.
+ * Publishes CO2 sensor data over Bluetooth Mesh using the standard Sensor
+ * Model.
  */
 
 #include <zephyr/bluetooth/bluetooth.h>
@@ -40,20 +41,15 @@ static K_MUTEX_DEFINE(sensor_mutex);
 
 /* CO2 Concentration Sensor */
 static int co2_get(struct bt_mesh_sensor_srv *srv,
-                   struct bt_mesh_sensor *sensor,
-                   struct bt_mesh_msg_ctx *ctx,
-                   struct sensor_value *rsp)
-{
+                   struct bt_mesh_sensor *sensor, struct bt_mesh_msg_ctx *ctx,
+                   struct sensor_value *rsp) {
   k_mutex_lock(&sensor_mutex, K_FOREVER);
 
-  if (current_data.valid)
-  {
+  if (current_data.valid) {
     /* CO2 is reported directly in ppm */
     rsp->val1 = current_data.co2_ppm;
     rsp->val2 = 0;
-  }
-  else
-  {
+  } else {
     rsp->val1 = 0;
     rsp->val2 = 0;
   }
@@ -71,20 +67,15 @@ static struct bt_mesh_sensor co2_sensor = {
 
 /* Temperature Sensor */
 static int temp_get(struct bt_mesh_sensor_srv *srv,
-                    struct bt_mesh_sensor *sensor,
-                    struct bt_mesh_msg_ctx *ctx,
-                    struct sensor_value *rsp)
-{
+                    struct bt_mesh_sensor *sensor, struct bt_mesh_msg_ctx *ctx,
+                    struct sensor_value *rsp) {
   k_mutex_lock(&sensor_mutex, K_FOREVER);
 
-  if (current_data.valid)
-  {
+  if (current_data.valid) {
     /* Temperature in 0.01°C units, convert to sensor_value */
     rsp->val1 = current_data.temperature_c100 / 100;
     rsp->val2 = (current_data.temperature_c100 % 100) * 10000;
-  }
-  else
-  {
+  } else {
     rsp->val1 = 0;
     rsp->val2 = 0;
   }
@@ -103,19 +94,14 @@ static struct bt_mesh_sensor temp_sensor = {
 /* Humidity Sensor */
 static int humidity_get(struct bt_mesh_sensor_srv *srv,
                         struct bt_mesh_sensor *sensor,
-                        struct bt_mesh_msg_ctx *ctx,
-                        struct sensor_value *rsp)
-{
+                        struct bt_mesh_msg_ctx *ctx, struct sensor_value *rsp) {
   k_mutex_lock(&sensor_mutex, K_FOREVER);
 
-  if (current_data.valid)
-  {
+  if (current_data.valid) {
     /* Humidity in 0.01% units, convert to sensor_value */
     rsp->val1 = current_data.humidity_c100 / 100;
     rsp->val2 = (current_data.humidity_c100 % 100) * 10000;
-  }
-  else
-  {
+  } else {
     rsp->val1 = 0;
     rsp->val2 = 0;
   }
@@ -180,10 +166,8 @@ static const struct bt_mesh_comp sensor_comp = {
  * =============================================================================
  */
 
-int mesh_sensor_init(void)
-{
-  if (initialized)
-  {
+int mesh_sensor_init(void) {
+  if (initialized) {
     return 0;
   }
 
@@ -194,10 +178,8 @@ int mesh_sensor_init(void)
   return 0;
 }
 
-int mesh_sensor_update(const mesh_sensor_data_t *data)
-{
-  if (!data)
-  {
+int mesh_sensor_update(const mesh_sensor_data_t *data) {
+  if (!data) {
     return -EINVAL;
   }
 
@@ -213,62 +195,55 @@ int mesh_sensor_update(const mesh_sensor_data_t *data)
   return 0;
 }
 
-int mesh_sensor_publish_now(void)
-{
-  if (!initialized)
-  {
+int mesh_sensor_publish_now(void) {
+  if (!initialized) {
     return -ENODEV;
   }
 
-  if (!bt_mesh_is_provisioned())
-  {
+  if (!bt_mesh_is_provisioned()) {
     LOG_WRN("Cannot publish - not provisioned");
     return -ENOTCONN;
   }
 
   /* Publish CO2 sensor data */
   int err = bt_mesh_sensor_srv_pub(&sensor_srv, NULL, &co2_sensor, NULL);
-  if (err && err != -EADDRNOTAVAIL)
-  {
+  if (err && err != -EADDRNOTAVAIL) {
     LOG_WRN("CO2 publish failed: %d", err);
   }
 
   /* Publish temperature */
   err = bt_mesh_sensor_srv_pub(&sensor_srv, NULL, &temp_sensor, NULL);
-  if (err && err != -EADDRNOTAVAIL)
-  {
+  if (err && err != -EADDRNOTAVAIL) {
     LOG_WRN("Temperature publish failed: %d", err);
   }
 
   /* Publish humidity */
   err = bt_mesh_sensor_srv_pub(&sensor_srv, NULL, &humidity_sensor, NULL);
-  if (err && err != -EADDRNOTAVAIL)
-  {
+  if (err && err != -EADDRNOTAVAIL) {
     LOG_WRN("Humidity publish failed: %d", err);
   }
 
   return 0;
 }
 
-const struct bt_mesh_comp *mesh_sensor_get_composition(void)
-{
+const struct bt_mesh_comp *mesh_sensor_get_composition(void) {
   return &sensor_comp;
 }
 
-bool mesh_sensor_is_ready(void) { return initialized && bt_mesh_is_provisioned(); }
+bool mesh_sensor_is_ready(void) {
+  return initialized && bt_mesh_is_provisioned();
+}
 
 #else /* CONFIG_BT_MESH_SENSOR_SRV not enabled */
 
 /* Stub implementations when mesh sensor is disabled */
 
-int mesh_sensor_init(void)
-{
+int mesh_sensor_init(void) {
   LOG_WRN("Mesh sensor not enabled (CONFIG_BT_MESH_SENSOR_SRV=n)");
   return -ENOTSUP;
 }
 
-int mesh_sensor_update(const mesh_sensor_data_t *data)
-{
+int mesh_sensor_update(const mesh_sensor_data_t *data) {
   ARG_UNUSED(data);
   return -ENOTSUP;
 }

@@ -5,6 +5,7 @@
  */
 
 #include <errno.h>
+#include <stdio.h>
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/conn.h>
 #include <zephyr/bluetooth/gap.h>
@@ -18,15 +19,26 @@
 
 LOG_MODULE_REGISTER(ble_service, CONFIG_AIRSPOT_LOG_LEVEL);
 
+/* Device name buffer - matches old firmware format: "AirSpot-XXXXXX" */
+#define DEVICE_NAME_BASE "AirSpot"
+#define DEVICE_NAME_MAX_LEN 20
+static char device_name[DEVICE_NAME_MAX_LEN] = DEVICE_NAME_BASE;
+static uint8_t device_name_len = sizeof(DEVICE_NAME_BASE) - 1;
+
 static struct bt_conn *current_conn = NULL;
 static bool initialized = false;
 static bool advertising = false;
 
+/* Dynamic advertising data */
+static struct bt_data ad[2];
+
+static const struct bt_data sd[] = {
+    BT_DATA_BYTES(BT_DATA_UUID16_ALL, BT_UUID_16_ENCODE(BT_UUID_BAS_VAL)),
+};
+
 /* BLE connection callbacks */
-static void connected(struct bt_conn *conn, uint8_t err)
-{
-  if (err)
-  {
+static void connected(struct bt_conn *conn, uint8_t err) {
+  if (err) {
     LOG_ERR("Connection failed (err %u)", err);
     return;
   }
@@ -38,18 +50,20 @@ static void connected(struct bt_conn *conn, uint8_t err)
   airspot_nus_set_conn(conn);
 }
 
-static void disconnected(struct bt_conn *conn, uint8_t reason)
-{
+static void disconnected(struct bt_conn *conn, uint8_t reason) {
   LOG_INF("BLE Disconnected (reason %u)", reason);
 
-  if (current_conn)
-  {
+  if (current_conn) {
     bt_conn_unref(current_conn);
     current_conn = NULL;
   }
 
   /* Notify NUS of disconnection */
   airspot_nus_set_conn(NULL);
+
+  /* Restart advertising after disconnect */
+  advertising = false;
+  ble_service_start_advertising();
 }
 
 BT_CONN_CB_DEFINE(conn_callbacks) = {
@@ -57,85 +71,135 @@ BT_CONN_CB_DEFINE(conn_callbacks) = {
     .disconnected = disconnected,
 };
 
-/* Battery Service (BAS) - enabled via CONFIG_BT_BAS in prj.conf */
+/**
+ * @brief Generate device name from BLE identity address
+ *
+ * Creates name in format "AirSpot-XXXXXX" where XXXXXX is derived
+ * from the BLE MAC address (matching old firmware format).
+ */
+static void generate_device_name(void) {
+  bt_addr_le_t addr;
+  size_t count = 1;
 
-/* Advertising data - stored in flash (const) */
-static const struct bt_data ad[] = {
-    BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
-    BT_DATA(BT_DATA_NAME_COMPLETE, CONFIG_BT_DEVICE_NAME,
-            sizeof(CONFIG_BT_DEVICE_NAME) - 1),
-};
+  /* Get the BLE identity address */
+  bt_id_get(&addr, &count);
 
-static const struct bt_data sd[] = {
-    BT_DATA_BYTES(BT_DATA_UUID16_ALL, BT_UUID_16_ENCODE(BT_UUID_BAS_VAL)),
-};
+  if (count > 0) {
+    /* Format: AirSpot-XXYYZZ (last 3 bytes of MAC, reversed order like old FW)
+     */
+    snprintf(device_name, sizeof(device_name), "%s-%02X%02X%02X",
+             DEVICE_NAME_BASE, addr.a.val[3], addr.a.val[4], addr.a.val[5]);
+    device_name_len = strlen(device_name);
+    LOG_INF("Device name: %s", device_name);
+  } else {
+    LOG_WRN("No BLE identity, using default name");
+    strncpy(device_name, DEVICE_NAME_BASE, sizeof(device_name));
+    device_name_len = sizeof(DEVICE_NAME_BASE) - 1;
+  }
+}
 
-int ble_service_init(void)
-{
+/**
+ * @brief Set the GAP device name
+ */
+static int set_gap_device_name(void) {
+  int err = bt_set_name(device_name);
+  if (err) {
+    LOG_ERR("Failed to set device name (err %d)", err);
+    return err;
+  }
+  return 0;
+}
+
+int ble_service_init(void) {
   int err;
 
   /* Initialize Bluetooth */
   err = bt_enable(NULL);
-  if (err)
-  {
+  if (err) {
     LOG_ERR("Bluetooth init failed (err %d)", err);
     return err;
   }
+
+  /* Generate device name from MAC address (after bt_enable) */
+  generate_device_name();
+
+  /* Set GAP device name */
+  err = set_gap_device_name();
+  if (err) {
+    LOG_WRN("Could not set GAP name (err %d)", err);
+  }
+
+  /* Build advertising data with dynamic name */
+  ad[0] = (struct bt_data)BT_DATA_BYTES(BT_DATA_FLAGS,
+                                        (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR));
+  ad[1] = (struct bt_data)BT_DATA(BT_DATA_NAME_COMPLETE, device_name,
+                                  device_name_len);
 
   initialized = true;
   LOG_INF("BLE service initialized");
   return 0;
 }
 
+const char *ble_service_get_device_name(void) { return device_name; }
+
 bool ble_service_is_connected(void) { return (current_conn != NULL); }
 
-void ble_service_disconnect(void)
-{
-  if (current_conn)
-  {
+void ble_service_disconnect(void) {
+  if (current_conn) {
     bt_conn_disconnect(current_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
   }
 }
 
-int ble_service_start_advertising(void)
-{
+/* Power-efficient advertising parameters:
+ * Interval: 1000-2500ms (vs default 100-150ms)
+ * This significantly reduces power consumption when not connected
+ */
+#define ADV_SLOW_INT_MIN 1600 /* 1000ms in 0.625ms units */
+#define ADV_SLOW_INT_MAX 4000 /* 2500ms in 0.625ms units */
+
+static const struct bt_le_adv_param adv_param_slow = {
+    .id = BT_ID_DEFAULT,
+    .sid = 0,
+    .secondary_max_skip = 0,
+    .options = BT_LE_ADV_OPT_CONN, /* Connectable + Scannable */
+    .interval_min = ADV_SLOW_INT_MIN,
+    .interval_max = ADV_SLOW_INT_MAX,
+    .peer = NULL,
+};
+
+int ble_service_start_advertising(void) {
   int err;
 
-  if (!initialized)
-  {
+  if (!initialized) {
     return -ENODEV;
   }
 
-  if (advertising)
-  {
+  if (advertising) {
     return 0; /* Already advertising */
   }
 
-  err = bt_le_adv_start(BT_LE_ADV_CONN_FAST_1, ad, ARRAY_SIZE(ad), sd,
-                        ARRAY_SIZE(sd));
-  if (err)
-  {
+  /* Use slower advertising interval for power efficiency */
+  err =
+      bt_le_adv_start(&adv_param_slow, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
+  if (err) {
     LOG_ERR("Advertising failed to start (err %d)", err);
     return err;
   }
 
   advertising = true;
-  LOG_INF("BLE advertising started");
+  LOG_INF("BLE advertising started as: %s", device_name);
   return 0;
 }
 
-int ble_service_stop_advertising(void)
-{
+int ble_service_stop_advertising(void) {
   int err;
 
-  if (!advertising)
-  {
+  if (!advertising) {
     return 0; /* Not advertising */
   }
 
   err = bt_le_adv_stop();
-  if (err)
-  {
+  if (err) {
     LOG_ERR("Advertising stop failed (err %d)", err);
     return err;
   }

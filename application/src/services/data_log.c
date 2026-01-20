@@ -497,7 +497,7 @@ static int data_log_recover_full_scan(void) {
  * full scan (O(N)) if metadata is missing or corrupted.
  */
 static int data_log_recover(void) {
-  metadata_entry_t meta;
+  metadata_entry_t meta = {0};
 
   LOG_INF("Recovering data log...");
 
@@ -587,7 +587,10 @@ int data_log_init(void) {
   }
 
   initialized = true;
-  LOG_INF("Data log module initialized");
+
+  /* Put flash into deep power-down for power savings */
+  spi_flash_power_down();
+  LOG_INF("Data log module initialized (flash in sleep mode)");
   return 0;
 }
 
@@ -598,6 +601,10 @@ int data_log_store_record(uint32_t timestamp, uint16_t co2_ppm,
   }
 
   k_mutex_lock(&data_log_mutex, K_FOREVER);
+
+  /* Wake flash from deep sleep */
+  spi_flash_power_up();
+  k_usleep(50); /* tRES1 = 30µs max */
 
   /* Populate current record */
   cur_record.timestamp = timestamp;
@@ -657,6 +664,9 @@ int data_log_store_record(uint32_t timestamp, uint16_t co2_ppm,
     /* Save metadata when page fills (every 32 records) */
     metadata_write(timestamp);
   }
+
+  /* Put flash back to sleep */
+  spi_flash_power_down();
 
   k_mutex_unlock(&data_log_mutex);
   return 0;
@@ -733,6 +743,10 @@ int data_log_process_request(record_page_t *out_page, uint8_t *out_count,
 
   k_mutex_lock(&data_log_mutex, K_FOREVER);
 
+  /* Wake flash from deep sleep */
+  spi_flash_power_up();
+  k_usleep(50);
+
   store_area_t tx_area;
   set_store_area_from_half_page(&tx_area, pending_request.half_page_number);
 
@@ -766,6 +780,9 @@ int data_log_process_request(record_page_t *out_page, uint8_t *out_count,
 
   *out_half_page = pending_request.half_page_number;
 
+  /* Put flash back to sleep */
+  spi_flash_power_down();
+
   k_mutex_unlock(&data_log_mutex);
   request_pending = false;
 
@@ -787,6 +804,10 @@ int data_log_erase_all(void) {
   LOG_WRN("Erasing all data log...");
 
   k_mutex_lock(&data_log_mutex, K_FOREVER);
+
+  /* Wake flash from deep sleep */
+  spi_flash_power_up();
+  k_usleep(50);
 
   /* Erase all sectors */
   for (uint16_t sector = 0; sector < FLASH_SECTOR_COUNT; sector++) {
@@ -813,6 +834,9 @@ int data_log_erase_all(void) {
   memset(&cur_record, 0, sizeof(cur_record));
 
   erase_all_pending = false;
+
+  /* Put flash back to sleep */
+  spi_flash_power_down();
 
   k_mutex_unlock(&data_log_mutex);
 

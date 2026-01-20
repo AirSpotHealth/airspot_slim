@@ -11,53 +11,63 @@
 #include <stdbool.h>
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
-/**
- * @file ble_service.h
- * @brief BLE service interface
- *
- * This module provides BLE stack initialization, advertising,
- * and connection management.
- */
+    /**
+     * @file ble_service.h
+     * @brief BLE service interface
+     *
+     * This module provides BLE stack initialization, advertising,
+     * and connection management.
+     */
 
-/**
- * @brief Initialize BLE service
- *
- * @return 0 on success, negative error code on failure
- */
-int ble_service_init(void);
+    /**
+     * @brief Initialize BLE service
+     *
+     * @return 0 on success, negative error code on failure
+     */
+    int ble_service_init(void);
 
-/**
- * @brief Check if BLE is connected
- *
- * @return true if connected, false otherwise
- */
-bool ble_service_is_connected(void);
+    /**
+     * @brief Get the BLE device name
+     *
+     * Returns the device name in format "AirSpot-XXXXXX" where XXXXXX
+     * is derived from the BLE MAC address.
+     *
+     * @return Pointer to null-terminated device name string
+     */
+    const char *ble_service_get_device_name(void);
 
-/**
- * @brief Disconnect BLE connection
- */
-void ble_service_disconnect(void);
+    /**
+     * @brief Check if BLE is connected
+     *
+     * @return true if connected, false otherwise
+     */
+    bool ble_service_is_connected(void);
 
-/**
- * @brief Start BLE advertising
- *
- * @return 0 on success, negative error code on failure
- */
-int ble_service_start_advertising(void);
+    /**
+     * @brief Disconnect BLE connection
+     */
+    void ble_service_disconnect(void);
 
-/**
- * @brief Stop BLE advertising
- *
- * @return 0 on success, negative error code on failure
- */
-int ble_service_stop_advertising(void);
+    /**
+     * @brief Start BLE advertising
+     *
+     * @return 0 on success, negative error code on failure
+     */
+    int ble_service_start_advertising(void);
+
+    /**
+     * @brief Stop BLE advertising
+     *
+     * @return 0 on success, negative error code on failure
+     */
+    int ble_service_stop_advertising(void);
 
 #ifdef __cplusplus
 }
 #endif
 
 #endif /* BLE_SERVICE_H */
-

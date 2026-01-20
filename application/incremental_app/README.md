@@ -14,7 +14,8 @@ Feature-by-feature development approach for the AirSpot Slim firmware.
 | 6     | Sensors       | ✅ Working  | SHT40, LPS22HH, STCC4 all functional   |
 | 7     | Battery ADC   | ✅ Verified | ~98% accuracy across 3.0V-4.2V range   |
 | 7b    | Qi Charging   | 🔶 Untested | Driver implemented, needs HW test      |
-| 8     | BT Mesh       | 🔜 Planned  | For nRF54L10                           |
+| 8     | BLE NUS       | ✅ Complete | NUS + Protocol + Sensor Manager        |
+| 9     | BT Mesh       | 🔜 Planned  | For nRF54L10                           |
 
 ## Development Phases
 
@@ -93,7 +94,22 @@ Battery voltage monitoring and Qi wireless charging detection:
 - Active LOW signal (0 = charging, 1 = not charging)
 - Requires hardware test with Qi charging pad
 
-### 🔜 Phase 8: BT Mesh
+### ✅ Phase 8: BLE NUS + App Protocol
+Full BLE application with Nordic UART Service and app protocol:
+
+| Service            | Description                                                   |
+| ------------------ | ------------------------------------------------------------- |
+| `ble_service`      | BLE stack initialization, advertising, connection management  |
+| `airspot_nus`      | NUS (Nordic UART Service) for bidirectional app communication |
+| `protocol`         | Binary protocol handler (all app commands)                    |
+| `sensor_manager`   | Coordinated sensor readings with callbacks                    |
+| `data_log`         | CO2 history logging to SPI flash                              |
+| `user_settings`    | Persistent settings via NVS                                   |
+| `ble_mode_service` | Peripheral/Mesh mode switching                                |
+
+**Note**: Phase 8 development moved to main `application/` - incremental_app served as driver testing ground.
+
+### 🔜 Phase 9: BT Mesh
 - For nRF54L10 board
 - Leave for later development
 
@@ -231,5 +247,5 @@ Enable `CONFIG_CBPRINTF_FP_SUPPORT=y` in prj.conf for float printf support.
 
 ---
 
-**Version**: 0.7.0 (Phase 7 - Battery ADC Verified)  
+**Version**: 0.8.0 (Phase 8 - BLE NUS Complete)  
 **Last Updated**: 2026-01-20

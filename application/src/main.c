@@ -1,512 +1,373 @@
 /*
- * Incremental App - Starting with DFU
- * Build features incrementally: DFU -> LEDs -> Sensors -> BT -> ADC
+ * AirSpot Slim Firmware - Main Application
+ *
+ * Full-featured firmware with BLE NUS, sensor management, and data logging.
  *
  * Copyright (c) 2026 AirSpot
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <math.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/gpio.h>
-#include <zephyr/drivers/spi.h>
-#include <zephyr/init.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/printk.h>
 
+/* AirSpot includes */
+#include <airspot/version.h>
+
 /* Driver includes */
 #include <drivers/button_driver.h>
-#include <drivers/i2c_bus.h>
 #include <drivers/led_driver.h>
-#include <drivers/sht40.h>
-#include <drivers/lps22hh.h>
-#include <drivers/stcc4.h>
-#include <drivers/battery.h>
-#include <drivers/qi_charger.h>
+#include <drivers/spi_flash.h>
 
-LOG_MODULE_REGISTER(main, LOG_LEVEL_DBG);
+/* Service includes */
+#include <services/ble_mode_service.h>
+#include <services/ble_service.h>
+#include <services/data_log.h>
+#include <services/protocol.h>
+#include <services/sensor_manager.h>
+#include <services/user_settings.h>
+
+LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
 
 /* Flash control pins - must be configured before SPI NOR driver init */
-#define FLASH_WP_PIN \
-	13					  /* P1.13 - Write Protect (active low, HIGH = not protected) */
+#define FLASH_WP_PIN                                                           \
+  13 /* P1.13 - Write Protect (active low, HIGH = not protected) */
 #define FLASH_HOLD_PIN 11 /* P1.11 - Hold (active low, HIGH = not held) */
 
-static void log_spi_config(const struct spi_dt_spec *spec)
-{
-	if (!spec)
-	{
-		return;
-	}
+/* Measurement interval (milliseconds) */
+#define MEASUREMENT_INTERVAL_MS 5000
 
-	/* Bus ready check is handled by caller (spi_is_ready_dt) */
-	LOG_INF("SPI frequency: %u Hz", spec->config.frequency);
-	LOG_INF("SPI mode: CPOL=%d, CPHA=%d",
-			(spec->config.operation & SPI_MODE_CPOL) ? 1 : 0,
-			(spec->config.operation & SPI_MODE_CPHA) ? 1 : 0);
+/* Data log interval - store CO2 every 5 minutes */
+#define DATA_LOG_INTERVAL_MS (5 * 60 * 1000)
 
-	if (spec->config.cs.gpio.port)
-	{
-		LOG_INF("SPI CS: %s pin %u (dt_flags=0x%X, delay=%u us)",
-				spec->config.cs.gpio.port->name, spec->config.cs.gpio.pin,
-				spec->config.cs.gpio.dt_flags, spec->config.cs.delay);
-	}
-	else
-	{
-		LOG_WRN("SPI CS: none (missing cs-gpios?)");
-	}
-}
+/* Time increment interval (1 second) */
+#define TIME_INCREMENT_INTERVAL_MS 1000
 
-static int flash_release_from_power_down(const struct spi_dt_spec *spec)
-{
-	uint8_t release_cmd = 0xAB;
-	struct spi_buf release_tx_buf = {.buf = &release_cmd, .len = 1};
-	struct spi_buf_set release_tx_set = {.buffers = &release_tx_buf, .count = 1};
-	return spi_transceive_dt(spec, &release_tx_set, NULL);
-}
+/* Timers */
+static struct k_timer time_timer;
+static struct k_timer data_log_timer;
 
-static int flash_read_jedec_id(const struct spi_dt_spec *spec, uint8_t id[4])
-{
-	uint8_t cmd = 0x9F;
-	struct spi_buf tx_buf = {.buf = &cmd, .len = 1};
-	struct spi_buf_set tx_set = {.buffers = &tx_buf, .count = 1};
-	struct spi_buf rx_buf = {.buf = id, .len = 4};
-	struct spi_buf_set rx_set = {.buffers = &rx_buf, .count = 1};
-
-	return spi_transceive_dt(spec, &tx_set, &rx_set);
-}
+/* Flags */
+static volatile bool data_log_due = false;
 
 /* Early initialization - runs before device drivers (PRE_KERNEL_1) */
-static int flash_pins_early_init(void)
-{
-	const struct device *gpio1 = DEVICE_DT_GET(DT_NODELABEL(gpio1));
-	if (!device_is_ready(gpio1))
-		return 0;
+static int flash_pins_early_init(void) {
+  const struct device *gpio1 = DEVICE_DT_GET(DT_NODELABEL(gpio1));
+  if (!device_is_ready(gpio1)) {
+    return 0;
+  }
 
-	/* Configure WP and HOLD pins HIGH */
-	gpio_pin_configure(gpio1, FLASH_WP_PIN, GPIO_OUTPUT_HIGH);
-	gpio_pin_configure(gpio1, FLASH_HOLD_PIN, GPIO_OUTPUT_HIGH);
+  /* Configure WP and HOLD pins HIGH */
+  gpio_pin_configure(gpio1, FLASH_WP_PIN, GPIO_OUTPUT_HIGH);
+  gpio_pin_configure(gpio1, FLASH_HOLD_PIN, GPIO_OUTPUT_HIGH);
 
-	return 0;
+  return 0;
 }
 
 SYS_INIT(flash_pins_early_init, PRE_KERNEL_1, 0);
 
-/* Flash release - runs early PRE_KERNEL_2 */
-static int flash_power_up_init(void)
-{
-	/* No-op: Let MCUboot handle pins, or Main handle wake-up */
-	return 0;
+/* Timer callbacks */
+static void time_timer_handler(struct k_timer *timer) {
+  ARG_UNUSED(timer);
+  user_settings_inc_second();
 }
 
-/* Register power-up init - runs at PRE_KERNEL_2 with high priority */
-SYS_INIT(flash_power_up_init, PRE_KERNEL_2, 0);
+static void data_log_timer_handler(struct k_timer *timer) {
+  ARG_UNUSED(timer);
+  data_log_due = true;
+}
 
 /* Button event handler */
-static void button_event_handler(button_event_t event)
-{
-	switch (event)
-	{
-	case BUTTON_EVENT_PRESSED:
-		printk("\n>>> BUTTON PRESSED <<<\n");
-		LOG_INF("Button pressed");
-		/* Toggle LED 1 on button press */
-		led_driver_toggle(1);
-		break;
+static void button_event_handler(button_event_t event) {
+  switch (event) {
+  case BUTTON_EVENT_PRESSED:
+    LOG_INF("Button pressed - triggering measurement");
+    led_driver_set(1, true); /* LED on while measuring */
+    sensor_manager_measure_now();
+    break;
 
-	case BUTTON_EVENT_RELEASED:
-		printk("\n>>> BUTTON RELEASED <<<\n");
-		LOG_INF("Button released");
-		break;
+  case BUTTON_EVENT_RELEASED:
+    LOG_DBG("Button released");
+    led_driver_set(1, false); /* LED off */
+    break;
 
-	case BUTTON_EVENT_LONG_PRESS:
-		printk("\n>>> BUTTON LONG PRESS (3+ seconds) <<<\n");
-		LOG_INF("Button long press (3+ seconds)");
-		/* Toggle LED 2 on long press */
-		led_driver_toggle(2);
-		break;
-	}
+  case BUTTON_EVENT_LONG_PRESS:
+    LOG_INF("Button long press - toggling LED 2");
+    led_driver_toggle(2);
+    break;
+  }
 }
 
-int main(void)
-{
-	int ret;
+/* Sensor data callback - called when new measurement is available */
+static void sensor_data_callback(const sensor_data_t *data) {
+  if (!data || !data->valid) {
+    return;
+  }
 
-	/* Early boot messages */
-	printk("\n\n");
-	printk("========================================\n");
-	printk("AirSpot Incremental App\n");
-	printk("Phase 1: DFU Enabled\n");
-	printk("Phase 2: LEDs Enabled\n");
-	printk("Phase 3: I2C Enabled\n");
-	printk("Phase 4: External Flash (SPI) Enabled\n");
-	printk("Phase 5: Button Enabled\n");
-	printk("Phase 6: Sensors Enabled\n");
-	printk("Phase 7: Battery & Qi Charging Enabled\n");
-	printk("========================================\n");
+  LOG_INF("CO2=%uppm T=%.1f°C H=%.0f%% P=%.0fhPa Batt=%u%%%s", data->co2_ppm,
+          (double)data->temperature_c, (double)data->humidity_rh,
+          (double)data->pressure_hpa, data->battery_percent,
+          data->is_charging ? " [CHG]" : "");
 
-	LOG_INF("========================================");
-	LOG_INF("AirSpot Incremental App");
-	LOG_INF("Phase 1: DFU Enabled");
-	LOG_INF("Phase 2: LEDs Enabled");
-	LOG_INF("Phase 3: I2C Enabled");
-	LOG_INF("Phase 4: External Flash (SPI) Enabled");
-	LOG_INF("Phase 5: Button Enabled");
-	LOG_INF("Phase 6: Sensors Enabled");
-	LOG_INF("Phase 7: Battery & Qi Charging Enabled");
-	LOG_INF("========================================");
+  /* Send CO2 data over BLE if connected */
+  if (ble_service_is_connected()) {
+    protocol_send_realtime_co2();
+    LOG_DBG("Sent CO2 data over BLE");
+  }
 
-	/* Verify flash control pins are HIGH */
-	const struct device *gpio1 = DEVICE_DT_GET(DT_NODELABEL(gpio1));
-	if (device_is_ready(gpio1))
-	{
-		/* Re-configure to ensure they're HIGH (in case GPIO hog didn't work) */
-		gpio_pin_configure(gpio1, FLASH_WP_PIN, GPIO_OUTPUT_HIGH);
-		gpio_pin_configure(gpio1, FLASH_HOLD_PIN, GPIO_OUTPUT_HIGH);
+  /* Update battery service */
+  /* Note: BAS is automatically updated via CONFIG_BT_BAS */
 
-		/* Verify pin states */
-		int wp_state = gpio_pin_get(gpio1, FLASH_WP_PIN);
-		int hold_state = gpio_pin_get(gpio1, FLASH_HOLD_PIN);
-		LOG_INF("Flash control pins: WP=P1.13=%d (should be 1), HOLD=P1.11=%d "
-				"(should be 1)",
-				wp_state, hold_state);
+  /* Check battery warnings */
+  if (data->battery_critical) {
+    LOG_WRN("BATTERY CRITICAL!");
+    /* Flash red LED */
+    led_driver_set(0, true);
+    k_msleep(100);
+    led_driver_set(0, false);
+  } else if (data->battery_low) {
+    LOG_WRN("Battery low");
+  }
+}
 
-		if (wp_state != 1 || hold_state != 1)
-		{
-			LOG_ERR("Flash control pins not HIGH! This will prevent flash "
-					"communication.");
-			/* Force them HIGH again */
-			gpio_pin_set(gpio1, FLASH_WP_PIN, 1);
-			gpio_pin_set(gpio1, FLASH_HOLD_PIN, 1);
-			k_msleep(10); /* Wait for pins to stabilize */
-		}
+/* Store CO2 data to flash */
+static void store_co2_data(void) {
+  sensor_data_t data;
 
-		/* External flash test (match flash_test behavior) */
-#if DT_NODE_EXISTS(DT_NODELABEL(at25xe161d))
-		const struct spi_dt_spec spi_spec =
-			SPI_DT_SPEC_GET(DT_NODELABEL(at25xe161d), SPI_WORD_SET(8), 0);
+  if (sensor_manager_get_data(&data) != 0 || !data.valid) {
+    LOG_WRN("No valid sensor data for logging");
+    return;
+  }
 
-		if (!spi_is_ready_dt(&spi_spec))
-		{
-			LOG_ERR("SPI device is not ready");
-			LOG_ERR("SPI bus: %p", spi_spec.bus);
-		}
-		else
-		{
-			LOG_INF("SPI device is ready");
-			log_spi_config(&spi_spec);
+  /* Get timestamp - use synced time if available, otherwise uptime */
+  uint32_t timestamp;
+  if (user_settings_is_time_set()) {
+    timestamp = user_settings_get_time_now();
+  } else {
+    timestamp = k_uptime_get_32() / 1000;
+  }
 
-			/* Diagnostic: Check SPI bus device state */
-			if (spi_spec.bus)
-			{
-				LOG_INF("SPI bus device: %s", spi_spec.bus->name);
-				LOG_INF("SPI bus device ready: %s", device_is_ready(spi_spec.bus) ? "YES" : "NO");
-			}
+  /* Store record */
+  int ret = data_log_store_record(timestamp, data.co2_ppm, RECORD_TYPE_CO2);
+  if (ret != 0) {
+    LOG_ERR("Failed to store CO2 record: %d", ret);
+  } else {
+    LOG_DBG("Stored CO2: %u ppm at t=%u", data.co2_ppm, timestamp);
+  }
+}
 
-			/* After MCUboot chainloads, wait longer for SPI peripheral to stabilize.
-			 * Don't manually configure CS - let SPI driver handle it completely.
-			 */
-			k_msleep(200); /* Longer delay for MCUboot chainload stabilization */
+int main(void) {
+  int ret;
 
-			/* CRITICAL: Re-assert WP/HOLD pins RIGHT before SPI test.
-			 * LED driver initialization (when CONFIG_LED=y) happens early (POST_KERNEL)
-			 * and might interfere with GPIO1 state. Force pins HIGH again.
-			 */
-			gpio_pin_set(gpio1, FLASH_WP_PIN, 1);
-			gpio_pin_set(gpio1, FLASH_HOLD_PIN, 1);
-			k_msleep(10); /* Wait for pins to stabilize */
+  /* Boot banner */
+  printk("\n\n");
+  printk("========================================\n");
+  printk("AirSpot Slim Firmware v%s\n", AIRSPOT_FIRMWARE_VERSION_STRING);
+  printk("Phase 8: BLE NUS + App Protocol\n");
+  printk("========================================\n");
 
-			LOG_INF("Sending power-down release command (0xAB)...");
-			ret = flash_release_from_power_down(&spi_spec);
-			if (ret)
-			{
-				LOG_ERR("Power-down release failed: %d", ret);
-			}
-			else
-			{
-				LOG_INF("Power-down release sent, waiting 1ms...");
-				k_msleep(1);
-			}
+  LOG_INF("========================================");
+  LOG_INF("AirSpot Slim Firmware v%s", AIRSPOT_FIRMWARE_VERSION_STRING);
+  LOG_INF("Phase 8: BLE NUS + App Protocol");
+  LOG_INF("========================================");
 
-			LOG_INF("========================================");
-			LOG_INF("Test: Reading JEDEC ID (0x9F)");
-			LOG_INF("========================================");
+  /* Ensure flash control pins are HIGH */
+  const struct device *gpio1 = DEVICE_DT_GET(DT_NODELABEL(gpio1));
+  if (device_is_ready(gpio1)) {
+    gpio_pin_configure(gpio1, FLASH_WP_PIN, GPIO_OUTPUT_HIGH);
+    gpio_pin_configure(gpio1, FLASH_HOLD_PIN, GPIO_OUTPUT_HIGH);
+  }
 
-			for (int attempt = 0; attempt < 5; attempt++)
-			{
-				uint8_t id[4] = {0xFF, 0xFF, 0xFF, 0xFF};
-				ret = flash_read_jedec_id(&spi_spec, id);
-				if (ret == 0)
-				{
-					LOG_INF("Attempt %d: Response: %02X %02X %02X %02X", attempt + 1,
-							id[0], id[1], id[2], id[3]);
-					LOG_INF("Attempt %d: JEDEC ID: %02X %02X %02X (expected: 1F 46 0C)",
-							attempt + 1, id[1], id[2], id[3]);
+  /*
+   * ========================================
+   * Driver Initialization
+   * ========================================
+   */
 
-					if (id[1] == 0x1F && id[2] == 0x46 && id[3] == 0x0C)
-					{
-						LOG_INF("✓ Flash detected correctly!");
-						break;
-					}
+  /* Initialize LED driver */
+  ret = led_driver_init();
+  if (ret) {
+    LOG_ERR("LED driver init failed: %d", ret);
+  } else {
+    LOG_INF("LED driver initialized");
+    led_driver_startup_sequence();
+  }
 
-					if (id[1] == 0x00 && id[2] == 0x00 && id[3] == 0x00)
-					{
-						LOG_WRN("Attempt %d: All zeros - flash not responding", attempt + 1);
-					}
-					else if (id[1] == 0xFF && id[2] == 0xFF && id[3] == 0xFF)
-					{
-						LOG_WRN("Attempt %d: All 0xFF - flash not responding", attempt + 1);
-					}
-					else
-					{
-						LOG_WRN("Attempt %d: Unexpected JEDEC ID", attempt + 1);
-						break;
-					}
-				}
-				else
-				{
-					LOG_ERR("Attempt %d: JEDEC read failed: %d", attempt + 1, ret);
-				}
+  /* Initialize button driver */
+  ret = button_driver_init();
+  if (ret) {
+    LOG_ERR("Button driver init failed: %d", ret);
+  } else {
+    LOG_INF("Button driver initialized");
+    button_driver_register_callback(button_event_handler);
+  }
 
-				k_msleep(100);
-			}
-		}
-#else
-		LOG_ERR("Flash device not found in device tree!");
-#endif
-	}
-	else
-	{
-		LOG_ERR("GPIO1 not ready - cannot verify flash control pins");
-	}
+  /*
+   * ========================================
+   * Service Initialization (order matters!)
+   * ========================================
+   */
 
-	/* Initialize LED driver */
-	ret = led_driver_init();
-	if (ret)
-	{
-		LOG_ERR("LED driver init failed: %d", ret);
-	}
-	else
-	{
-		LOG_INF("LED driver initialized");
-		led_driver_startup_sequence();
-	}
+  /* 1. User settings (loads from NVS) */
+  ret = user_settings_init();
+  if (ret) {
+    LOG_WRN("User settings init failed: %d (using defaults)", ret);
+  } else {
+    LOG_INF("User settings initialized");
+  }
 
-	/* Initialize button driver */
-	ret = button_driver_init();
-	if (ret)
-	{
-		LOG_ERR("Button driver init failed: %d", ret);
-	}
-	else
-	{
-		LOG_INF("Button driver initialized");
-		button_driver_register_callback(button_event_handler);
-	}
+  /* 2. BLE service (enables Bluetooth stack) */
+  ret = ble_service_init();
+  if (ret) {
+    LOG_ERR("BLE service init failed: %d", ret);
+  } else {
+    LOG_INF("BLE service initialized");
+  }
 
-	/* Initialize I2C bus */
-	ret = i2c_bus_init();
-	if (ret)
-	{
-		LOG_ERR("I2C bus init failed: %d", ret);
-	}
-	else
-	{
-		LOG_INF("I2C bus initialized");
-		/* Scan for devices on I2C bus */
-		i2c_bus_scan();
-	}
+  /* 3. Protocol handler (initializes NUS) */
+  ret = protocol_init();
+  if (ret) {
+    LOG_ERR("Protocol init failed: %d", ret);
+  } else {
+    LOG_INF("Protocol handler initialized");
+  }
 
-	/* Initialize sensors (order matters: SHT40 first for STCC4 compensation) */
-	/* SHT40 - Temperature & Humidity */
-	ret = sht40_init();
-	if (ret)
-	{
-		LOG_ERR("SHT40 init failed: %d", ret);
-	}
-	else
-	{
-		LOG_INF("SHT40 initialized");
-		/* Take initial measurement */
-		sht40_data_t sht_data;
-		ret = sht40_measure(&sht_data, SHT40_PRECISION_HIGH);
-		if (ret == 0)
-		{
-			LOG_INF("SHT40: %.2f°C, %.1f%%RH", sht_data.temperature, sht_data.humidity);
-		}
-	}
+  /* 4. Sensor manager (initializes all sensors) */
+  ret = sensor_manager_init();
+  if (ret) {
+    LOG_ERR("Sensor manager init failed: %d", ret);
+  } else {
+    LOG_INF("Sensor manager initialized");
+    sensor_manager_register_callback(sensor_data_callback);
+  }
 
-	/* LPS22HH - Pressure */
-	ret = lps22hh_init();
-	if (ret)
-	{
-		LOG_ERR("LPS22HH init failed: %d", ret);
-	}
-	else
-	{
-		LOG_INF("LPS22HH initialized");
-		/* Configure for 1Hz continuous mode */
-		lps22hh_set_odr(LPS22HH_ODR_1HZ);
-		/* Take initial reading */
-		lps22hh_data_t lps_data;
-		ret = lps22hh_read(&lps_data);
-		if (ret == 0)
-		{
-			LOG_INF("LPS22HH: %.2f hPa, %.2f°C", lps_data.pressure, lps_data.temperature);
-		}
-	}
+  /* 5. Data log (requires SPI flash) */
+  ret = data_log_init();
+  if (ret) {
+    LOG_WRN("Data log init failed: %d (history disabled)", ret);
+  } else {
+    LOG_INF("Data log initialized");
+  }
 
-	/* STCC4 - CO2 (requires SHT40 for compensation) */
-	ret = stcc4_init();
-	if (ret)
-	{
-		LOG_ERR("STCC4 init failed: %d", ret);
-	}
-	else
-	{
-		LOG_INF("STCC4 initialized");
-		/* Set ambient conditions from SHT40 */
-		float temp = sht40_get_temperature();
-		float hum = sht40_get_humidity();
-		if (!isnan(temp) && !isnan(hum))
-		{
-			stcc4_set_ambient(temp, hum);
-		}
-		/* Trigger initial single-shot measurement */
-		ret = stcc4_trigger_single_shot();
-		if (ret == 0)
-		{
-			k_msleep(5000); /* Wait for measurement - single shot takes ~5 seconds */
-			stcc4_data_t co2_data;
-			ret = stcc4_read(&co2_data);
-			if (ret == 0 && co2_data.valid)
-			{
-				LOG_INF("STCC4: %d ppm CO2", co2_data.co2_ppm);
-			}
-		}
-	}
+  /* 6. BLE mode service (starts advertising) */
+  ret = ble_mode_init();
+  if (ret) {
+    LOG_ERR("BLE mode init failed: %d", ret);
+    /* Try starting advertising directly */
+    ble_service_start_advertising();
+  } else {
+    LOG_INF("BLE mode service initialized");
+  }
 
-	/* Initialize Battery ADC driver */
-	ret = battery_init();
-	if (ret)
-	{
-		LOG_ERR("Battery driver init failed: %d", ret);
-	}
-	else
-	{
-		LOG_INF("Battery driver initialized");
-		uint16_t batt_mv = battery_read_voltage_mv();
-		uint8_t batt_pct = battery_get_percentage();
-		LOG_INF("Battery: %u mV (%u%%)", batt_mv, batt_pct);
-		LOG_INF("Battery raw ADC: %d, ADC mV: %d",
-				battery_get_raw_adc(), battery_get_adc_mv());
-	}
+  /*
+   * ========================================
+   * Start Timers
+   * ========================================
+   */
 
-	/* Initialize Qi charger detection */
-	ret = qi_charger_init();
-	if (ret)
-	{
-		LOG_ERR("Qi charger init failed: %d", ret);
-	}
-	else
-	{
-		LOG_INF("Qi charger initialized");
-		LOG_INF("Charging status: %s",
-				qi_charger_is_charging() ? "CHARGING" : "Not charging");
-	}
+  /* Time increment timer (1 second) */
+  k_timer_init(&time_timer, time_timer_handler, NULL);
+  k_timer_start(&time_timer, K_MSEC(TIME_INCREMENT_INTERVAL_MS),
+                K_MSEC(TIME_INCREMENT_INTERVAL_MS));
 
-	LOG_INF("System initialized successfully");
-	LOG_INF("DFU over BLE is available");
-	LOG_INF("Button: Press to toggle LED 1, Long press (3s) to toggle LED 2");
-	LOG_INF("Sensors & Battery: Reading every 6 seconds");
+  /* Data log timer (5 minutes) */
+  k_timer_init(&data_log_timer, data_log_timer_handler, NULL);
+  k_timer_start(&data_log_timer, K_MSEC(DATA_LOG_INTERVAL_MS),
+                K_MSEC(DATA_LOG_INTERVAL_MS));
 
-	/* Main loop - blink LED 0 every 2 seconds, read sensors every 5 seconds */
-	while (1)
-	{
-		static uint32_t counter = 0;
-		static uint32_t sensor_counter = 0;
-		LOG_INF("Alive - count=%u", counter++);
+  /*
+   * ========================================
+   * Start Sensor Measurements
+   * ========================================
+   */
 
-		/* Toggle LED 0 every iteration */
-		led_driver_toggle(0);
+  /* Get measurement interval from power mode (matches old firmware):
+   * 0 = On Demand - manual only (button press or BLE request)
+   * 1 = Low (3 min) - battery saving
+   * 2 = Mid (1 min) - balanced
+   * 3 = High (5 sec) - real-time
+   */
+  uint8_t power_mode = user_settings_get_power_mode();
+  uint32_t interval_ms;
+  switch (power_mode) {
+  case 0: /* On demand - no automatic measurements */
+    interval_ms = 0;
+    break;
+  case 1:                 /* Low power */
+    interval_ms = 180000; /* 3 minutes */
+    break;
+  case 2:                /* Mid */
+    interval_ms = 60000; /* 1 minute */
+    break;
+  case 3:               /* High */
+    interval_ms = 5000; /* 5 seconds */
+    break;
+  default:
+    interval_ms = 180000; /* Default to low power */
+    break;
+  }
 
-		/* Read sensors every 5 seconds (every 2.5 iterations) */
-		if (counter % 3 == 0)
-		{
-			sensor_counter++;
-			LOG_INF("=== Sensor Reading #%u ===", sensor_counter);
+  if (interval_ms == 0) {
+    LOG_INF("Sensor mode: ON DEMAND (manual measurements only)");
+    /* Do one initial measurement */
+    sensor_manager_measure_now();
+  } else {
+    ret = sensor_manager_start(interval_ms);
+    if (ret) {
+      LOG_ERR("Failed to start sensor measurements: %d", ret);
+    } else {
+      LOG_INF("Sensor measurements started (interval: %u ms)", interval_ms);
+    }
+  }
 
-			/* Read SHT40 (temperature/humidity) */
-			sht40_data_t sht_data;
-			ret = sht40_measure(&sht_data, SHT40_PRECISION_HIGH);
-			if (ret == 0)
-			{
-				LOG_INF("SHT40: %.2f°C, %.1f%%RH", sht_data.temperature, sht_data.humidity);
-			}
-			else
-			{
-				LOG_WRN("SHT40 read failed: %d", ret);
-			}
+  /*
+   * ========================================
+   * Initialization Complete
+   * ========================================
+   */
 
-			/* Read LPS22HH (pressure) */
-			lps22hh_data_t lps_data;
-			ret = lps22hh_read(&lps_data);
-			if (ret == 0)
-			{
-				LOG_INF("LPS22HH: %.2f hPa, %.2f°C", lps_data.pressure, lps_data.temperature);
-			}
-			else
-			{
-				LOG_WRN("LPS22HH read failed: %d", ret);
-			}
+  LOG_INF("========================================");
+  LOG_INF("System initialized successfully");
+  LOG_INF("BLE advertising as: %s", ble_service_get_device_name());
+  LOG_INF("Press button to toggle LED");
+  LOG_INF("Long press (3s) for secondary action");
+  LOG_INF("========================================");
 
-			/* Read STCC4 (CO2) - update ambient conditions first */
-			float temp = sht40_get_temperature();
-			float hum = sht40_get_humidity();
-			if (!isnan(temp) && !isnan(hum))
-			{
-				stcc4_set_ambient(temp, hum);
-			}
-			ret = stcc4_trigger_single_shot();
-			if (ret == 0)
-			{
-				k_msleep(5000); /* Wait for measurement - single shot takes ~5 seconds */
-				stcc4_data_t co2_data;
-				ret = stcc4_read(&co2_data);
-				if (ret == 0 && co2_data.valid)
-				{
-					LOG_INF("STCC4: %d ppm CO2", co2_data.co2_ppm);
-				}
-				else
-				{
-					LOG_WRN("STCC4 read failed: %d", ret);
-				}
-			}
-			else
-			{
-				LOG_WRN("STCC4 trigger failed: %d", ret);
-			}
+  /* Signal ready with green LED */
+  led_driver_set(1, true);
+  k_msleep(500);
+  led_driver_set(1, false);
 
-			/* Read Battery voltage and charging status */
-			uint16_t batt_mv = battery_read_voltage_mv();
-			uint8_t batt_pct = battery_get_percentage();
-			bool is_charging = qi_charger_is_charging();
-			LOG_INF("Battery: %u mV (%u%%) %s",
-					batt_mv, batt_pct,
-					is_charging ? "[CHARGING]" : "");
+  /*
+   * ========================================
+   * Main Loop
+   * ========================================
+   */
 
-			if (battery_is_critical())
-			{
-				LOG_WRN("BATTERY CRITICAL!");
-			}
-			else if (battery_is_low())
-			{
-				LOG_WRN("Battery low");
-			}
-		}
+  while (1) {
+    /* Process any pending history requests */
+    protocol_process_history();
 
-		k_sleep(K_SECONDS(2));
-	}
+    /* Store CO2 data if due */
+    if (data_log_due) {
+      data_log_due = false;
+      store_co2_data();
+    }
 
-	return 0;
+    /* Sleep longer for power savings
+     * The system wakes on:
+     * - BLE events (handled by BLE stack)
+     * - Sensor timer (handled by work queue)
+     * - Button press (handled by interrupt/polling)
+     *
+     * We only need to wake periodically for:
+     * - Processing history requests
+     * - Checking data_log_due flag
+     */
+    k_sleep(K_SECONDS(10)); /* Wake every 10 seconds instead of 1 */
+  }
+
+  return 0;
 }

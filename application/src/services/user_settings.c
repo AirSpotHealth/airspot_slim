@@ -40,15 +40,12 @@ static bool time_set = false;
 
 /* Settings handler - called when loading from NVS */
 static int settings_set(const char *name, size_t len, settings_read_cb read_cb,
-                        void *cb_arg)
-{
+                        void *cb_arg) {
   const char *next;
   int rc;
 
-  if (settings_name_steq(name, "name", &next) && !next)
-  {
-    if (len > USER_SETTINGS_NAME_MAX_LEN)
-    {
+  if (settings_name_steq(name, "name", &next) && !next) {
+    if (len > USER_SETTINGS_NAME_MAX_LEN) {
       len = USER_SETTINGS_NAME_MAX_LEN;
     }
     rc = read_cb(cb_arg, settings.device_name, len);
@@ -56,25 +53,21 @@ static int settings_set(const char *name, size_t len, settings_read_cb read_cb,
     return (rc >= 0) ? 0 : rc;
   }
 
-  if (settings_name_steq(name, "power", &next) && !next)
-  {
+  if (settings_name_steq(name, "power", &next) && !next) {
     rc = read_cb(cb_arg, &settings.power_mode, sizeof(settings.power_mode));
     return (rc >= 0) ? 0 : rc;
   }
 
-  if (settings_name_steq(name, "flight", &next) && !next)
-  {
+  if (settings_name_steq(name, "flight", &next) && !next) {
     rc = read_cb(cb_arg, &settings.flight_mode, sizeof(settings.flight_mode));
     return (rc >= 0) ? 0 : rc;
   }
 
-  if (settings_name_steq(name, "dnd", &next) && !next)
-  {
+  if (settings_name_steq(name, "dnd", &next) && !next) {
     /* DND settings packed: enabled, start_h, start_m, end_h, end_m */
     uint8_t dnd_data[5];
     rc = read_cb(cb_arg, dnd_data, sizeof(dnd_data));
-    if (rc >= 0)
-    {
+    if (rc >= 0) {
       settings.dnd_enabled = dnd_data[0];
       settings.dnd_start_hour = dnd_data[1];
       settings.dnd_start_minute = dnd_data[2];
@@ -84,15 +77,13 @@ static int settings_set(const char *name, size_t len, settings_read_cb read_cb,
     return (rc >= 0) ? 0 : rc;
   }
 
-  if (settings_name_steq(name, "buzzer", &next) && !next)
-  {
+  if (settings_name_steq(name, "buzzer", &next) && !next) {
     rc = read_cb(cb_arg, &settings.buzzer_enabled,
                  sizeof(settings.buzzer_enabled));
     return (rc >= 0) ? 0 : rc;
   }
 
-  if (settings_name_steq(name, "vibrator", &next) && !next)
-  {
+  if (settings_name_steq(name, "vibrator", &next) && !next) {
     rc = read_cb(cb_arg, &settings.vibrator_enabled,
                  sizeof(settings.vibrator_enabled));
     return (rc >= 0) ? 0 : rc;
@@ -104,23 +95,19 @@ static int settings_set(const char *name, size_t len, settings_read_cb read_cb,
 SETTINGS_STATIC_HANDLER_DEFINE(airspot, SETTINGS_KEY, NULL, settings_set, NULL,
                                NULL);
 
-int user_settings_init(void)
-{
-  if (initialized)
-  {
+int user_settings_init(void) {
+  if (initialized) {
     return 0;
   }
 
   int rc = settings_subsys_init();
-  if (rc)
-  {
+  if (rc) {
     LOG_ERR("Settings init failed: %d", rc);
     return rc;
   }
 
   rc = settings_load();
-  if (rc)
-  {
+  if (rc) {
     LOG_WRN("Settings load failed: %d (using defaults)", rc);
   }
 
@@ -134,10 +121,8 @@ const user_settings_t *user_settings_get(void) { return &settings; }
 
 const char *user_settings_get_device_name(void) { return settings.device_name; }
 
-int user_settings_set_device_name(const char *name)
-{
-  if (!name)
-  {
+int user_settings_set_device_name(const char *name) {
+  if (!name) {
     return -EINVAL;
   }
 
@@ -146,8 +131,7 @@ int user_settings_set_device_name(const char *name)
 
   int rc = settings_save_one(SETTINGS_KEY "/name", settings.device_name,
                              strlen(settings.device_name));
-  if (rc)
-  {
+  if (rc) {
     LOG_ERR("Failed to save device name: %d", rc);
   }
   return rc;
@@ -155,8 +139,7 @@ int user_settings_set_device_name(const char *name)
 
 uint8_t user_settings_get_power_mode(void) { return settings.power_mode; }
 
-int user_settings_set_power_mode(uint8_t mode)
-{
+int user_settings_set_power_mode(uint8_t mode) {
   settings.power_mode = mode;
   return settings_save_one(SETTINGS_KEY "/power", &settings.power_mode,
                            sizeof(settings.power_mode));
@@ -164,23 +147,19 @@ int user_settings_set_power_mode(uint8_t mode)
 
 uint8_t user_settings_get_flight_mode(void) { return settings.flight_mode; }
 
-int user_settings_set_flight_mode(uint8_t enabled)
-{
+int user_settings_set_flight_mode(uint8_t enabled) {
   settings.flight_mode = enabled ? 1 : 0;
   return settings_save_one(SETTINGS_KEY "/flight", &settings.flight_mode,
                            sizeof(settings.flight_mode));
 }
 
-bool user_settings_is_dnd_active(void)
-{
-  if (!settings.dnd_enabled)
-  {
+bool user_settings_is_dnd_active(void) {
+  if (!settings.dnd_enabled) {
     return false;
   }
 
   /* If time hasn't been set by app, we can't check DND window */
-  if (!time_set)
-  {
+  if (!time_set) {
     return false;
   }
 
@@ -196,13 +175,10 @@ bool user_settings_is_dnd_active(void)
   uint16_t start = start_hour * 60 + start_minute;
   uint16_t end = end_hour * 60 + end_minute;
 
-  if (start < end)
-  {
+  if (start < end) {
     /* Simple case: e.g., 09:00 to 17:00 */
     return (current >= start && current < end);
-  }
-  else
-  {
+  } else {
     /* Overnight case: e.g., 22:00 to 07:00 */
     return (current >= start || current < end);
   }
@@ -210,8 +186,7 @@ bool user_settings_is_dnd_active(void)
 
 int user_settings_set_dnd(uint8_t enabled, uint8_t start_hour,
                           uint8_t start_minute, uint8_t end_hour,
-                          uint8_t end_minute)
-{
+                          uint8_t end_minute) {
   settings.dnd_enabled = enabled;
   settings.dnd_start_hour = start_hour;
   settings.dnd_start_minute = start_minute;
@@ -225,8 +200,7 @@ int user_settings_set_dnd(uint8_t enabled, uint8_t start_hour,
 
 uint8_t user_settings_get_buzzer(void) { return settings.buzzer_enabled; }
 
-int user_settings_set_buzzer(uint8_t enabled)
-{
+int user_settings_set_buzzer(uint8_t enabled) {
   settings.buzzer_enabled = enabled ? 1 : 0;
   LOG_INF("Buzzer set to %d (stub - no hardware)", settings.buzzer_enabled);
   return settings_save_one(SETTINGS_KEY "/buzzer", &settings.buzzer_enabled,
@@ -235,8 +209,7 @@ int user_settings_set_buzzer(uint8_t enabled)
 
 uint8_t user_settings_get_vibrator(void) { return settings.vibrator_enabled; }
 
-int user_settings_set_vibrator(uint8_t enabled)
-{
+int user_settings_set_vibrator(uint8_t enabled) {
   settings.vibrator_enabled = enabled ? 1 : 0;
   LOG_INF("Vibrator set to %d (stub - no hardware)", settings.vibrator_enabled);
   return settings_save_one(SETTINGS_KEY "/vibrator", &settings.vibrator_enabled,
@@ -245,24 +218,19 @@ int user_settings_set_vibrator(uint8_t enabled)
 
 /* Time management functions */
 
-void user_settings_set_timebase(uint32_t time)
-{
+void user_settings_set_timebase(uint32_t time) {
   time_base = time;
-  if (!time_set)
-  {
+  if (!time_set) {
     time_set = true;
     LOG_INF("Time set for the first time: %u", time);
-  }
-  else
-  {
+  } else {
     LOG_INF("Time updated: %u", time);
   }
 }
 
 uint32_t user_settings_get_time_now(void) { return time_base; }
 
-uint8_t user_settings_get_time_now_hour24(void)
-{
+uint8_t user_settings_get_time_now_hour24(void) {
   uint32_t current_seconds = time_base % 60;
   uint32_t remaining_minutes = (time_base - current_seconds) / 60;
   uint32_t current_minutes = remaining_minutes % 60;
@@ -272,8 +240,7 @@ uint8_t user_settings_get_time_now_hour24(void)
   return (uint8_t)current_hours;
 }
 
-uint8_t user_settings_get_time_now_minute(void)
-{
+uint8_t user_settings_get_time_now_minute(void) {
   uint32_t current_seconds = time_base % 60;
   uint32_t remaining_minutes = (time_base - current_seconds) / 60;
   uint32_t current_minutes = remaining_minutes % 60;

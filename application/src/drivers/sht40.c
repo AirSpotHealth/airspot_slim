@@ -45,21 +45,15 @@ static bool initialized = false;
 static sht40_data_t last_data = {.temperature = NAN, .humidity = NAN};
 
 /* CRC-8 calculation */
-static uint8_t sht40_crc8(const uint8_t *data, size_t len)
-{
+static uint8_t sht40_crc8(const uint8_t *data, size_t len) {
   uint8_t crc = SHT40_CRC_INIT;
 
-  for (size_t i = 0; i < len; i++)
-  {
+  for (size_t i = 0; i < len; i++) {
     crc ^= data[i];
-    for (uint8_t bit = 0; bit < 8; bit++)
-    {
-      if (crc & 0x80)
-      {
+    for (uint8_t bit = 0; bit < 8; bit++) {
+      if (crc & 0x80) {
         crc = (crc << 1) ^ SHT40_CRC_POLYNOMIAL;
-      }
-      else
-      {
+      } else {
         crc <<= 1;
       }
     }
@@ -68,8 +62,7 @@ static uint8_t sht40_crc8(const uint8_t *data, size_t len)
 }
 
 /* Convert raw values to temperature and humidity */
-static void sht40_convert_raw(const uint8_t *raw, sht40_data_t *data)
-{
+static void sht40_convert_raw(const uint8_t *raw, sht40_data_t *data) {
   uint16_t t_raw = (raw[0] << 8) | raw[1];
   uint16_t h_raw = (raw[3] << 8) | raw[4];
 
@@ -84,23 +77,19 @@ static void sht40_convert_raw(const uint8_t *raw, sht40_data_t *data)
     data->humidity = 100.0f;
 }
 
-int sht40_init(void)
-{
-  if (initialized)
-  {
+int sht40_init(void) {
+  if (initialized) {
     return 0;
   }
 
-  if (!i2c_bus_is_ready())
-  {
+  if (!i2c_bus_is_ready()) {
     LOG_ERR("I2C bus not ready");
     return -ENODEV;
   }
 
   /* Soft reset to ensure known state */
   int ret = sht40_soft_reset();
-  if (ret)
-  {
+  if (ret) {
     LOG_ERR("SHT40 soft reset failed: %d", ret);
     return ret;
   }
@@ -108,8 +97,7 @@ int sht40_init(void)
   /* Verify communication by reading serial */
   uint32_t serial;
   ret = sht40_read_serial(&serial);
-  if (ret)
-  {
+  if (ret) {
     LOG_ERR("SHT40 not responding at 0x%02X", I2C_ADDR_SHT40);
     return ret;
   }
@@ -119,22 +107,18 @@ int sht40_init(void)
   return 0;
 }
 
-int sht40_soft_reset(void)
-{
+int sht40_soft_reset(void) {
   uint8_t cmd = SHT40_CMD_SOFT_RESET;
   int ret = i2c_bus_write(I2C_ADDR_SHT40, &cmd, 1);
-  if (ret)
-  {
+  if (ret) {
     return ret;
   }
   k_msleep(SHT40_RESET_TIME_MS);
   return 0;
 }
 
-int sht40_read_serial(uint32_t *serial)
-{
-  if (!serial)
-  {
+int sht40_read_serial(uint32_t *serial) {
+  if (!serial) {
     return -EINVAL;
   }
 
@@ -142,23 +126,20 @@ int sht40_read_serial(uint32_t *serial)
   uint8_t data[6];
 
   int ret = i2c_bus_write(I2C_ADDR_SHT40, &cmd, 1);
-  if (ret)
-  {
+  if (ret) {
     return ret;
   }
 
   k_msleep(1);
 
   ret = i2c_bus_read(I2C_ADDR_SHT40, data, 6);
-  if (ret)
-  {
+  if (ret) {
     return ret;
   }
 
   /* Verify CRC for both words */
   if (sht40_crc8(&data[0], 2) != data[2] ||
-      sht40_crc8(&data[3], 2) != data[5])
-  {
+      sht40_crc8(&data[3], 2) != data[5]) {
     LOG_WRN("SHT40 serial CRC mismatch");
     return -EIO;
   }
@@ -168,22 +149,18 @@ int sht40_read_serial(uint32_t *serial)
   return 0;
 }
 
-int sht40_measure(sht40_data_t *data, sht40_precision_t precision)
-{
-  if (!initialized)
-  {
+int sht40_measure(sht40_data_t *data, sht40_precision_t precision) {
+  if (!initialized) {
     return -ENODEV;
   }
-  if (!data)
-  {
+  if (!data) {
     return -EINVAL;
   }
 
   uint8_t cmd;
   uint32_t wait_ms;
 
-  switch (precision)
-  {
+  switch (precision) {
   case SHT40_PRECISION_HIGH:
     cmd = SHT40_CMD_MEASURE_HIGH;
     wait_ms = SHT40_MEASURE_TIME_HIGH_MS;
@@ -200,8 +177,7 @@ int sht40_measure(sht40_data_t *data, sht40_precision_t precision)
   }
 
   int ret = i2c_bus_write(I2C_ADDR_SHT40, &cmd, 1);
-  if (ret)
-  {
+  if (ret) {
     return ret;
   }
 
@@ -209,14 +185,12 @@ int sht40_measure(sht40_data_t *data, sht40_precision_t precision)
 
   uint8_t raw[6];
   ret = i2c_bus_read(I2C_ADDR_SHT40, raw, 6);
-  if (ret)
-  {
+  if (ret) {
     return ret;
   }
 
   /* Verify CRC */
-  if (sht40_crc8(&raw[0], 2) != raw[2] || sht40_crc8(&raw[3], 2) != raw[5])
-  {
+  if (sht40_crc8(&raw[0], 2) != raw[2] || sht40_crc8(&raw[3], 2) != raw[5]) {
     LOG_WRN("SHT40 measurement CRC mismatch");
     return -EIO;
   }
@@ -228,22 +202,18 @@ int sht40_measure(sht40_data_t *data, sht40_precision_t precision)
   return 0;
 }
 
-int sht40_measure_with_heater(sht40_data_t *data, sht40_heater_t heater)
-{
-  if (!initialized)
-  {
+int sht40_measure_with_heater(sht40_data_t *data, sht40_heater_t heater) {
+  if (!initialized) {
     return -ENODEV;
   }
-  if (!data)
-  {
+  if (!data) {
     return -EINVAL;
   }
 
   uint8_t cmd;
   uint32_t wait_ms;
 
-  switch (heater)
-  {
+  switch (heater) {
   case SHT40_HEATER_200MW_1S:
     cmd = SHT40_CMD_HEATER_200MW_1S;
     wait_ms = 1100;
@@ -273,8 +243,7 @@ int sht40_measure_with_heater(sht40_data_t *data, sht40_heater_t heater)
   }
 
   int ret = i2c_bus_write(I2C_ADDR_SHT40, &cmd, 1);
-  if (ret)
-  {
+  if (ret) {
     return ret;
   }
 
@@ -282,14 +251,12 @@ int sht40_measure_with_heater(sht40_data_t *data, sht40_heater_t heater)
 
   uint8_t raw[6];
   ret = i2c_bus_read(I2C_ADDR_SHT40, raw, 6);
-  if (ret)
-  {
+  if (ret) {
     return ret;
   }
 
   /* Verify CRC */
-  if (sht40_crc8(&raw[0], 2) != raw[2] || sht40_crc8(&raw[3], 2) != raw[5])
-  {
+  if (sht40_crc8(&raw[0], 2) != raw[2] || sht40_crc8(&raw[3], 2) != raw[5]) {
     return -EIO;
   }
 

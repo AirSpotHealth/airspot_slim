@@ -18,11 +18,11 @@
 LOG_MODULE_REGISTER(airspot_nus, CONFIG_AIRSPOT_LOG_LEVEL);
 
 /* NUS Service UUIDs - Standard Nordic UART Service */
-#define BT_UUID_NUS_SERVICE_VAL \
+#define BT_UUID_NUS_SERVICE_VAL                                                \
   BT_UUID_128_ENCODE(0x6e400001, 0xb5a3, 0xf393, 0xe0a9, 0xe50e24dcca9e)
-#define BT_UUID_NUS_RX_VAL \
+#define BT_UUID_NUS_RX_VAL                                                     \
   BT_UUID_128_ENCODE(0x6e400002, 0xb5a3, 0xf393, 0xe0a9, 0xe50e24dcca9e)
-#define BT_UUID_NUS_TX_VAL \
+#define BT_UUID_NUS_TX_VAL                                                     \
   BT_UUID_128_ENCODE(0x6e400003, 0xb5a3, 0xf393, 0xe0a9, 0xe50e24dcca9e)
 
 #define BT_UUID_NUS_SERVICE BT_UUID_DECLARE_128(BT_UUID_NUS_SERVICE_VAL)
@@ -34,8 +34,7 @@ static airspot_nus_rx_callback_t rx_callback = NULL;
 static bool tx_notifications_enabled = false;
 
 /* TX characteristic CCC changed callback */
-static void tx_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)
-{
+static void tx_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value) {
   tx_notifications_enabled = (value == BT_GATT_CCC_NOTIFY);
   LOG_INF("NUS TX notifications %s",
           tx_notifications_enabled ? "enabled" : "disabled");
@@ -44,8 +43,7 @@ static void tx_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)
 /* RX characteristic write callback */
 static ssize_t rx_write_cb(struct bt_conn *conn,
                            const struct bt_gatt_attr *attr, const void *buf,
-                           uint16_t len, uint16_t offset, uint8_t flags)
-{
+                           uint16_t len, uint16_t offset, uint8_t flags) {
   ARG_UNUSED(conn);
   ARG_UNUSED(attr);
   ARG_UNUSED(offset);
@@ -53,8 +51,7 @@ static ssize_t rx_write_cb(struct bt_conn *conn,
 
   LOG_DBG("NUS RX received %d bytes", len);
 
-  if (rx_callback)
-  {
+  if (rx_callback) {
     rx_callback(buf, len);
   }
 
@@ -73,23 +70,19 @@ BT_GATT_SERVICE_DEFINE(
                            BT_GATT_PERM_NONE, NULL, NULL, NULL),
     BT_GATT_CCC(tx_ccc_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE), );
 
-int airspot_nus_init(airspot_nus_rx_callback_t callback)
-{
+int airspot_nus_init(airspot_nus_rx_callback_t callback) {
   rx_callback = callback;
   LOG_INF("NUS service initialized");
   return 0;
 }
 
-int airspot_nus_send(const uint8_t *data, uint16_t len)
-{
-  if (!current_conn)
-  {
+int airspot_nus_send(const uint8_t *data, uint16_t len) {
+  if (!current_conn) {
     LOG_WRN("NUS send failed: not connected");
     return -ENOTCONN;
   }
 
-  if (!tx_notifications_enabled)
-  {
+  if (!tx_notifications_enabled) {
     LOG_WRN("NUS send failed: notifications not enabled");
     return -ENOENT;
   }
@@ -98,8 +91,7 @@ int airspot_nus_send(const uint8_t *data, uint16_t len)
   const struct bt_gatt_attr *tx_attr = &nus_svc.attrs[4];
 
   int err = bt_gatt_notify(current_conn, tx_attr, data, len);
-  if (err)
-  {
+  if (err) {
     LOG_ERR("NUS notify failed: %d", err);
     return err;
   }
@@ -108,22 +100,16 @@ int airspot_nus_send(const uint8_t *data, uint16_t len)
   return 0;
 }
 
-bool airspot_nus_is_ready(void)
-{
+bool airspot_nus_is_ready(void) {
   return (current_conn != NULL) && tx_notifications_enabled;
 }
 
-void airspot_nus_set_conn(struct bt_conn *conn)
-{
-  if (conn)
-  {
+void airspot_nus_set_conn(struct bt_conn *conn) {
+  if (conn) {
     current_conn = bt_conn_ref(conn);
     LOG_INF("NUS connection set");
-  }
-  else
-  {
-    if (current_conn)
-    {
+  } else {
+    if (current_conn) {
       bt_conn_unref(current_conn);
     }
     current_conn = NULL;

@@ -8,14 +8,13 @@
 #define AIRSPOT_VERSION_H
 
 #ifdef __cplusplus
-extern "C"
-{
+extern "C" {
 #endif
 
 #define AIRSPOT_FIRMWARE_VERSION_MAJOR 0
-#define AIRSPOT_FIRMWARE_VERSION_MINOR 1
+#define AIRSPOT_FIRMWARE_VERSION_MINOR 8
 #define AIRSPOT_FIRMWARE_VERSION_PATCH 0
-#define AIRSPOT_FIRMWARE_VERSION_STRING "0.1.0"
+#define AIRSPOT_FIRMWARE_VERSION_STRING "0.8.0"
 
 #ifdef __cplusplus
 }
