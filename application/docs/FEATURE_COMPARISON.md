@@ -190,14 +190,22 @@ Deep analysis comparing the original nRF52832 firmware with the new nRF54L05 fir
 
 ## 7. Power Management
 
-| Feature                            | Old | New        |
-| ---------------------------------- | --- | ---------- |
-| System Off mode                    | ✅  | ❌         |
-| Wake on button                     | ✅  | ❌         |
-| Wake on USB/charger                | ✅  | ❌         |
-| Variable sensor rate by power mode | ✅  | ✅         |
-| Low battery warning                | ✅  | ⚠️ Partial |
-| Low battery shutdown               | ✅  | ❌         |
+| Feature                            | Old | New            |
+| ---------------------------------- | --- | -------------- |
+| System Off mode                    | ✅  | ⚠️ Partial\*   |
+| Wake on button (tap + hold 3s)     | ✅  | ⚠️ Partial\*   |
+| Wake on USB/charger                | ✅  | ❌ (by design) |
+| Variable sensor rate by power mode | ✅  | ✅             |
+| Low battery warning                | ✅  | ⚠️ Partial     |
+| Low battery shutdown               | ✅  | ❌             |
+
+> [!IMPORTANT]
+> **Hardware Requirement:** Button must be on P0 or P1 for System OFF wake.
+> Current button on P2.10 does NOT support GPIO SENSE/interrupt.
+> nRF54L Port 2 (P2) cannot wake device from System OFF.
+>
+> **Power OFF gesture works:** Tap → Tap-and-hold 3s → device enters System OFF
+> **Wake gesture awaiting HW change:** Button needs hardware redesign to P0/P1
 
 ---
 

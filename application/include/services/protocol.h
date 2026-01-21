@@ -48,6 +48,7 @@ extern "C" {
 #define CMD_SET_FLIGHT_MODE 0x32
 #define CMD_ENTER_FACTORY_TEST 0xD0
 #define CMD_FACTORY_TEST_RESULT 0xDD
+#define CMD_SET_DEVICE_SLEEP 0xEE /* Enter Power Off (shipping) mode */
 #define CMD_FACTORY_RESET 0xFA
 #define CMD_ERASE_HISTORY 0xFD /* History: erase all data */
 #define CMD_GET_SYSTEM_TIME 0xFE

@@ -26,6 +26,7 @@
 #include <services/ble_service.h>
 #include <services/data_log.h>
 #include <services/factory_test.h>
+#include <services/power_manager.h>
 #include <services/protocol.h>
 #include <services/sensor_manager.h>
 #include <services/user_settings.h>
@@ -80,23 +81,58 @@ static void data_log_timer_handler(struct k_timer *timer) {
   data_log_due = true;
 }
 
-/* Button event handler */
+/* Track button state for tap detection */
+static int64_t last_press_time = 0;
+static bool tap_completed = false;
+
+/* Button event handler with power gesture support */
 static void button_event_handler(button_event_t event) {
+  int64_t now = k_uptime_get();
+
   switch (event) {
   case BUTTON_EVENT_PRESSED:
-    LOG_INF("Button pressed - triggering measurement");
-    led_driver_set(1, true); /* LED on while measuring */
-    sensor_manager_measure_now();
+    LOG_INF("Button pressed");
+
+    /* Check if this is a second press after a tap (for power-off gesture) */
+    if (tap_completed && (now - last_press_time) <= POWER_GESTURE_WINDOW_MS) {
+      LOG_INF("Second press detected - checking for power-off hold");
+      power_manager_on_button_pressed();
+    } else {
+      /* Normal press - trigger measurement */
+      led_driver_set(1, true);
+      sensor_manager_measure_now();
+    }
+
+    last_press_time = now;
+    tap_completed = false;
     break;
 
   case BUTTON_EVENT_RELEASED:
-    LOG_DBG("Button released");
-    led_driver_set(1, false); /* LED off */
+    LOG_INF("Button released");
+    led_driver_set(1, false);
+
+    /* Check if this was a short tap (< 300ms) */
+    if ((now - last_press_time) <= POWER_GESTURE_TAP_MAX_MS) {
+      LOG_INF("Tap detected! Now press-and-hold 3s within 500ms to power off");
+      tap_completed = true;
+      power_manager_on_tap_detected();
+    } else {
+      LOG_INF("Button held too long (%lld ms) - not a tap",
+              (now - last_press_time));
+    }
+
+    /* Notify power manager of button release */
+    if (power_manager_is_gesture_pending()) {
+      power_manager_on_button_released();
+    }
     break;
 
   case BUTTON_EVENT_LONG_PRESS:
-    LOG_INF("Button long press - toggling LED 2");
-    led_driver_toggle(2);
+    /* Only toggle LED if not in power gesture */
+    if (!power_manager_is_gesture_pending()) {
+      LOG_INF("Button long press - toggling LED 2");
+      led_driver_toggle(2);
+    }
     break;
   }
 }
@@ -162,16 +198,45 @@ static void store_co2_data(void) {
 int main(void) {
   int ret;
 
+  /*
+   * ========================================
+   * Power-on Validation (must be first!)
+   * ========================================
+   *
+   * If device woke from System OFF, validate the wake-up gesture
+   * (tap + tap-hold 3s). Invalid gesture → return to Power OFF.
+   *
+   * NOTE: Currently DISABLED because button is on P2.10 which doesn't
+   * support GPIO SENSE/interrupt for System OFF wake. Once hardware
+   * moves button to P0 or P1, uncomment this validation.
+   */
+#if 0 /* TODO: Enable once button is on P0/P1 */
+  if (power_manager_is_wakeup_from_off()) {
+    LOG_INF("Woke from Power Off - validating gesture...");
+
+    /* Need LED driver for feedback */
+    led_driver_init();
+
+    if (!power_manager_validate_wakeup_gesture()) {
+      LOG_INF("Invalid wake gesture - returning to Power Off");
+      power_manager_enter_off_state();
+      /* Does not return */
+    }
+
+    LOG_INF("Wake gesture valid - continuing boot");
+  }
+#endif
+
   /* Boot banner */
   printk("\n\n");
   printk("========================================\n");
   printk("AirSpot Slim Firmware v%s\n", AIRSPOT_FIRMWARE_VERSION_STRING);
-  printk("Phase 9: MCUboot DFU + OTA Updates\n");
+  printk("Phase 10: Power Off Mode (Shipping)\n");
   printk("========================================\n");
 
   LOG_INF("========================================");
   LOG_INF("AirSpot Slim Firmware v%s", AIRSPOT_FIRMWARE_VERSION_STRING);
-  LOG_INF("Phase 9: MCUboot DFU + OTA Updates");
+  LOG_INF("Phase 10: Power Off Mode (Shipping)");
   LOG_INF("========================================");
 
   /* Ensure flash control pins are HIGH */
@@ -221,6 +286,14 @@ int main(void) {
 
   /* Initialize Factory Test Service */
   factory_test_init();
+
+  /* Initialize Power Manager */
+  ret = power_manager_init();
+  if (ret) {
+    LOG_WRN("Power manager init failed: %d", ret);
+  } else {
+    LOG_INF("Power manager initialized");
+  }
 
   /* 2. BLE service (enables Bluetooth stack) */
   ret = ble_service_init();

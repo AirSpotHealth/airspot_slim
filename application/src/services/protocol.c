@@ -22,6 +22,7 @@
 #include <services/ble_service.h>
 #include <services/data_log.h>
 #include <services/factory_test.h>
+#include <services/power_manager.h>
 #include <services/protocol.h>
 #include <services/sensor_manager.h>
 #include <services/user_settings.h>
@@ -437,6 +438,26 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len) {
         send_frame(tx_frame, 15);
       }
     }
+    break;
+
+  case CMD_SET_DEVICE_SLEEP:
+    /* Enter Power Off (shipping) mode */
+    LOG_INF("Device sleep (power off) command received");
+    /* Send ACK first */
+    {
+      uint8_t tx_frame[8] = {0};
+      tx_frame[0] = CMD_FIRST_BYTE;
+      tx_frame[1] = CMD_SECOND_BYTE;
+      tx_frame[2] = CMD_SET_DEVICE_SLEEP;
+      tx_frame[3] = 0x01;
+      tx_frame[4] = 0x01; /* ACK */
+      set_frame_checksum(tx_frame, 6);
+      send_frame(tx_frame, 6);
+    }
+    /* Small delay for ACK to send */
+    k_msleep(100);
+    /* Enter power off - does not return */
+    power_manager_enter_off_state();
     break;
 
   default:
