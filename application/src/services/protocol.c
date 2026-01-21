@@ -14,11 +14,14 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/reboot.h>
 
+#include <drivers/led_driver.h>
+
 #include <airspot/version.h>
 #include <services/airspot_nus.h>
 #include <services/ble_mode_service.h>
 #include <services/ble_service.h>
 #include <services/data_log.h>
+#include <services/factory_test.h>
 #include <services/protocol.h>
 #include <services/sensor_manager.h>
 #include <services/user_settings.h>
@@ -341,6 +344,99 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len) {
     /* Erase all history data */
     LOG_WRN("Erase history command received");
     data_log_request_erase_all();
+    break;
+
+  case CMD_RESET_SENSOR:
+    /* Reset CO2 sensor (STCC4) */
+    LOG_INF("Reset sensor command received");
+    sensor_manager_reset_co2_sensor();
+    /* ACK with same command */
+    {
+      uint8_t tx_frame[8] = {0};
+      tx_frame[0] = CMD_FIRST_BYTE;
+      tx_frame[1] = CMD_SECOND_BYTE;
+      tx_frame[2] = CMD_RESET_SENSOR;
+      tx_frame[3] = 0x01;
+      tx_frame[4] = 0x01; /* Success */
+      set_frame_checksum(tx_frame, 6);
+      send_frame(tx_frame, 6);
+    }
+    break;
+
+  case CMD_FIND_MY_AIRSPOT:
+    /* Blink LEDs to locate device */
+    LOG_INF("Find My AirSpot command received");
+    led_driver_startup_sequence(); /* Re-use startup blink */
+    break;
+
+  case CMD_SET_BLE_DISCONNECT:
+    /* Force BLE disconnect */
+    LOG_INF("Force disconnect command received");
+    ble_service_disconnect();
+    break;
+
+  case CMD_SET_DND:
+    /* Set DND mode - just store settings for now */
+    /* payload: [enabled(1), startH(1), startM(1), endH(1), endM(1)] */
+    if (len >= 9) {
+      uint8_t enabled = frame[4];
+      uint8_t start_h = frame[5];
+      uint8_t start_m = frame[6];
+      uint8_t end_h = frame[7];
+      uint8_t end_m = frame[8];
+
+      user_settings_set_dnd(enabled, start_h, start_m, end_h, end_m);
+      LOG_INF("DND set: %d, %02d:%02d-%02d:%02d", enabled, start_h, start_m,
+              end_h, end_m);
+    }
+    protocol_send_device_state();
+    break;
+
+  case CMD_ENTER_FACTORY_TEST:
+    /* Enter factory test mode */
+    LOG_INF("Enter Factory Test Mode command received");
+    /* Ack first */
+    {
+      uint8_t tx_frame[8] = {0};
+      tx_frame[0] = CMD_FIRST_BYTE;
+      tx_frame[1] = CMD_SECOND_BYTE;
+      tx_frame[2] = CMD_ENTER_FACTORY_TEST;
+      tx_frame[3] = 0x01;
+      tx_frame[4] = 0x01; /* Success */
+      set_frame_checksum(tx_frame, 6);
+      send_frame(tx_frame, 6);
+    }
+
+    /* Start test sequence */
+    factory_test_start_auto();
+    break;
+
+  case CMD_FACTORY_TEST_RESULT:
+    /* Send last test report */
+    {
+      factory_test_report_t report;
+      if (factory_test_get_report(&report) == 0) {
+        uint8_t tx_frame[32] = {0};
+        tx_frame[0] = CMD_FIRST_BYTE;
+        tx_frame[1] = CMD_SECOND_BYTE;
+        tx_frame[2] = CMD_FACTORY_TEST_RESULT; /* 0xDD */
+        tx_frame[3] = 10;                      /* Fixed length */
+
+        tx_frame[4] = report.flash_status;
+        tx_frame[5] = report.battery_status;
+        tx_frame[6] = report.sht40_status;
+        tx_frame[7] = report.stcc4_status;
+        tx_frame[8] = report.lps22hh_status;
+        tx_frame[9] = report.qi_status;
+        tx_frame[10] = (uint8_t)(report.battery_mv >> 8);
+        tx_frame[11] = (uint8_t)(report.battery_mv & 0xFF);
+        tx_frame[12] = 0; /* Reserved */
+        tx_frame[13] = 0; /* Reserved */
+
+        set_frame_checksum(tx_frame, 15);
+        send_frame(tx_frame, 15);
+      }
+    }
     break;
 
   default:

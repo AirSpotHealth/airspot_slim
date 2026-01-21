@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.20.0)
 
+message(STATUS "Adding factory_test.c to sources from: ${CMAKE_CURRENT_LIST_FILE}")
+
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(airspot_slim)
 
@@ -25,6 +27,7 @@ target_sources(app PRIVATE src/drivers/spi_flash.c)
 # Services
 # =============================================================================
 target_sources(app PRIVATE src/services/ble_service.c)
+target_sources(app PRIVATE src/services/factory_test.c)
 target_sources(app PRIVATE src/services/airspot_nus.c)
 target_sources(app PRIVATE src/services/protocol.c)
 target_sources(app PRIVATE src/services/sensor_manager.c)

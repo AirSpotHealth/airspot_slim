@@ -208,3 +208,16 @@ int ble_service_stop_advertising(void) {
   LOG_INF("BLE advertising stopped");
   return 0;
 }
+
+void ble_service_update_battery_level(uint8_t level) {
+  /* Clamp to valid range 0-100 */
+  if (level > 100) {
+    level = 100;
+  }
+
+  /* Update BAS battery level characteristic */
+  int err = bt_bas_set_battery_level(level);
+  if (err) {
+    LOG_WRN("Failed to update battery level: %d", err);
+  }
+}

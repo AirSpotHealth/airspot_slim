@@ -25,6 +25,7 @@
 #include <services/ble_mode_service.h>
 #include <services/ble_service.h>
 #include <services/data_log.h>
+#include <services/factory_test.h>
 #include <services/protocol.h>
 #include <services/sensor_manager.h>
 #include <services/user_settings.h>
@@ -217,6 +218,9 @@ int main(void) {
   } else {
     LOG_INF("User settings initialized");
   }
+
+  /* Initialize Factory Test Service */
+  factory_test_init();
 
   /* 2. BLE service (enables Bluetooth stack) */
   ret = ble_service_init();

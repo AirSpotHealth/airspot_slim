@@ -6,6 +6,7 @@
  * Sensor Manager Implementation
  */
 
+#include <math.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 
@@ -15,6 +16,7 @@
 #include <drivers/qi_charger.h>
 #include <drivers/sht40.h>
 #include <drivers/stcc4.h>
+#include <services/ble_service.h>
 #include <services/sensor_manager.h>
 
 LOG_MODULE_REGISTER(sensor_mgr, CONFIG_AIRSPOT_LOG_LEVEL);
@@ -129,22 +131,40 @@ static void do_measurement(void) {
 
   data.timestamp_ms = k_uptime_get_32();
 
-  /* 1. Read SHT40 temperature and humidity */
+  /* 1. Read SHT40 temperature and humidity (Compensation Source 1) */
   ret = sht40_measure(&sht_data, SHT40_PRECISION_HIGH);
   if (ret == 0) {
     data.temperature_c = sht_data.temperature;
     data.humidity_rh = sht_data.humidity;
     LOG_DBG("SHT40: %.1f°C, %.1f%%RH", (double)data.temperature_c,
             (double)data.humidity_rh);
-
-    /* 2. Update STCC4 with ambient conditions for compensation */
-    stcc4_set_ambient(data.temperature_c, data.humidity_rh);
   } else {
     LOG_WRN("SHT40 read failed: %d", ret);
     all_ok = false;
   }
 
-  /* 3. Read STCC4 CO2 */
+  /* 2. Read LPS22HH pressure (Compensation Source 2) */
+  ret = lps22hh_read(&lps_data);
+  if (ret == 0) {
+    data.pressure_hpa = lps_data.pressure;
+    LOG_DBG("LPS22HH: %.1f hPa", (double)data.pressure_hpa);
+  } else {
+    LOG_WRN("LPS22HH read failed: %d", ret);
+    /* Fallback to standard pressure if sensor fails */
+    data.pressure_hpa = 1013.0f;
+    all_ok = false;
+  }
+
+  /* 3. Feed Environmental Data to STCC4 for Compensation */
+  /* Note: This is critical for STCC4 accuracy */
+  if (!isnan(data.temperature_c) && !isnan(data.humidity_rh)) {
+    stcc4_set_ambient(data.temperature_c, data.humidity_rh);
+  }
+  if (data.pressure_hpa > 0) {
+    stcc4_set_pressure((uint16_t)data.pressure_hpa);
+  }
+
+  /* 4. Read STCC4 CO2 */
   /* In continuous mode, data is available immediately */
   /* In single-shot mode, we need to trigger and wait */
   ret = stcc4_read(&stcc_data);
@@ -164,22 +184,15 @@ static void do_measurement(void) {
     }
   }
 
-  /* 4. Read LPS22HH pressure */
-  ret = lps22hh_read(&lps_data);
-  if (ret == 0) {
-    data.pressure_hpa = lps_data.pressure;
-    LOG_DBG("LPS22HH: %.1f hPa", (double)data.pressure_hpa);
-  } else {
-    LOG_WRN("LPS22HH read failed: %d", ret);
-    all_ok = false;
-  }
-
   /* 5. Read battery */
   data.battery_mv = battery_read_voltage_mv();
   data.battery_percent = battery_get_percentage();
   data.battery_low = battery_is_low();
   data.battery_critical = battery_is_critical();
   LOG_DBG("Battery: %u mV (%u%%)", data.battery_mv, data.battery_percent);
+
+  /* Note: Update BLE Battery Service */
+  ble_service_update_battery_level(data.battery_percent);
 
   /* 6. Read Qi charging status */
   data.is_charging = qi_charger_is_charging();
@@ -318,4 +331,13 @@ void sensor_manager_set_power_mode(uint8_t power_mode) {
       k_work_schedule(&sensor_work, K_MSEC(measurement_interval_ms));
     }
   }
+}
+
+int sensor_manager_reset_co2_sensor(void) {
+  /* Reset STCC4 sensor by re-initializing it */
+  LOG_INF("Resetting CO2 sensor (STCC4)...");
+
+  /* Stop continuous mode if active */
+  /* Re-run init sequence */
+  return stcc4_init();
 }

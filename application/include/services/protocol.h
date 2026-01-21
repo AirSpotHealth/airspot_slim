@@ -16,8 +16,7 @@
 #include <stdint.h>
 
 #ifdef __cplusplus
-extern "C"
-{
+extern "C" {
 #endif
 
 /* Protocol frame header */
@@ -34,16 +33,21 @@ extern "C"
 #define CMD_GET_DEVICE_STATE 0x08
 #define CMD_GET_DEVICE_NAME 0x09
 #define CMD_SET_DEVICE_NAME 0x0A
-#define CMD_GET_CURRENT_HALF_PAGE 0x0B /* History: get current write position */
-#define CMD_HISTORY_REQUEST 0x0C       /* History: request data for half-page */
+#define CMD_GET_CURRENT_HALF_PAGE                                              \
+  0x0B                           /* History: get current write position        \
+                                  */
+#define CMD_HISTORY_REQUEST 0x0C /* History: request data for half-page */
 #define CMD_GET_HARDWARE_VERSION 0x12
 #define CMD_GET_SOFTWARE_VERSION 0x13
 #define CMD_GET_BATTERY_LEVEL 0x20
 #define CMD_REFRESH_CO2_VALUE 0x21
 #define CMD_SET_DND 0x22
+#define CMD_RESET_SENSOR 0x24 /* Reset CO2 sensor */
 #define CMD_RESET_DEVICE 0x27
+#define CMD_FIND_MY_AIRSPOT 0x10 /* Blink LEDs */
 #define CMD_SET_FLIGHT_MODE 0x32
 #define CMD_ENTER_FACTORY_TEST 0xD0
+#define CMD_FACTORY_TEST_RESULT 0xDD
 #define CMD_FACTORY_RESET 0xFA
 #define CMD_ERASE_HISTORY 0xFD /* History: erase all data */
 #define CMD_GET_SYSTEM_TIME 0xFE
@@ -51,79 +55,79 @@ extern "C"
 /* Slim-specific: Device type indicator for app differentiation */
 #define DEVICE_TYPE_SLIM 0x02 /* 0x01 = Original, 0x02 = Slim */
 
-    /**
-     * @brief Initialize protocol handler
-     *
-     * Sets up NUS service and registers RX callback.
-     *
-     * @return 0 on success, negative errno on failure
-     */
-    int protocol_init(void);
+/**
+ * @brief Initialize protocol handler
+ *
+ * Sets up NUS service and registers RX callback.
+ *
+ * @return 0 on success, negative errno on failure
+ */
+int protocol_init(void);
 
-    /**
-     * @brief Process received data
-     *
-     * Called by NUS RX callback. Parses frames and dispatches commands.
-     *
-     * @param data Received data
-     * @param len Data length
-     */
-    void protocol_process_data(const uint8_t *data, uint16_t len);
+/**
+ * @brief Process received data
+ *
+ * Called by NUS RX callback. Parses frames and dispatches commands.
+ *
+ * @param data Received data
+ * @param len Data length
+ */
+void protocol_process_data(const uint8_t *data, uint16_t len);
 
-    /**
-     * @brief Send realtime CO2 value
-     *
-     * Sends current sensor data to the connected device.
-     */
-    void protocol_send_realtime_co2(void);
+/**
+ * @brief Send realtime CO2 value
+ *
+ * Sends current sensor data to the connected device.
+ */
+void protocol_send_realtime_co2(void);
 
-    /**
-     * @brief Send battery level
-     */
-    void protocol_send_battery_level(void);
+/**
+ * @brief Send battery level
+ */
+void protocol_send_battery_level(void);
 
-    /**
-     * @brief Send device state/configuration
-     */
-    void protocol_send_device_state(void);
+/**
+ * @brief Send device state/configuration
+ */
+void protocol_send_device_state(void);
 
-    /**
-     * @brief Send hardware version
-     */
-    void protocol_send_hardware_version(void);
+/**
+ * @brief Send hardware version
+ */
+void protocol_send_hardware_version(void);
 
-    /**
-     * @brief Send software version
-     */
-    void protocol_send_software_version(void);
+/**
+ * @brief Send software version
+ */
+void protocol_send_software_version(void);
 
-    /**
-     * @brief Send current half-page number (where history is being written)
-     */
-    void protocol_send_current_half_page(void);
+/**
+ * @brief Send current half-page number (where history is being written)
+ */
+void protocol_send_current_half_page(void);
 
-    /**
-     * @brief Send history data for a specific half-page
-     *
-     * @param data Page data buffer (128 bytes for half-page)
-     * @param record_count Number of valid records (0-16)
-     * @param half_page_number The half-page number being sent
-     */
-    void protocol_send_history_data(const uint8_t *data, uint8_t record_count,
-                                    uint16_t half_page_number);
+/**
+ * @brief Send history data for a specific half-page
+ *
+ * @param data Page data buffer (128 bytes for half-page)
+ * @param record_count Number of valid records (0-16)
+ * @param half_page_number The half-page number being sent
+ */
+void protocol_send_history_data(const uint8_t *data, uint8_t record_count,
+                                uint16_t half_page_number);
 
-    /**
-     * @brief Send erase history complete notification
-     */
-    void protocol_send_erase_done(void);
+/**
+ * @brief Send erase history complete notification
+ */
+void protocol_send_erase_done(void);
 
-    /**
-     * @brief Process pending history requests
-     *
-     * Should be called periodically from the main loop.
-     * Handles reading from flash and sending history data.
-     */
-    void protocol_process_history(void);
+/**
+ * @brief Process pending history requests
+ *
+ * Should be called periodically from the main loop.
+ * Handles reading from flash and sending history data.
+ */
+void protocol_process_history(void);
 
 #ifdef __cplusplus
 }
