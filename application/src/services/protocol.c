@@ -148,34 +148,51 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len) {
     break;
 
   case CMD_GET_DEVICE_NAME:
-    /* Return device name (e.g., "AirSpot-167CD0") */
+    /* Return device alias (user-settable name, separate from BLE name)
+     * This is what the app displays, not the BLE advertising name */
     {
-      const char *name = ble_service_get_device_name();
-      uint8_t name_len = strlen(name);
+      const char *alias = user_settings_get_device_name();
+      uint8_t alias_len = (alias && alias[0]) ? strlen(alias) : 0;
       uint8_t tx_frame[32] = {0};
 
       tx_frame[0] = CMD_FIRST_BYTE;
       tx_frame[1] = CMD_SECOND_BYTE;
       tx_frame[2] = CMD_GET_DEVICE_NAME;
-      tx_frame[3] = name_len;
-      memcpy(&tx_frame[4], name, name_len);
+      tx_frame[3] = alias_len;
+      if (alias_len > 0) {
+        memcpy(&tx_frame[4], alias, alias_len);
+      }
 
-      set_frame_checksum(tx_frame, 5 + name_len);
-      send_frame(tx_frame, 5 + name_len);
-      LOG_INF("Sent device name: %s", name);
+      set_frame_checksum(tx_frame, 5 + alias_len);
+      send_frame(tx_frame, 5 + alias_len);
+      LOG_INF("Sent device alias: %s", alias_len > 0 ? alias : "(empty)");
     }
     break;
 
   case CMD_SET_DEVICE_NAME:
-    /* Set device name - not fully supported on Slim, just ACK */
-    LOG_INF("Set device name (not supported on Slim)");
+    /* Set device alias (user-friendly name for app display)
+     * Frame format: [FF][AA][0A][len][name...][checksum]
+     * Note: This does NOT change the BLE advertising name (AirSpot-XXXXXX) */
+    if (len >= 5) {
+      uint8_t name_len = frame[3];
+      if (name_len > 0 && name_len <= 20 && len >= (4 + name_len + 1)) {
+        char new_alias[21] = {0};
+        memcpy(new_alias, &frame[4], name_len);
+        new_alias[name_len] = '\0';
+
+        /* Save alias to NVS */
+        user_settings_set_device_name(new_alias);
+        LOG_INF("Device alias set: %s", new_alias);
+      }
+    }
+    /* Send ACK */
     {
       uint8_t tx_frame[8] = {0};
       tx_frame[0] = CMD_FIRST_BYTE;
       tx_frame[1] = CMD_SECOND_BYTE;
       tx_frame[2] = CMD_SET_DEVICE_NAME;
       tx_frame[3] = 0x01;
-      tx_frame[4] = 0x01; /* ACK */
+      tx_frame[4] = 0x01; /* Success */
       set_frame_checksum(tx_frame, 6);
       send_frame(tx_frame, 6);
     }

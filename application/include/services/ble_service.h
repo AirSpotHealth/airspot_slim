@@ -32,8 +32,11 @@ int ble_service_init(void);
 /**
  * @brief Get the BLE device name
  *
- * Returns the device name in format "AirSpot-XXXXXX" where XXXXXX
+ * Returns the BLE advertising name in format "AirSpot-XXXXXX" where XXXXXX
  * is derived from the BLE MAC address.
+ *
+ * Note: This is the BLE advertising name, not the user-settable "device name"
+ * (alias) which is stored separately in user_settings.
  *
  * @return Pointer to null-terminated device name string
  */

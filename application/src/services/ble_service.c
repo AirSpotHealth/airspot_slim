@@ -30,6 +30,16 @@ static struct bt_conn *current_conn = NULL;
 static bool initialized = false;
 static bool advertising = false;
 
+/* Work item for deferred advertising restart */
+static void restart_advertising_work_handler(struct k_work *work);
+static K_WORK_DELAYABLE_DEFINE(restart_adv_work, restart_advertising_work_handler);
+
+static void restart_advertising_work_handler(struct k_work *work) {
+  ARG_UNUSED(work);
+  ble_service_start_advertising();
+  led_indicator_show_pairing();
+}
+
 /* Dynamic advertising data */
 static struct bt_data ad[2];
 
@@ -65,12 +75,11 @@ static void disconnected(struct bt_conn *conn, uint8_t reason) {
   /* Notify NUS of disconnection */
   airspot_nus_set_conn(NULL);
 
-  /* Restart advertising after disconnect */
+  /* Restart advertising after disconnect with a small delay
+   * to allow the BLE stack to fully release connection resources.
+   * Direct call from callback can fail with -ENOMEM (-12). */
   advertising = false;
-  ble_service_start_advertising();
-
-  /* Show pairing indicator */
-  led_indicator_show_pairing();
+  k_work_schedule(&restart_adv_work, K_MSEC(100));
 }
 
 BT_CONN_CB_DEFINE(conn_callbacks) = {
@@ -127,7 +136,9 @@ int ble_service_init(void) {
     return err;
   }
 
-  /* Generate device name from MAC address (after bt_enable) */
+  /* Generate BLE device name from MAC address (always "AirSpot-XXXXXX")
+   * Note: The user-settable "device name" (alias) is separate and stored
+   * in user_settings. The BLE advertising name is always MAC-based. */
   generate_device_name();
 
   /* Set GAP device name */
