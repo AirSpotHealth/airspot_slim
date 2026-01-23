@@ -79,7 +79,6 @@ void i2c_bus_scan(void) {
 
   LOG_INF("Scanning I2C bus...");
 
-  uint8_t dummy = 0;
   int found = 0;
 
   /* Scan I2C addresses 0x08 to 0x77 (valid 7-bit addresses) */

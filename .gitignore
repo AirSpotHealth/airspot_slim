@@ -44,6 +44,9 @@ env/
 *.bin
 *.map
 
+# Allow releases to be tracked (all files in releases folder)
+!releases/**
+
 # Dependencies
 .cache/
 

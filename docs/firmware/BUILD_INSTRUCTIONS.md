@@ -1,162 +1,207 @@
-# Building AirSpot Slim Minimal Baseline
+# Build Instructions - AirSpot Slim
 
-## Prerequisites
+This document provides detailed instructions for building, flashing, and creating OTA update packages for the AirSpot Slim firmware.
 
-1. **Install nRF Connect SDK**
-   - Follow: https://developer.nordicsemi.com/nRF_Connect_SDK/doc/latest/nrf/getting_started.html
-   - Recommended: Use nRF Connect for VS Code extension
+## Quick Start (Recommended)
 
-2. **Install West Tool**
-   - Included with nRF Connect SDK installation
-
-3. **Install J-Link Software**
-   - Download from: https://www.segger.com/downloads/jlink/
-
-## Building
-
-### Using VS Code (Recommended)
-
-1. Open VS Code
-2. Install "nRF Connect for VS Code" extension
-3. Open the `slim/` folder
-4. Use the nRF Connect extension to build and flash
-
-### Using Command Line
+The project includes a unified helper script `scripts/airspot` that handles all common tasks.
 
 ```bash
-# Navigate to project directory
-cd slim
+# Sourcing the script adds the 'airspot' command to your shell
+source scripts/airspot
 
-# Initialize west workspace (first time only)
-west init -l .
+# Show available commands
+airspot help
 
-# Update west workspace
-west update
+# Build the firmware
+airspot build
 
-# Build the project
-west build -b nrf54l05dk_nrf54l05_cpuapp
+# Build and Flash
+airspot bf
 
-# Flash to device
-west flash
+# View Logs
+airspot logs
 ```
-
-## Flashing
-
-### Using nRF Connect Programmer
-
-1. Connect nRF54L15DK via USB
-2. Connect custom board via JTAG (0.5mm connector)
-3. Open nRF Connect Programmer
-4. Select device
-5. Load hex file: `build/zephyr/zephyr.hex`
-6. Click "Write"
-
-### Using Command Line
-
-```bash
-# Flash using west
-west flash
-
-# Or using nrfjprog directly
-nrfjprog --program build/zephyr/zephyr.hex --chiperase --verify --reset
-```
-
-## DFU (Device Firmware Update)
-
-### Setting up MCUboot
-
-MCUboot is configured in `prj.conf`. To enable DFU:
-
-1. **Serial Recovery Mode**:
-   - Hold button during boot to enter recovery
-   - Use `mcumgr` tool to upload new firmware
-
-2. **BLE DFU** (if enabled):
-   - Use nRF Connect mobile app
-   - Or custom DFU implementation
-
-### Building DFU Package
-
-```bash
-# Build with MCUboot
-west build -b nrf54l05dk_nrf54l05_cpuapp -- -DCONFIG_BOOTLOADER_MCUBOOT=y
-
-# Generate DFU package (requires mcumgr)
-mcumgr image upload build/zephyr/zephyr.signed.bin
-```
-
-## Debugging
-
-### Using VS Code
-
-1. Set up launch configuration for nRF Connect
-2. Set breakpoints
-3. Start debugging session
-
-### Using J-Link GDB
-
-```bash
-# Start GDB server
-JLinkGDBServer -device nRF54L05 -if SWD -port 2331
-
-# In another terminal, connect GDB
-arm-none-eabi-gdb build/zephyr/zephyr.elf
-(gdb) target remote localhost:2331
-(gdb) monitor reset
-(gdb) load
-(gdb) continue
-```
-
-## Testing
-
-### Basic Functionality
-
-1. **LED Test**: LEDs should blink on startup
-2. **Button Test**: Press button, check logs
-3. **BLE Test**: 
-   - Device should advertise as "AirSpot Slim"
-   - Connect with nRF Connect app
-   - Check connection status
-
-### Serial Logging
-
-Connect UART to see logs:
-- Baud rate: 115200
-- TX: Pin 6 (configurable in device tree)
-- RX: Pin 8 (configurable in device tree)
-
-## Troubleshooting
-
-### Build Errors
-
-- **West not found**: Add west to PATH or use VS Code extension
-- **SDK not found**: Set `ZEPHYR_BASE` environment variable
-- **Device tree errors**: Check overlay file syntax
-
-### Flash Errors
-
-- **Device not found**: Check JTAG connection
-- **Permission denied**: Run with sudo or add udev rules
-- **Wrong device**: Verify nRF54L05 is selected
-
-### Runtime Issues
-
-- **No logs**: Check UART connection and baud rate
-- **LEDs not working**: Verify device tree pin assignments
-- **Button not working**: Check GPIO configuration
-- **BLE not advertising**: Check BLE stack initialization
-
-## Next Steps
-
-Once baseline is working:
-
-1. Add CO2 sensor driver
-2. Add flash storage
-3. Add BLE protocol implementation
-4. Add power management
-5. Add factory testing
 
 ---
 
-**Last Updated**: 2025-01-XX
+## 1. Prerequisites
 
+1. **nRF Connect SDK (v2.x or later)**
+   - [Installation Guide](https://developer.nordicsemi.com/nRF_Connect_SDK/doc/latest/nrf/getting_started.html)
+   - Ensure `west` tool is in your PATH
+
+2. **Command Line Tools**
+   - **nRF Command Line Tools** (for `nrfjprog`, `nrfutil`)
+   - **J-Link Software** (for flashing/debugging)
+   - **CMake** & **Ninja**
+
+---
+
+## 2. Building Firmware
+
+### Using the `airspot` Script
+
+```bash
+# Standard build (no MCUboot, faster for development)
+airspot build
+
+# Clean and build
+airspot build --clean
+```
+
+### Output Files
+
+After a successful build, artifacts are available in:
+
+- `build/zephyr/airspot_slim_vX.Y.Z.hex`
+- `builds/airspot_slim_vX.Y.Z.hex` (Easy access copy)
+
+### Using West Directly
+
+If you prefer standard Zephyr tools:
+
+```bash
+cd application
+west build -b nrf54l15dk/nrf54l05/cpuapp
+```
+
+---
+
+## 3. Flashing Firmware
+
+### Using the `airspot` Script
+
+```bash
+# Flash the latest build
+airspot flash
+
+# Build and then flash
+airspot bf
+```
+
+### Using West Directly
+
+```bash
+cd application
+west flash
+```
+
+### Using nrfjprog directly
+
+```bash
+nrfjprog --program build/zephyr/zephyr.hex --sectorerase --verify --reset -f NRF54L
+```
+
+---
+
+## 4. OTA / DFU Updates
+
+To perform Over-The-Air updates, you need to generate a DFU package containing the signed firmware image.
+
+## 4. OTA / DFU Updates
+
+To perform Over-The-Air updates, you need to generate a DFU package containing the signed firmware image.
+
+### Generating DFU Package
+
+Use the `--dfu` flag with the build command. This handles enabling MCUboot (via sysbuild) and packaging the artifact.
+
+```bash
+# Build with MCUboot and generate DFU zip
+airspot build --dfu
+```
+
+### Artifact Organization
+
+Releases are automatically organized by version in the `releases/` directory.
+
+**Example Structure:**
+
+```
+releases/v1.0.0/
+├── airspot_slim_v1.0.0_TIMESTAMP.hex          (Standard Build)
+├── airspot_slim_v1.0.0_TIMESTAMP_dfu.zip      (DFU Package from --dfu build)
+├── airspot_slim_v1.0.0_TIMESTAMP_signed.bin   (Signed Image)
+└── airspot_slim_v1.0.0_TIMESTAMP_merged.hex   (Full Image with Bootloader)
+```
+
+### Performing the Update
+
+1. **Mobile App**:
+   - Install **nRF Connect Device Manager** ([iOS](https://apps.apple.com/app/nrf-connect-device-manager/id1519423539) / [Android](https://play.google.com/store/apps/details?id=no.nordicsemi.android.nrfconnectdevicemanager))
+   - Connect to "AirSpot Slim"
+   - Select "DFU" tab
+   - Select the generated `.zip` file
+   - Tap "Start"
+
+2. **Desktop**:
+   - Use **nRF Connect for Desktop** -> **Bluetooth Low Energy** app
+   - Connect to device
+   - Click "DFU" button
+   - Select the `.zip` file
+
+---
+
+## 5. Debugging & Logging
+
+### UART Logging
+
+The device outputs logs on the UART port at 115200 baud.
+
+```bash
+# View UART logs
+airspot logs
+
+# Or specifically
+airspot logs uart
+```
+
+### RTT Logging
+
+If you have a J-Link debugger connected, RTT logging is faster and doesn't require UART pins.
+
+```bash
+airspot logs rtt
+```
+
+---
+
+## 6. Directory Structure
+
+```
+airspot_slim/
+├── application/          # Zephyr application source
+│   ├── build.sh         # Legacy build script
+│   └── ...
+├── scripts/
+│   └── airspot          # Main helper script
+├── build/               # Temporary build artifacts
+├── builds/              # Saved HEX files
+├── ota/                 # Generated DFU packages
+└── ...
+```
+
+---
+
+## 7. Troubleshooting
+
+### "Sysbuild failed" during OTA build
+
+- Ensure `sysbuild.conf` enables MCUboot (`SB_CONFIG_BOOTLOADER_MCUBOOT=y`).
+- Try cleaning the build directory: `airspot clean`.
+
+### "No UART device found"
+
+- Check USB connection.
+- Verify user permissions for serial ports (`sudo usermod -a -G dialout $USER` on Linux).
+
+### Flash failures
+
+- Check J-Link connection.
+- Ensure device is powered.
+- Try `airspot erase` to completely wipe the chip (requires re-flashing bootloader via `airspot ota --build` + flash).
+
+---
+
+**Last Updated**: 2026-01-24

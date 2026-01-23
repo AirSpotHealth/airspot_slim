@@ -169,60 +169,209 @@ _update_prj_conf_version() {
 # Build command
 airspot_build() {
     local version="$(_get_firmware_version)"
-    _print_info "Building AirSpot Slim firmware v${version}..."
+    local bin_base_name="airspot_slim_v${version}"
+    local timestamp=$(date +"%Y%m%d_%H%M%S")
+    local do_dfu=false
+    local pristine=""
+    
+    _print_info "AirSpot Slim Firmware v${version}"
     cd "$AIRSPOT_PROJECT_DIR"
     
-    # Ensure system git is used (NCS git has issues)
+    # Ensure system git is used
     export PATH="/usr/bin:/opt/homebrew/bin:$PATH"
     
     # Update prj.conf with current version
     _update_prj_conf_version
     
-    local pristine=""
-    
-    # Check for --clean or --pristine flag
+    # Parse arguments
     for arg in "$@"; do
         case "$arg" in
             --clean|--pristine)
                 pristine="--pristine"
                 ;;
+            --dfu)
+                do_dfu=true
+                ;;
         esac
     done
     
-    west build -b "$AIRSPOT_BOARD" --no-sysbuild $pristine
-    
-    if [ $? -eq 0 ]; then
+    if [ "$do_dfu" = true ]; then
+        _print_info "Building with DFU support (Sysbuild + MCUboot)..."
+        
+        # Build with sysbuild enabled (creates MCUboot + signed app)
+        west build -b "$AIRSPOT_BOARD" --sysbuild $pristine
+        
+        if [ $? -ne 0 ]; then
+            _print_error "Sysbuild failed!"
+            return 1
+        fi
+        
+        _print_success "Build complete (Sysbuild)!"
+        
+        # --- Artifact Collection for DFU ---
+        local sysbuild_dir="$AIRSPOT_BUILD_DIR"
+        local app_update_bin=""
+        
+        # Locate signed binary
+        # Logic: sysbuild puts app in 'application' subdir
+        # Name: usually matches CONFIG_KERNEL_BIN_NAME + .signed.bin
+        
+        # 1. Try versioned name in application/zephyr (Most likely)
+        if [ -f "$sysbuild_dir/application/zephyr/${bin_base_name}.signed.bin" ]; then
+            app_update_bin="$sysbuild_dir/application/zephyr/${bin_base_name}.signed.bin"
+        
+        # 2. Try generic zephyr.signed.bin in application/zephyr
+        elif [ -f "$sysbuild_dir/application/zephyr/zephyr.signed.bin" ]; then
+            app_update_bin="$sysbuild_dir/application/zephyr/zephyr.signed.bin"
+            
+        # 3. Legacy locations
+        elif [ -f "$sysbuild_dir/app/zephyr/zephyr.signed.bin" ]; then
+            app_update_bin="$sysbuild_dir/app/zephyr/zephyr.signed.bin"
+        elif [ -f "$sysbuild_dir/zephyr/zephyr.signed.bin" ]; then
+            app_update_bin="$sysbuild_dir/zephyr/zephyr.signed.bin"
+        fi
+        
+        if [ -z "$app_update_bin" ]; then
+           _print_error "Could not find signed binary for DFU!"
+           return 1
+        fi
+
+        # Generate DFU Zip
+        # --- Release Organization (DFU) ---
+        # Structure: releases/vX.Y.Z/
+        local release_version_dir="$AIRSPOT_WORKSPACE/releases/v${version}"
+        mkdir -p "$release_version_dir"
+
+        _print_info "Generating DFU package..."
+        local dfu_zip_name="${bin_base_name}_${timestamp}_dfu.zip"
+        local dfu_zip_path="$release_version_dir/$dfu_zip_name"
+        
+        # Check for keys (User provided or Zephyr default)
+        local key_file=""
+        if [ -f "$AIRSPOT_PROJECT_DIR/keys/airspot-signing-key-ecdsa.pem" ]; then
+            key_file="$AIRSPOT_PROJECT_DIR/keys/airspot-signing-key-ecdsa.pem"
+        elif [ -f "$AIRSPOT_PROJECT_DIR/keys/airspot-signing-key.pem" ]; then
+            key_file="$AIRSPOT_PROJECT_DIR/keys/airspot-signing-key.pem"
+        elif [ -f "$AIRSPOT_PROJECT_DIR/keys/root-ec-p256.pem" ]; then
+            key_file="$AIRSPOT_PROJECT_DIR/keys/root-ec-p256.pem"
+        fi
+        
+        local generated_nrfutil=false
+        
+        # Prefer nrfutil if available AND key exists
+        if command -v nrfutil &> /dev/null && [ -f "$key_file" ]; then
+             _print_info "Using nrfutil to generate package..."
+             nrfutil pkg generate \
+                --application "$app_update_bin" \
+                --application-version-string "$version" \
+                --hw-version 52 \
+                --sd-req 0x00 \
+                --key-file "$key_file" \
+                "$dfu_zip_path"
+                
+             if [ $? -eq 0 ]; then
+                 generated_nrfutil=true
+             else
+                 _print_warning "nrfutil command failed. Falling back to MCUmgr zip..."
+             fi
+        fi
+        
+        if [ "$generated_nrfutil" = false ]; then
+            if [ -f "$key_file" ]; then
+                # Already sounded warning above if nrfutil failed
+                if ! command -v nrfutil &> /dev/null; then
+                     _print_warning "nrfutil not found, using MCUmgr zip (Zephyr default)..."
+                fi
+            else
+                _print_warning "Signing key not found, using MCUmgr zip (Zephyr default)..."
+            fi
+            
+            # MCUmgr manual zip fallback
+            _print_info "Creating MCUmgr zip package..."
+            local manifest_file="$release_version_dir/manifest.json"
+            cat > "$manifest_file" << EOF
+{
+    "format-version": 1,
+    "time": $(date +%s),
+    "files": [
+        {
+            "type": "application",
+            "board": "airspot_slim",
+            "soc": "nrf54l05",
+            "version": "$version",
+            "file": "zephyr.signed.bin"
+        }
+    ]
+}
+EOF
+            cp "$app_update_bin" "$release_version_dir/zephyr.signed.bin"
+            
+            _print_info "Zipping artifacts..."
+            (cd "$release_version_dir" && zip -j "$dfu_zip_path" manifest.json zephyr.signed.bin)
+            
+            if [ $? -eq 0 ]; then
+                _print_success "Zip created successfully."
+            else
+                _print_error "Zip command failed."
+            fi
+            
+            rm -f "$release_version_dir/manifest.json" "$release_version_dir/zephyr.signed.bin"
+        fi
+        
+        if [ ! -f "$dfu_zip_path" ]; then
+             _print_error "Failed to create DFU package"
+             return 1
+        fi
+        _print_success "DFU Package created: releases/v${version}/$dfu_zip_name"
+        
+        # Copy Merged Hex (if exists)
+        local merged_hex_name="${bin_base_name}_${timestamp}_merged.hex"
+        if [ -f "$sysbuild_dir/zephyr/merged.hex" ]; then
+             cp "$sysbuild_dir/zephyr/merged.hex" "$release_version_dir/$merged_hex_name"
+        elif [ -f "$sysbuild_dir/merged.hex" ]; then
+             cp "$sysbuild_dir/merged.hex" "$release_version_dir/$merged_hex_name"
+        fi
+        
+        # Copy Signed Bin
+        local signed_bin_name="${bin_base_name}_${timestamp}_signed.bin"
+        cp "$app_update_bin" "$release_version_dir/$signed_bin_name"
+        
+        _print_success "Release artifact stored: releases/v${version}/"
+
+    else
+        _print_info "Building Standard application (no DFU)..."
+        
+        west build -b "$AIRSPOT_BOARD" --no-sysbuild $pristine
+        
+        if [ $? -ne 0 ]; then
+            _print_error "Build failed!"
+            return 1
+        fi
         _print_success "Build complete!"
-        local bin_name="$(_get_bin_name)"
-        _print_info "Output: build/zephyr/${bin_name}.hex"
+        
         airspot_memory
         
-        local timestamp=$(date +"%Y%m%d_%H%M%S")
+        # --- Release Organization (Standard) ---
+        # Structure: releases/vX.Y.Z/
+        local release_version_dir="$AIRSPOT_WORKSPACE/releases/v${version}"
+        mkdir -p "$release_version_dir"
         
-        # Copy to builds folder (latest build, easy to find)
+        local hex_name="${bin_base_name}_${timestamp}.hex"
+        local bin_name="${bin_base_name}_${timestamp}.bin"
+        local elf_name="${bin_base_name}_${timestamp}.elf"
+        
+        cp "$AIRSPOT_BUILD_DIR/zephyr/${bin_base_name}.hex" "$release_version_dir/$hex_name" 2>/dev/null
+        cp "$AIRSPOT_BUILD_DIR/zephyr/${bin_base_name}.bin" "$release_version_dir/$bin_name" 2>/dev/null
+        cp "$AIRSPOT_BUILD_DIR/zephyr/${bin_base_name}.elf" "$release_version_dir/$elf_name" 2>/dev/null
+        
+        # Copy to builds/ (latest convenience)
         local builds_dir="$AIRSPOT_WORKSPACE/builds"
         mkdir -p "$builds_dir"
-        cp "$AIRSPOT_BUILD_DIR/zephyr/${bin_name}.hex" "$builds_dir/${bin_name}.hex" 2>/dev/null
-        cp "$AIRSPOT_BUILD_DIR/zephyr/${bin_name}.bin" "$builds_dir/${bin_name}.bin" 2>/dev/null
-        
-        if [ -f "$builds_dir/${bin_name}.hex" ]; then
-            _print_success "Build: builds/${bin_name}.hex"
+        cp "$AIRSPOT_BUILD_DIR/zephyr/${bin_base_name}.hex" "$builds_dir/${bin_base_name}.hex" 2>/dev/null
+
+        if [ -f "$release_version_dir/$hex_name" ]; then
+            _print_success "Release artifact stored: releases/v${version}/"
         fi
-        
-        # Copy to releases folder with timestamp (for history)
-        local releases_dir="$AIRSPOT_WORKSPACE/releases"
-        mkdir -p "$releases_dir"
-        local release_name="${bin_name}_${timestamp}"
-        
-        cp "$AIRSPOT_BUILD_DIR/zephyr/${bin_name}.hex" "$releases_dir/${release_name}.hex" 2>/dev/null
-        cp "$AIRSPOT_BUILD_DIR/zephyr/${bin_name}.bin" "$releases_dir/${release_name}.bin" 2>/dev/null
-        
-        if [ -f "$releases_dir/${release_name}.hex" ]; then
-            _print_success "Release: releases/${release_name}.hex"
-        fi
-    else
-        _print_error "Build failed!"
-        return 1
     fi
 }
 
@@ -584,7 +733,11 @@ AirSpot Slim Development Tool (v${version})
 ═════════════════════════════════════════════════════════
 
 COMMANDS:
-  airspot build             - Build firmware (creates versioned .hex)
+  airspot build [opts]      - Build firmware
+    Options:
+      --clean               - Clean build
+      --dfu                 - OTA Build (Sysbuild + MCUboot + DFU Zip)
+  
   airspot flash             - Flash firmware to device
   airspot logs [uart|rtt]   - View logs (UART default)
   airspot monitor           - Alias for logs
@@ -601,19 +754,25 @@ SHORTCUTS:
   airspot bf                - Build + Flash
   airspot bfl               - Build + Flash + Logs
 
-BUILD OUTPUT:
-  Build creates versioned files automatically:
-    build/zephyr/airspot_slim_v${version}.hex   (build dir)
-    builds/airspot_slim_v${version}.hex         (easy access)
-    releases/airspot_slim_v${version}_TIMESTAMP.hex (history)
+RELEASE ARTIFACTS:
+  Releases are organized by version in: releases/v${version}/
+  
+  Standard Build:
+    - airspot_slim_v${version}_TIMESTAMP.hex
+    - airspot_slim_v${version}_TIMESTAMP.bin
+    
+  DFU Build (--dfu):
+    - airspot_slim_v${version}_TIMESTAMP_dfu.zip   (OTA Package)
+    - airspot_slim_v${version}_TIMESTAMP_signed.bin
+    - airspot_slim_v${version}_TIMESTAMP_merged.hex (Full Image)
 
 EXAMPLES:
-  airspot build             # Build firmware
+  airspot build             # Standard build
+  airspot build --dfu       # Build with DFU support
+  airspot build --clean     # Clean rebuild
   airspot flash             # Flash to device
   airspot logs              # View UART logs
-  airspot logs rtt          # View RTT logs
   airspot bfl               # Build, flash, and view logs
-  airspot version           # Show current version
 
 EOF
 }
