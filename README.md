@@ -212,14 +212,6 @@ See [docs/firmware/BUILD_INSTRUCTIONS.md](./docs/firmware/BUILD_INSTRUCTIONS.md)
 - Display-related protocol commands
 - USB charging (replaced with Qi)
 
-## Development Applications
-
-| Application         | Purpose                 | Location           |
-| ------------------- | ----------------------- | ------------------ |
-| **sensor_test**     | Isolated sensor testing | `sensor_test/`     |
-| **flash_test**      | SPI flash testing       | `flash_test/`      |
-| **button_test**     | Button testing          | `button_test/`     |
-
 ## Development Status
 
 **Current Phase**: Phase 10 - Documentation & Production Ready
