@@ -33,24 +33,26 @@ extern "C" {
 #define CMD_GET_DEVICE_STATE 0x08
 #define CMD_GET_DEVICE_NAME 0x09
 #define CMD_SET_DEVICE_NAME 0x0A
-#define CMD_GET_CURRENT_HALF_PAGE                                              \
-  0x0B                           /* History: get current write position        \
-                                  */
-#define CMD_HISTORY_REQUEST 0x0C /* History: request data for half-page */
+#define CMD_GET_CURRENT_HALF_PAGE 0x0B /* History: get current write position */
+#define CMD_HISTORY_REQUEST 0x0C       /* History: request data for half-page */
+#define CMD_CALIB_START 0x0D           /* Start calibration (conditioning) */
+#define CMD_FIND_MY_AIRSPOT 0x10       /* Blink LEDs */
 #define CMD_GET_HARDWARE_VERSION 0x12
 #define CMD_GET_SOFTWARE_VERSION 0x13
 #define CMD_GET_BATTERY_LEVEL 0x20
 #define CMD_REFRESH_CO2_VALUE 0x21
 #define CMD_SET_DND 0x22
-#define CMD_RESET_SENSOR 0x24 /* Reset CO2 sensor */
+#define CMD_RESET_SENSOR 0x24        /* Reset CO2 sensor */
 #define CMD_RESET_DEVICE 0x27
-#define CMD_FIND_MY_AIRSPOT 0x10 /* Blink LEDs */
+#define CMD_GET_SENSOR_VARIANT 0x2B  /* Get CO2 sensor type */
+#define CMD_GET_SENSOR_DETAILS 0x30  /* Get sensor details */
+#define CMD_SET_CO2_SCALE_FACTOR 0x31 /* Set CO2 scale factor (stub) */
 #define CMD_SET_FLIGHT_MODE 0x32
 #define CMD_ENTER_FACTORY_TEST 0xD0
 #define CMD_FACTORY_TEST_RESULT 0xDD
-#define CMD_SET_DEVICE_SLEEP 0xEE /* Enter Power Off (shipping) mode */
-#define CMD_FACTORY_RESET 0xFA
-#define CMD_ERASE_HISTORY 0xFD /* History: erase all data */
+#define CMD_SET_DEVICE_SLEEP 0xEE    /* Enter Power Off (shipping) mode */
+#define CMD_FACTORY_RESET 0xFA       /* Factory reset - clear all settings */
+#define CMD_ERASE_HISTORY 0xFD       /* History: erase all data */
 #define CMD_GET_SYSTEM_TIME 0xFE
 
 /* Slim-specific: Device type indicator for app differentiation */

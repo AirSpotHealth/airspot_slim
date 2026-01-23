@@ -251,3 +251,51 @@ uint8_t user_settings_get_time_now_minute(void) {
 bool user_settings_is_time_set(void) { return time_set; }
 
 void user_settings_inc_second(void) { time_base++; }
+
+int user_settings_factory_reset(void) {
+  LOG_WRN("Factory reset - clearing all user settings");
+
+  /* Reset to defaults */
+  memset(&settings, 0, sizeof(settings));
+  settings.power_mode = 1;      /* Normal mode */
+  settings.buzzer_enabled = 1;  /* On by default */
+  settings.vibrator_enabled = 1; /* On by default */
+
+  /* Clear time */
+  time_base = 0;
+  time_set = false;
+
+  /* Delete all settings from NVS */
+  int rc = settings_delete(SETTINGS_KEY "/name");
+  if (rc && rc != -ENOENT) {
+    LOG_WRN("Failed to delete name: %d", rc);
+  }
+
+  rc = settings_delete(SETTINGS_KEY "/power");
+  if (rc && rc != -ENOENT) {
+    LOG_WRN("Failed to delete power: %d", rc);
+  }
+
+  rc = settings_delete(SETTINGS_KEY "/flight");
+  if (rc && rc != -ENOENT) {
+    LOG_WRN("Failed to delete flight: %d", rc);
+  }
+
+  rc = settings_delete(SETTINGS_KEY "/dnd");
+  if (rc && rc != -ENOENT) {
+    LOG_WRN("Failed to delete dnd: %d", rc);
+  }
+
+  rc = settings_delete(SETTINGS_KEY "/buzzer");
+  if (rc && rc != -ENOENT) {
+    LOG_WRN("Failed to delete buzzer: %d", rc);
+  }
+
+  rc = settings_delete(SETTINGS_KEY "/vibrator");
+  if (rc && rc != -ENOENT) {
+    LOG_WRN("Failed to delete vibrator: %d", rc);
+  }
+
+  LOG_INF("Factory reset complete - settings cleared");
+  return 0;
+}

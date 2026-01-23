@@ -141,6 +141,16 @@ uint8_t user_settings_get_vibrator(void);
  */
 int user_settings_set_vibrator(uint8_t enabled);
 
+/**
+ * @brief Factory reset - clear all user settings to defaults
+ *
+ * Clears device name, power mode, flight mode, DND settings, etc.
+ * Does NOT reboot - caller should reboot after if needed.
+ *
+ * @return 0 on success, negative errno on failure
+ */
+int user_settings_factory_reset(void);
+
 #ifdef __cplusplus
 }
 #endif

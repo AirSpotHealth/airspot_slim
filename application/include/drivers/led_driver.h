@@ -71,6 +71,14 @@ extern "C"
     void led_driver_startup_sequence(void);
 
     /**
+     * @brief Play "find my device" LED sequence
+     *
+     * More noticeable than startup - rapid flashing for ~5 seconds
+     * to help user locate the device.
+     */
+    void led_driver_find_device_sequence(void);
+
+    /**
      * @brief Turn off all LEDs
      */
     void led_driver_all_off(void);

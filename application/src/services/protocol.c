@@ -27,9 +27,6 @@
 #include <services/sensor_manager.h>
 #include <services/user_settings.h>
 
-/* Additional commands from old firmware */
-#define CMD_GET_SENSOR_DETAILS 0x30
-
 LOG_MODULE_REGISTER(protocol, CONFIG_AIRSPOT_LOG_LEVEL);
 
 /* Frame buffer for receiving partial frames */
@@ -47,9 +44,12 @@ static void set_frame_checksum(uint8_t *frame, uint16_t len);
 static uint8_t verify_frame_checksum(const uint8_t *frame, uint16_t len);
 
 /* NUS RX callback - accumulates data into frames */
-static void nus_rx_callback(const uint8_t *data, uint16_t len) {
-  for (uint16_t i = 0; i < len; i++) {
-    if (rx_frame_idx >= RX_FRAME_MAX_LEN) {
+static void nus_rx_callback(const uint8_t *data, uint16_t len)
+{
+  for (uint16_t i = 0; i < len; i++)
+  {
+    if (rx_frame_idx >= RX_FRAME_MAX_LEN)
+    {
       LOG_WRN("RX frame overflow, resetting");
       rx_frame_idx = 0;
     }
@@ -57,19 +57,23 @@ static void nus_rx_callback(const uint8_t *data, uint16_t len) {
     rx_frame[rx_frame_idx++] = data[i];
 
     /* Check for valid frame header */
-    if (rx_frame_idx == 1 && rx_frame[0] != CMD_FIRST_BYTE) {
+    if (rx_frame_idx == 1 && rx_frame[0] != CMD_FIRST_BYTE)
+    {
       rx_frame_idx = 0;
       continue;
     }
-    if (rx_frame_idx == 2 && rx_frame[1] != CMD_SECOND_BYTE) {
+    if (rx_frame_idx == 2 && rx_frame[1] != CMD_SECOND_BYTE)
+    {
       rx_frame_idx = 0;
       continue;
     }
 
     /* Check if frame is complete: 4 header + payload + 1 checksum */
-    if (rx_frame_idx >= 4) {
+    if (rx_frame_idx >= 4)
+    {
       uint16_t expected_len = 4 + rx_frame[3] + 1;
-      if (rx_frame_idx == expected_len) {
+      if (rx_frame_idx == expected_len)
+      {
         frame_received_handler(rx_frame, rx_frame_idx);
         rx_frame_idx = 0;
       }
@@ -77,9 +81,11 @@ static void nus_rx_callback(const uint8_t *data, uint16_t len) {
   }
 }
 
-int protocol_init(void) {
+int protocol_init(void)
+{
   int ret = airspot_nus_init(nus_rx_callback);
-  if (ret) {
+  if (ret)
+  {
     LOG_ERR("Failed to init NUS: %d", ret);
     return ret;
   }
@@ -91,9 +97,11 @@ int protocol_init(void) {
 /**
  * @brief Calculate and set checksum for a frame
  */
-static void set_frame_checksum(uint8_t *frame, uint16_t len) {
+static void set_frame_checksum(uint8_t *frame, uint16_t len)
+{
   uint32_t sum = 0;
-  for (uint16_t i = 0; i < len - 1; i++) {
+  for (uint16_t i = 0; i < len - 1; i++)
+  {
     sum += frame[i];
   }
   frame[len - 1] = (uint8_t)(sum & 0xFF);
@@ -102,9 +110,11 @@ static void set_frame_checksum(uint8_t *frame, uint16_t len) {
 /**
  * @brief Verify frame checksum
  */
-static uint8_t verify_frame_checksum(const uint8_t *frame, uint16_t len) {
+static uint8_t verify_frame_checksum(const uint8_t *frame, uint16_t len)
+{
   uint32_t sum = 0;
-  for (uint16_t i = 0; i < len - 1; i++) {
+  for (uint16_t i = 0; i < len - 1; i++)
+  {
     sum += frame[i];
   }
   return ((uint8_t)(sum & 0xFF)) == frame[len - 1];
@@ -113,9 +123,11 @@ static uint8_t verify_frame_checksum(const uint8_t *frame, uint16_t len) {
 /**
  * @brief Send a frame via NUS
  */
-static void send_frame(const uint8_t *frame, uint16_t len) {
+static void send_frame(const uint8_t *frame, uint16_t len)
+{
   int ret = airspot_nus_send(frame, len);
-  if (ret) {
+  if (ret)
+  {
     LOG_WRN("Failed to send frame: %d", ret);
   }
 }
@@ -123,8 +135,10 @@ static void send_frame(const uint8_t *frame, uint16_t len) {
 /**
  * @brief Handle a complete received frame
  */
-static void frame_received_handler(const uint8_t *frame, uint16_t len) {
-  if (!verify_frame_checksum(frame, len)) {
+static void frame_received_handler(const uint8_t *frame, uint16_t len)
+{
+  if (!verify_frame_checksum(frame, len))
+  {
     LOG_WRN("Frame checksum failed");
     return;
   }
@@ -132,7 +146,8 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len) {
   uint8_t cmd = frame[2];
   LOG_DBG("Received cmd: 0x%02X, len: %d", cmd, len);
 
-  switch (cmd) {
+  switch (cmd)
+  {
   case CMD_GET_CO2_VALUE:
     protocol_send_realtime_co2();
     break;
@@ -159,7 +174,8 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len) {
       tx_frame[1] = CMD_SECOND_BYTE;
       tx_frame[2] = CMD_GET_DEVICE_NAME;
       tx_frame[3] = alias_len;
-      if (alias_len > 0) {
+      if (alias_len > 0)
+      {
         memcpy(&tx_frame[4], alias, alias_len);
       }
 
@@ -173,9 +189,11 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len) {
     /* Set device alias (user-friendly name for app display)
      * Frame format: [FF][AA][0A][len][name...][checksum]
      * Note: This does NOT change the BLE advertising name (AirSpot-XXXXXX) */
-    if (len >= 5) {
+    if (len >= 5)
+    {
       uint8_t name_len = frame[3];
-      if (name_len > 0 && name_len <= 20 && len >= (4 + name_len + 1)) {
+      if (name_len > 0 && name_len <= 20 && len >= (4 + name_len + 1))
+      {
         char new_alias[21] = {0};
         memcpy(new_alias, &frame[4], name_len);
         new_alias[name_len] = '\0';
@@ -266,9 +284,12 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len) {
     {
       uint8_t tx_frame[16] = {0};
       uint32_t time;
-      if (user_settings_is_time_set()) {
+      if (user_settings_is_time_set())
+      {
         time = user_settings_get_time_now();
-      } else {
+      }
+      else
+      {
         time = k_uptime_get_32() / 1000; /* fallback: seconds since boot */
       }
       tx_frame[0] = CMD_FIRST_BYTE;
@@ -286,7 +307,8 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len) {
 
   case CMD_SET_TIMEBASE:
     /* Set device time (synced from app) */
-    if (len >= 9) {
+    if (len >= 9)
+    {
       uint32_t time = ((uint32_t)frame[4] << 24) | ((uint32_t)frame[5] << 16) |
                       ((uint32_t)frame[6] << 8) | (uint32_t)frame[7];
       user_settings_set_timebase(time);
@@ -312,7 +334,8 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len) {
     break;
 
   case CMD_SET_BUZZER_STATE:
-    if (len >= 6) {
+    if (len >= 6)
+    {
       user_settings_set_buzzer(frame[4]);
       LOG_INF("Buzzer set: %d (stub)", frame[4]);
     }
@@ -320,7 +343,8 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len) {
     break;
 
   case CMD_SET_VIBRATOR_STATE:
-    if (len >= 6) {
+    if (len >= 6)
+    {
       user_settings_set_vibrator(frame[4]);
       LOG_INF("Vibrator set: %d (stub)", frame[4]);
     }
@@ -328,7 +352,8 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len) {
     break;
 
   case CMD_SET_POWER_MODE:
-    if (len >= 6) {
+    if (len >= 6)
+    {
       user_settings_set_power_mode(frame[4]);
       sensor_manager_set_power_mode(frame[4]);
       LOG_INF("Power mode set: %d", frame[4]);
@@ -337,7 +362,8 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len) {
     break;
 
   case CMD_SET_FLIGHT_MODE:
-    if (len >= 6) {
+    if (len >= 6)
+    {
       user_settings_set_flight_mode(frame[4]);
       LOG_INF("Flight mode set: %d", frame[4]);
     }
@@ -351,7 +377,8 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len) {
 
   case CMD_HISTORY_REQUEST:
     /* Request history data for a specific half-page */
-    if (len >= 7) {
+    if (len >= 7)
+    {
       uint16_t half_page = ((uint16_t)frame[4] << 8) | frame[5];
       LOG_INF("History request: half-page %d", half_page);
       data_log_request(half_page);
@@ -382,9 +409,21 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len) {
     break;
 
   case CMD_FIND_MY_AIRSPOT:
-    /* Blink LEDs to locate device */
+    /* Blink LEDs rapidly to help locate the device */
     LOG_INF("Find My AirSpot command received");
-    led_driver_startup_sequence(); /* Re-use startup blink */
+    /* Send ACK first */
+    {
+      uint8_t tx_frame[8] = {0};
+      tx_frame[0] = CMD_FIRST_BYTE;
+      tx_frame[1] = CMD_SECOND_BYTE;
+      tx_frame[2] = CMD_FIND_MY_AIRSPOT;
+      tx_frame[3] = 0x01;
+      tx_frame[4] = 0x01; /* ACK */
+      set_frame_checksum(tx_frame, 6);
+      send_frame(tx_frame, 6);
+    }
+    /* Flash all LEDs rapidly for ~5 seconds */
+    led_driver_find_device_sequence();
     break;
 
   case CMD_SET_BLE_DISCONNECT:
@@ -396,7 +435,8 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len) {
   case CMD_SET_DND:
     /* Set DND mode - just store settings for now */
     /* payload: [enabled(1), startH(1), startM(1), endH(1), endM(1)] */
-    if (len >= 9) {
+    if (len >= 9)
+    {
       uint8_t enabled = frame[4];
       uint8_t start_h = frame[5];
       uint8_t start_m = frame[6];
@@ -433,7 +473,8 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len) {
     /* Send last test report */
     {
       factory_test_report_t report;
-      if (factory_test_get_report(&report) == 0) {
+      if (factory_test_get_report(&report) == 0)
+      {
         uint8_t tx_frame[32] = {0};
         tx_frame[0] = CMD_FIRST_BYTE;
         tx_frame[1] = CMD_SECOND_BYTE;
@@ -477,13 +518,86 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len) {
     power_manager_enter_off_state();
     break;
 
+  case CMD_FACTORY_RESET:
+    /* Factory reset - clear all settings and history, then reboot */
+    LOG_WRN("Factory reset command received");
+    /* Send ACK first */
+    {
+      uint8_t tx_frame[8] = {0};
+      tx_frame[0] = CMD_FIRST_BYTE;
+      tx_frame[1] = CMD_SECOND_BYTE;
+      tx_frame[2] = CMD_FACTORY_RESET;
+      tx_frame[3] = 0x01;
+      tx_frame[4] = 0x01; /* ACK */
+      set_frame_checksum(tx_frame, 6);
+      send_frame(tx_frame, 6);
+    }
+    k_msleep(100);
+    /* Clear user settings */
+    user_settings_factory_reset();
+    /* Erase history data */
+    data_log_request_erase_all();
+    k_msleep(500); /* Allow erase to start */
+    /* Reboot */
+    LOG_WRN("Factory reset complete - rebooting");
+    sys_reboot(SYS_REBOOT_COLD);
+    break;
+
+  case CMD_CALIB_START:
+    /* Calibration - STCC4 doesn't support FRC, trigger conditioning instead */
+    LOG_INF("Calibration request - triggering STCC4 conditioning cycle");
+    {
+      uint8_t tx_frame[8] = {0};
+      tx_frame[0] = CMD_FIRST_BYTE;
+      tx_frame[1] = CMD_SECOND_BYTE;
+      tx_frame[2] = CMD_CALIB_START;
+      tx_frame[3] = 0x01;
+      tx_frame[4] = 0x01; /* ACK - conditioning started */
+      set_frame_checksum(tx_frame, 6);
+      send_frame(tx_frame, 6);
+    }
+    /* Note: conditioning takes 22 seconds, runs in background via sensor_manager */
+    sensor_manager_reset_co2_sensor();
+    break;
+
+  case CMD_GET_SENSOR_VARIANT:
+    /* Return sensor variant - 0x02 for STCC4 (thermal conductivity) */
+    LOG_INF("Get sensor variant");
+    {
+      uint8_t tx_frame[8] = {0};
+      tx_frame[0] = CMD_FIRST_BYTE;
+      tx_frame[1] = CMD_SECOND_BYTE;
+      tx_frame[2] = CMD_GET_SENSOR_VARIANT;
+      tx_frame[3] = 0x01;
+      tx_frame[4] = 0x02; /* STCC4 = variant 2 (vs SCD4x = variant 1) */
+      set_frame_checksum(tx_frame, 6);
+      send_frame(tx_frame, 6);
+    }
+    break;
+
+  case CMD_SET_CO2_SCALE_FACTOR:
+    /* CO2 scale factor - STCC4 is factory calibrated, just ACK */
+    LOG_INF("Set CO2 scale factor (ignored - STCC4 pre-calibrated)");
+    {
+      uint8_t tx_frame[8] = {0};
+      tx_frame[0] = CMD_FIRST_BYTE;
+      tx_frame[1] = CMD_SECOND_BYTE;
+      tx_frame[2] = CMD_SET_CO2_SCALE_FACTOR;
+      tx_frame[3] = 0x01;
+      tx_frame[4] = 0x01; /* ACK */
+      set_frame_checksum(tx_frame, 6);
+      send_frame(tx_frame, 6);
+    }
+    break;
+
   default:
     LOG_WRN("Unknown command: 0x%02X", cmd);
     break;
   }
 }
 
-void protocol_send_realtime_co2(void) {
+void protocol_send_realtime_co2(void)
+{
   uint8_t tx_frame[16] = {0};
   sensor_data_t data;
 
@@ -493,12 +607,16 @@ void protocol_send_realtime_co2(void) {
   /* NOTE: Old firmware has tx_frame[3] = 0x02 (bug) but app expects it! */
   tx_frame[3] = 0x02;
 
-  if (sensor_manager_get_data(&data) == 0 && data.valid) {
+  if (sensor_manager_get_data(&data) == 0 && data.valid)
+  {
     /* Timestamp (32-bit, big-endian) - use synced time if available */
     uint32_t time;
-    if (user_settings_is_time_set()) {
+    if (user_settings_is_time_set())
+    {
       time = user_settings_get_time_now();
-    } else {
+    }
+    else
+    {
       time = k_uptime_get_32() / 1000;
     }
     tx_frame[4] = (uint8_t)(time >> 24);
@@ -509,7 +627,9 @@ void protocol_send_realtime_co2(void) {
     /* CO2 value (16-bit, big-endian) */
     tx_frame[8] = (uint8_t)(data.co2_ppm >> 8);
     tx_frame[9] = (uint8_t)(data.co2_ppm & 0xFF);
-  } else {
+  }
+  else
+  {
     /* Error state: 0xFFFF for CO2, error info in time bytes */
     tx_frame[4] = 0x00; /* error code placeholder */
     tx_frame[5] = 0x00; /* recovery attempts placeholder */
@@ -523,7 +643,8 @@ void protocol_send_realtime_co2(void) {
   send_frame(tx_frame, 11);
 }
 
-void protocol_send_battery_level(void) {
+void protocol_send_battery_level(void)
+{
   uint8_t tx_frame[16] = {0};
   sensor_data_t data;
 
@@ -533,10 +654,13 @@ void protocol_send_battery_level(void) {
   /* NOTE: Old firmware has tx_frame[3] = 0x01 but sends 2 bytes (bug) */
   tx_frame[3] = 0x01;
 
-  if (sensor_manager_get_data(&data) == 0) {
+  if (sensor_manager_get_data(&data) == 0)
+  {
     tx_frame[4] = data.battery_percent;
     tx_frame[5] = data.is_charging ? 1 : 0;
-  } else {
+  }
+  else
+  {
     tx_frame[4] = 0;
     tx_frame[5] = 0;
   }
@@ -545,7 +669,8 @@ void protocol_send_battery_level(void) {
   send_frame(tx_frame, 7);
 }
 
-void protocol_send_device_state(void) {
+void protocol_send_device_state(void)
+{
   /*
    * Device state payload format (must match old firmware for app
    * compatibility):
@@ -615,7 +740,8 @@ void protocol_send_device_state(void) {
   tx_frame[offset++] = 0; /* alarm on CO2 falling */
 
   /* 10 advanced alarms (4 bytes each: co2_level[2], repeats[1], enabled[1]) */
-  for (int i = 0; i < 10; i++) {
+  for (int i = 0; i < 10; i++)
+  {
     tx_frame[offset++] = 0; /* co2_level high */
     tx_frame[offset++] = 0; /* co2_level low */
     tx_frame[offset++] = 0; /* alarm_repeats */
@@ -646,7 +772,8 @@ void protocol_send_device_state(void) {
   LOG_INF("Device state sent: %d bytes payload", offset - 4);
 }
 
-void protocol_send_hardware_version(void) {
+void protocol_send_hardware_version(void)
+{
   uint8_t tx_frame[32] = {0};
   const char *ver = HARDWARE_VERSION;
   uint8_t ver_len = strlen(ver);
@@ -661,7 +788,8 @@ void protocol_send_hardware_version(void) {
   send_frame(tx_frame, 5 + ver_len);
 }
 
-void protocol_send_software_version(void) {
+void protocol_send_software_version(void)
+{
   uint8_t tx_frame[32] = {0};
   const char *ver = SOFTWARE_VERSION;
   uint8_t ver_len = strlen(ver);
@@ -676,7 +804,8 @@ void protocol_send_software_version(void) {
   send_frame(tx_frame, 5 + ver_len);
 }
 
-void protocol_send_current_half_page(void) {
+void protocol_send_current_half_page(void)
+{
   uint8_t tx_frame[16] = {0};
   uint16_t half_page = data_log_get_current_half_page();
 
@@ -696,7 +825,8 @@ void protocol_send_current_half_page(void) {
 }
 
 void protocol_send_history_data(const uint8_t *data, uint8_t record_count,
-                                uint16_t half_page_number) {
+                                uint16_t half_page_number)
+{
   /*
    * IMPORTANT: Must match old firmware format exactly!
    * Old firmware always sends exactly 16 records (128 bytes) regardless of
@@ -708,7 +838,7 @@ void protocol_send_history_data(const uint8_t *data, uint8_t record_count,
    */
   static uint8_t tx_frame[140];
 
-  const uint8_t record_size = 8;    /* sizeof(record_t) */
+  const uint8_t record_size = 8;      /* sizeof(record_t) */
   const uint8_t records_to_send = 16; /* Always send 16 records like old FW */
 
   LOG_DBG("Sending history: %d valid records for half-page %d", record_count,
@@ -722,7 +852,8 @@ void protocol_send_history_data(const uint8_t *data, uint8_t record_count,
 
   /* Copy all 16 records (valid or not - matches old firmware behavior) */
   uint8_t offset = 4;
-  for (uint8_t i = 0; i < records_to_send; i++) {
+  for (uint8_t i = 0; i < records_to_send; i++)
+  {
     const record_t *rec = (const record_t *)&data[i * record_size];
 
     /* Timestamp (big-endian) */
@@ -752,7 +883,8 @@ void protocol_send_history_data(const uint8_t *data, uint8_t record_count,
   send_frame(tx_frame, offset + 1);
 }
 
-void protocol_send_erase_done(void) {
+void protocol_send_erase_done(void)
+{
   uint8_t tx_frame[16] = {0};
 
   LOG_INF("Sending erase done notification");
@@ -767,32 +899,40 @@ void protocol_send_erase_done(void) {
   send_frame(tx_frame, 6);
 }
 
-void protocol_process_history(void) {
+void protocol_process_history(void)
+{
   /* Skip history processing in mesh mode - NUS is not available */
-  if (ble_mode_get_current() == BLE_MODE_MESH) {
+  if (ble_mode_get_current() == BLE_MODE_MESH)
+  {
     return;
   }
 
   /* Handle erase all request */
-  if (data_log_is_erase_pending()) {
+  if (data_log_is_erase_pending())
+  {
     LOG_INF("Processing history erase...");
     int ret = data_log_erase_all();
-    if (ret == 0) {
+    if (ret == 0)
+    {
       protocol_send_erase_done();
     }
     return;
   }
 
   /* Handle history data request */
-  if (data_log_has_pending_request()) {
+  if (data_log_has_pending_request())
+  {
     record_page_t page;
     uint8_t count;
     uint16_t half_page;
 
     int ret = data_log_process_request(&page, &count, &half_page);
-    if (ret == 0) {
+    if (ret == 0)
+    {
       protocol_send_history_data(page.buf, count, half_page);
-    } else {
+    }
+    else
+    {
       LOG_WRN("History request failed: %d", ret);
     }
   }

@@ -113,6 +113,27 @@ void led_driver_startup_sequence(void) {
   led_driver_all_off();
 }
 
+void led_driver_find_device_sequence(void) {
+  if (!initialized) {
+    return;
+  }
+
+  /* Rapid flash all LEDs for ~5 seconds to help locate device */
+  for (int cycle = 0; cycle < 17; cycle++) {
+    /* All LEDs on */
+    for (uint8_t i = 0; i < AIRSPOT_LED_COUNT; i++) {
+      led_driver_set(i, true);
+    }
+    k_sleep(K_MSEC(150));
+
+    /* All LEDs off */
+    for (uint8_t i = 0; i < AIRSPOT_LED_COUNT; i++) {
+      led_driver_set(i, false);
+    }
+    k_sleep(K_MSEC(150));
+  }
+}
+
 void led_driver_all_off(void) {
   if (!initialized) {
     return;
