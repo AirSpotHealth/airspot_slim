@@ -81,6 +81,11 @@ static void nus_rx_callback(const uint8_t *data, uint16_t len)
   }
 }
 
+/**
+ * @brief Initialize the protocol layer and bind to NUS RX.
+ *
+ * @return 0 on success, negative errno on failure.
+ */
 int protocol_init(void)
 {
   int ret = airspot_nus_init(nus_rx_callback);
@@ -596,6 +601,9 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len)
   }
 }
 
+/**
+ * @brief Send realtime CO2 notification frame.
+ */
 void protocol_send_realtime_co2(void)
 {
   uint8_t tx_frame[16] = {0};
@@ -643,6 +651,9 @@ void protocol_send_realtime_co2(void)
   send_frame(tx_frame, 11);
 }
 
+/**
+ * @brief Send battery level + charging state.
+ */
 void protocol_send_battery_level(void)
 {
   uint8_t tx_frame[16] = {0};
@@ -669,6 +680,9 @@ void protocol_send_battery_level(void)
   send_frame(tx_frame, 7);
 }
 
+/**
+ * @brief Send full device state payload for app synchronization.
+ */
 void protocol_send_device_state(void)
 {
   /*
@@ -899,6 +913,9 @@ void protocol_send_erase_done(void)
   send_frame(tx_frame, 6);
 }
 
+/**
+ * @brief Process pending history requests and erase operations.
+ */
 void protocol_process_history(void)
 {
   /* Skip history processing in mesh mode - NUS is not available */

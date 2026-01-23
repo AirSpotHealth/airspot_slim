@@ -248,6 +248,12 @@ static void sensor_work_handler(struct k_work *work) {
   }
 }
 
+/**
+ * @brief Start periodic sensor measurements.
+ *
+ * @param interval_ms Measurement interval in milliseconds.
+ * @return 0 on success, negative errno on failure.
+ */
 int sensor_manager_start(uint32_t interval_ms) {
   if (!initialized) {
     return -ENODEV;
@@ -268,12 +274,20 @@ int sensor_manager_start(uint32_t interval_ms) {
   return 0;
 }
 
+/**
+ * @brief Stop periodic measurements and cancel scheduled work.
+ */
 void sensor_manager_stop(void) {
   running = false;
   k_work_cancel_delayable(&sensor_work);
   LOG_INF("Sensor measurements stopped");
 }
 
+/**
+ * @brief Trigger an immediate measurement cycle.
+ *
+ * @return 0 on success, negative errno on failure.
+ */
 int sensor_manager_measure_now(void) {
   if (!initialized) {
     return -ENODEV;
@@ -284,6 +298,12 @@ int sensor_manager_measure_now(void) {
   return 0;
 }
 
+/**
+ * @brief Get the latest sensor data snapshot.
+ *
+ * @param data Output buffer for the latest reading.
+ * @return 0 on success, -ENODATA if no measurement yet, negative errno on failure.
+ */
 int sensor_manager_get_data(sensor_data_t *data) {
   if (!data) {
     return -EINVAL;
@@ -300,12 +320,27 @@ int sensor_manager_get_data(sensor_data_t *data) {
   return 0;
 }
 
+/**
+ * @brief Register a callback invoked after each measurement.
+ *
+ * @param callback Callback to receive new data.
+ */
 void sensor_manager_register_callback(sensor_data_callback_t callback) {
   user_callback = callback;
 }
 
+/**
+ * @brief Check if the sensor manager has completed initialization.
+ *
+ * @return true if ready, false otherwise.
+ */
 bool sensor_manager_is_ready(void) { return initialized; }
 
+/**
+ * @brief Set sensor power mode and measurement cadence.
+ *
+ * @param power_mode 0=on-demand, 1=low, 2=mid, 3=high.
+ */
 void sensor_manager_set_power_mode(uint8_t power_mode) {
   uint32_t new_interval;
   bool want_single_shot;
@@ -384,6 +419,11 @@ void sensor_manager_set_power_mode(uint8_t power_mode) {
   }
 }
 
+/**
+ * @brief Reset the CO2 sensor by reinitializing the driver.
+ *
+ * @return 0 on success, negative error code on failure.
+ */
 int sensor_manager_reset_co2_sensor(void) {
   /* Reset STCC4 sensor by re-initializing it */
   LOG_INF("Resetting CO2 sensor (STCC4)...");

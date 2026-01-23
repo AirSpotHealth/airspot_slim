@@ -126,6 +126,7 @@ See [docs/firmware/CODE_ORGANIZATION.md](./docs/firmware/CODE_ORGANIZATION.md) f
 - [docs/firmware/QUICK_START.md](./docs/firmware/QUICK_START.md)
 - [docs/firmware/BUILD_INSTRUCTIONS.md](./docs/firmware/BUILD_INSTRUCTIONS.md)
 - [docs/firmware/DEVELOPER_GUIDE.md](./docs/firmware/DEVELOPER_GUIDE.md)
+- [docs/firmware/VALIDATION_PLAN.md](./docs/firmware/VALIDATION_PLAN.md)
 - [docs/firmware/CODE_ORGANIZATION.md](./docs/firmware/CODE_ORGANIZATION.md)
 - [docs/firmware/SERVICES.md](./docs/firmware/SERVICES.md)
 - [docs/firmware/SENSORS.md](./docs/firmware/SENSORS.md)
