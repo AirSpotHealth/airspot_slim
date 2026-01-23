@@ -14,6 +14,7 @@
 #define STCC4_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -118,6 +119,43 @@ bool stcc4_data_ready(void);
  * @return 0 on success, negative errno on failure
  */
 int stcc4_get_product_id(uint8_t *product_id, size_t len);
+
+/**
+ * @brief Get current measurement mode
+ *
+ * @return Current STCC4 mode (continuous or single-shot)
+ */
+stcc4_mode_t stcc4_get_mode(void);
+
+/**
+ * @brief Enter low-power sleep mode
+ *
+ * Puts the sensor in deep sleep for maximum power savings.
+ * Note: After 3+ hours in sleep, conditioning should be performed.
+ *
+ * @return 0 on success, negative errno on failure
+ */
+int stcc4_enter_sleep_mode(void);
+
+/**
+ * @brief Exit low-power sleep mode
+ *
+ * Wakes the sensor from deep sleep. Sensor may NACK this command,
+ * which is expected behavior.
+ *
+ * @return 0 (always success, NACK is expected)
+ */
+int stcc4_exit_sleep_mode(void);
+
+/**
+ * @brief Perform sensor conditioning
+ *
+ * Required after 3+ hours in sleep mode to restore accuracy.
+ * This is a blocking operation that takes ~22 seconds.
+ *
+ * @return 0 on success, negative errno on failure
+ */
+int stcc4_perform_conditioning(void);
 
 #ifdef __cplusplus
 }

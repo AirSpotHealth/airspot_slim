@@ -36,11 +36,17 @@ LOG_MODULE_REGISTER(sensor_mgr, CONFIG_AIRSPOT_LOG_LEVEL);
 #define POWER_MODE_MID_INTERVAL_MS 60000   /* 1 minute */
 #define POWER_MODE_HI_INTERVAL_MS 5000     /* 5 seconds */
 
+/* STCC4 single-shot timing */
+#define STCC4_SINGLE_SHOT_WAIT_MS                                              \
+  550 /* Wait for single-shot result ~500ms + margin */
+
 /* Work queue for sensor measurements */
 static struct k_work_delayable sensor_work;
 static uint32_t measurement_interval_ms = DEFAULT_INTERVAL_MS;
 static bool running = false;
 static bool initialized = false;
+static bool use_single_shot_mode =
+    false; /* Track if using single-shot for STCC4 */
 
 /* Latest sensor data (protected by mutex) */
 static struct k_mutex data_mutex;
@@ -85,14 +91,13 @@ int sensor_manager_init(void) {
     return ret;
   }
 
-  /* Start STCC4 in continuous mode - measurements available every 1 second */
-  ret = stcc4_start_continuous();
-  if (ret) {
-    LOG_WRN("STCC4 continuous mode start failed: %d (will try single-shot)",
-            ret);
-  } else {
-    LOG_INF("STCC4 running in continuous mode");
-  }
+  /* Default to single-shot mode for power saving.
+   * Power mode can be changed via sensor_manager_set_power_mode().
+   * Mode 0-2 (On-Demand, Low, Mid) use single-shot for power efficiency.
+   * Mode 3 (High) uses continuous mode for real-time monitoring.
+   */
+  use_single_shot_mode = true;
+  LOG_INF("STCC4 initialized (single-shot mode for power saving)");
 
   /* 4. Initialize LPS22HH pressure sensor */
   ret = lps22hh_init();
@@ -165,22 +170,39 @@ static void do_measurement(void) {
   }
 
   /* 4. Read STCC4 CO2 */
-  /* In continuous mode, data is available immediately */
-  /* In single-shot mode, we need to trigger and wait */
-  ret = stcc4_read(&stcc_data);
-  if (ret == 0 && stcc_data.co2_ppm > 0) {
-    data.co2_ppm = stcc_data.co2_ppm;
-    LOG_DBG("STCC4: %u ppm CO2", data.co2_ppm);
+  if (use_single_shot_mode) {
+    /* Single-shot mode: trigger measurement, wait, then read */
+    ret = stcc4_trigger_single_shot();
+    if (ret == 0) {
+      /* Wait for measurement to complete (~500ms + margin) */
+      k_msleep(STCC4_SINGLE_SHOT_WAIT_MS);
+
+      ret = stcc4_read(&stcc_data);
+      if (ret == 0 && stcc_data.co2_ppm > 0) {
+        data.co2_ppm = stcc_data.co2_ppm;
+        LOG_DBG("STCC4 (single-shot): %u ppm CO2", data.co2_ppm);
+      } else {
+        /* Use last known value if read failed */
+        data.co2_ppm = stcc4_get_co2();
+        LOG_DBG("STCC4 single-shot read failed, using cached: %u ppm",
+                data.co2_ppm);
+      }
+    } else {
+      LOG_WRN("STCC4 single-shot trigger failed: %d", ret);
+      data.co2_ppm = stcc4_get_co2();
+    }
   } else {
-    /* Try triggering a single-shot measurement */
-    LOG_DBG("STCC4 read returned %d/%u, triggering single-shot", ret,
-            stcc_data.co2_ppm);
-    stcc4_trigger_single_shot();
-    /* Note: Result will be available at next measurement cycle */
-    /* For now, use last known good value or 0 */
-    data.co2_ppm = stcc4_get_co2();
-    if (data.co2_ppm == 0) {
-      LOG_WRN("STCC4 CO2 not available (sensor warming up?)");
+    /* Continuous mode: data is available immediately (1Hz updates) */
+    ret = stcc4_read(&stcc_data);
+    if (ret == 0 && stcc_data.co2_ppm > 0) {
+      data.co2_ppm = stcc_data.co2_ppm;
+      LOG_DBG("STCC4 (continuous): %u ppm CO2", data.co2_ppm);
+    } else {
+      /* First read after starting continuous might fail, use cached */
+      data.co2_ppm = stcc4_get_co2();
+      if (data.co2_ppm == 0) {
+        LOG_DBG("STCC4 CO2 not yet available (sensor warming up)");
+      }
     }
   }
 
@@ -286,29 +308,58 @@ bool sensor_manager_is_ready(void) { return initialized; }
 
 void sensor_manager_set_power_mode(uint8_t power_mode) {
   uint32_t new_interval;
+  bool want_single_shot;
 
   /* Power modes match old firmware:
    * 0 = On Demand - manual measurements only (button/BLE request)
    * 1 = Low (3 min) - battery saving
    * 2 = Mid (1 min) - balanced
    * 3 = High (5 sec) - real-time monitoring
+   *
+   * STCC4 Power Strategy:
+   * - Modes 0-2: Single-shot for maximum power savings
+   * - Mode 3: Continuous mode for real-time updates (5-sec interval)
    */
   switch (power_mode) {
   case 0: /* On demand - no automatic measurements */
     new_interval = POWER_MODE_ON_DEMAND_INTERVAL_MS;
+    want_single_shot = true;
     break;
   case 1: /* Low power - 3 minutes */
     new_interval = POWER_MODE_LOW_INTERVAL_MS;
+    want_single_shot = true;
     break;
   case 2: /* Mid - 1 minute */
     new_interval = POWER_MODE_MID_INTERVAL_MS;
+    want_single_shot = true;
     break;
   case 3: /* High - 5 seconds */
     new_interval = POWER_MODE_HI_INTERVAL_MS;
+    want_single_shot = false; /* Use continuous for fast updates */
     break;
   default:
-    new_interval = POWER_MODE_LOW_INTERVAL_MS; /* Default to low power */
+    new_interval = POWER_MODE_LOW_INTERVAL_MS;
+    want_single_shot = true;
     break;
+  }
+
+  /* Switch STCC4 mode if needed */
+  if (want_single_shot != use_single_shot_mode) {
+    if (want_single_shot) {
+      /* Switch to single-shot mode */
+      stcc4_stop();
+      use_single_shot_mode = true;
+      LOG_INF("STCC4: Switched to single-shot mode (power saving)");
+    } else {
+      /* Switch to continuous mode */
+      int ret = stcc4_start_continuous();
+      if (ret == 0) {
+        use_single_shot_mode = false;
+        LOG_INF("STCC4: Switched to continuous mode (real-time)");
+      } else {
+        LOG_WRN("STCC4 continuous start failed: %d, keeping single-shot", ret);
+      }
+    }
   }
 
   if (new_interval != measurement_interval_ms) {

@@ -38,6 +38,11 @@ LOG_MODULE_REGISTER(stcc4, LOG_LEVEL_DBG);
 #define STCC4_CMD_SINGLE_SHOT_LSB                                              \
   0x9D /* Correct: 0x219D - per working code                                   \
         */
+#define STCC4_CMD_ENTER_SLEEP_MSB 0x36
+#define STCC4_CMD_ENTER_SLEEP_LSB 0x50 /* Sleep mode: 0x3650 */
+#define STCC4_CMD_EXIT_SLEEP 0x00      /* Wake up: single byte 0x00 */
+#define STCC4_CMD_CONDITIONING_MSB 0x29
+#define STCC4_CMD_CONDITIONING_LSB 0xBC /* Conditioning: 0x29BC */
 
 /* CRC polynomial for Sensirion sensors */
 #define STCC4_CRC_POLYNOMIAL 0x31
@@ -45,8 +50,10 @@ LOG_MODULE_REGISTER(stcc4, LOG_LEVEL_DBG);
 
 /* Timing */
 #define STCC4_MEASUREMENT_INTERVAL_MS 1000
-#define STCC4_SINGLE_SHOT_TIME_MS                                              \
-  5000 /* Single shot takes ~5 seconds per datasheet */
+#define STCC4_SINGLE_SHOT_TIME_MS 500    /* Single shot measurement ~500ms */
+#define STCC4_CONDITIONING_TIME_MS 22000 /* Conditioning cycle 22 seconds */
+#define STCC4_SLEEP_ENTER_TIME_MS 1      /* Time for sleep command to execute */
+#define STCC4_SLEEP_EXIT_TIME_MS 5       /* Time to wake from sleep */
 
 static bool initialized = false;
 static stcc4_data_t last_data = {.co2_ppm = 0, .valid = false};
@@ -306,4 +313,64 @@ bool stcc4_data_ready(void) {
   /* In continuous mode, data is ready after measurement interval */
   /* In single-shot, need to poll or wait */
   return last_data.valid;
+}
+
+stcc4_mode_t stcc4_get_mode(void) { return current_mode; }
+
+int stcc4_enter_sleep_mode(void) {
+  if (!initialized) {
+    return -ENODEV;
+  }
+
+  /* Stop any ongoing measurement first */
+  stcc4_stop();
+
+  /* Send enter sleep command (0x3650) */
+  int ret =
+      stcc4_write_cmd(STCC4_CMD_ENTER_SLEEP_MSB, STCC4_CMD_ENTER_SLEEP_LSB);
+  if (ret == 0) {
+    k_msleep(STCC4_SLEEP_ENTER_TIME_MS);
+    LOG_INF("STCC4 entered sleep mode");
+  }
+  return ret;
+}
+
+int stcc4_exit_sleep_mode(void) {
+  if (!initialized) {
+    return -ENODEV;
+  }
+
+  /* Send single-byte 0x00 to wake sensor */
+  uint8_t wake_cmd = STCC4_CMD_EXIT_SLEEP;
+  int ret = i2c_bus_write(I2C_ADDR_STCC4, &wake_cmd, 1);
+  ARG_UNUSED(ret); /* NACK is expected, ignore result */
+
+  /* Note: Sensor may NACK this command, which is expected behavior */
+  /* Wait for sensor to wake up regardless of return value */
+  k_msleep(STCC4_SLEEP_EXIT_TIME_MS);
+
+  LOG_INF("STCC4 exited sleep mode");
+  return 0; /* Always return success as NACK is expected */
+}
+
+int stcc4_perform_conditioning(void) {
+  if (!initialized) {
+    return -ENODEV;
+  }
+
+  LOG_INF("STCC4 performing conditioning (22 sec)...");
+
+  /* Send conditioning command (0x29BC) */
+  int ret =
+      stcc4_write_cmd(STCC4_CMD_CONDITIONING_MSB, STCC4_CMD_CONDITIONING_LSB);
+  if (ret != 0) {
+    LOG_ERR("STCC4 conditioning command failed: %d", ret);
+    return ret;
+  }
+
+  /* Wait for conditioning to complete - 22 seconds per datasheet */
+  k_msleep(STCC4_CONDITIONING_TIME_MS);
+
+  LOG_INF("STCC4 conditioning complete");
+  return 0;
 }
