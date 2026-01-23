@@ -1,7 +1,7 @@
 # Complete Pin Assignments - AirSpot Slim
 
 **Source**: AH-013-0001-SCH CO2 Monitor (Standard Build) PWA Schematics Rev1A, Sheet 5 (nRF54L05)  
-**Verified**: Based on working firmware configuration (incremental_app)  
+**Verified**: Based on working firmware configuration (application)  
 **Last Updated**: 2026-01-19
 
 ## User Interface Pins
@@ -316,7 +316,7 @@ buttons {
 ## References
 
 - **Schematic**: AH-013-0001-SCH CO2 Monitor (Standard Build) PWA Schematics Rev1A
-- **Working Configuration**: `application/incremental_app/boards/nrf54l15dk_nrf54l05_cpuapp.overlay`
+- **Working Configuration**: `application/boards/nrf54l15dk_nrf54l05_cpuapp.overlay`
 - **Flash Test**: `application/flash_test/boards/nrf54l15dk_nrf54l05_cpuapp.overlay`
 
 ---

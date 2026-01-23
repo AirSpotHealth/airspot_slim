@@ -232,7 +232,6 @@ See [docs/firmware/BUILD_INSTRUCTIONS.md](./docs/firmware/BUILD_INSTRUCTIONS.md)
 
 | Application         | Purpose                 | Location           |
 | ------------------- | ----------------------- | ------------------ |
-| **incremental_app** | Main development app    | `incremental_app/` |
 | **sensor_test**     | Isolated sensor testing | `sensor_test/`     |
 | **flash_test**      | SPI flash testing       | `flash_test/`      |
 | **button_test**     | Button testing          | `button_test/`     |
