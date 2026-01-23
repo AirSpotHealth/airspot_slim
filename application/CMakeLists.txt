@@ -35,6 +35,7 @@ target_sources(app PRIVATE src/services/user_settings.c)
 target_sources(app PRIVATE src/services/data_log.c)
 target_sources(app PRIVATE src/services/ble_mode_service.c)
 target_sources(app PRIVATE src/services/power_manager.c)
+target_sources(app PRIVATE src/services/led_indicator.c)
 
 # Mesh sensor (only when BT_MESH is enabled)
 if(CONFIG_BT_MESH)

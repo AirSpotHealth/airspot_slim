@@ -17,8 +17,10 @@
 #include <airspot/version.h>
 
 /* Driver includes */
+#include <drivers/battery.h>
 #include <drivers/button_driver.h>
 #include <drivers/led_driver.h>
+#include <drivers/qi_charger.h>
 #include <drivers/spi_flash.h>
 
 /* Service includes */
@@ -26,6 +28,7 @@
 #include <services/ble_service.h>
 #include <services/data_log.h>
 #include <services/factory_test.h>
+#include <services/led_indicator.h>
 #include <services/power_manager.h>
 #include <services/protocol.h>
 #include <services/sensor_manager.h>
@@ -85,7 +88,30 @@ static void data_log_timer_handler(struct k_timer *timer) {
 static int64_t last_press_time = 0;
 static bool tap_completed = false;
 
-/* Button event handler with power gesture support */
+/* Qi charger callback - handle LED feedback on charger placement */
+static void qi_charger_callback(bool is_charging) {
+  LOG_INF("Qi charger status changed: %s",
+          is_charging ? "CHARGING" : "NOT CHARGING");
+
+  if (is_charging) {
+    if (battery_is_low() || battery_is_critical()) {
+      /* Low battery while charging - flashing red */
+      led_indicator_show_charging_low_battery();
+    } else {
+      /* Normal battery - show white then CO2 color */
+      sensor_data_t data;
+      sensor_manager_get_data(&data);
+      /* Device is "on" if not in on-demand mode (power_mode != 0) */
+      bool device_on = (user_settings_get_power_mode() != 0);
+      led_indicator_show_charging_normal(device_on, data.co2_ppm);
+    }
+  } else {
+    /* Charger removed - stop charging LED pattern */
+    led_indicator_stop();
+  }
+}
+
+/* Button event handler with power gesture and LED indicator support */
 static void button_event_handler(button_event_t event) {
   int64_t now = k_uptime_get();
 
@@ -98,9 +124,22 @@ static void button_event_handler(button_event_t event) {
       LOG_INF("Second press detected - checking for power-off hold");
       power_manager_on_button_pressed();
     } else {
-      /* Normal press - trigger measurement */
-      led_driver_set(1, true);
-      sensor_manager_measure_now();
+      /* Check battery state first */
+      if (battery_is_low() || battery_is_critical()) {
+        /* Low battery mode - show fading red for 3 seconds */
+        LOG_INF("Low battery - showing fading red indicator");
+        led_indicator_show_low_battery();
+      } else if (ble_service_is_connected()) {
+        /* Connected - show white then CO2 color */
+        sensor_data_t data;
+        sensor_manager_get_data(&data);
+        led_indicator_show_connected(data.co2_ppm);
+        sensor_manager_measure_now();
+      } else {
+        /* Normal press - trigger measurement with simple LED feedback */
+        led_driver_set(LED_GREEN, true);
+        sensor_manager_measure_now();
+      }
     }
 
     last_press_time = now;
@@ -109,7 +148,11 @@ static void button_event_handler(button_event_t event) {
 
   case BUTTON_EVENT_RELEASED:
     LOG_INF("Button released");
-    led_driver_set(1, false);
+
+    /* Turn off simple LED if we used it (not using LED indicator) */
+    if (!led_indicator_is_active()) {
+      led_driver_set(LED_GREEN, false);
+    }
 
     /* Check if this was a short tap (< 300ms) */
     if ((now - last_press_time) <= POWER_GESTURE_TAP_MAX_MS) {
@@ -131,7 +174,7 @@ static void button_event_handler(button_event_t event) {
     /* Only toggle LED if not in power gesture */
     if (!power_manager_is_gesture_pending()) {
       LOG_INF("Button long press - toggling LED 2");
-      led_driver_toggle(2);
+      led_driver_toggle(LED_BLUE);
     }
     break;
   }
@@ -270,6 +313,30 @@ int main(void) {
     button_driver_register_callback(button_event_handler);
   }
 
+  /* Initialize Battery driver */
+  ret = battery_init();
+  if (ret) {
+    LOG_ERR("Battery init failed: %d", ret);
+  } else {
+    LOG_INF("Battery driver initialized");
+  }
+
+  /* Initialize Qi Charger driver */
+  ret = qi_charger_init();
+  if (ret) {
+    LOG_ERR("Qi charger init failed: %d", ret);
+  } else {
+    LOG_INF("Qi charger driver initialized");
+  }
+
+  /* Initialize LED indicator service */
+  ret = led_indicator_init();
+  if (ret) {
+    LOG_ERR("LED indicator init failed: %d", ret);
+  } else {
+    LOG_INF("LED indicator service initialized");
+  }
+
   /*
    * ========================================
    * Service Initialization (order matters!)
@@ -320,6 +387,14 @@ int main(void) {
     sensor_manager_register_callback(sensor_data_callback);
   }
 
+  /* Register Qi charger callback for LED feedback */
+  qi_charger_register_callback(qi_charger_callback);
+
+  /* Check initial charging state */
+  if (qi_charger_is_charging()) {
+    qi_charger_callback(true);
+  }
+
   /* 5. Data log (requires SPI flash) */
   ret = data_log_init();
   if (ret) {
@@ -336,6 +411,11 @@ int main(void) {
     ble_service_start_advertising();
   } else {
     LOG_INF("BLE mode service initialized");
+  }
+
+  /* Show pairing indicator if not connected */
+  if (!ble_service_is_connected()) {
+    led_indicator_show_pairing();
   }
 
   /*

@@ -16,6 +16,7 @@
 
 #include <services/airspot_nus.h>
 #include <services/ble_service.h>
+#include <services/led_indicator.h>
 
 LOG_MODULE_REGISTER(ble_service, CONFIG_AIRSPOT_LOG_LEVEL);
 
@@ -48,6 +49,9 @@ static void connected(struct bt_conn *conn, uint8_t err) {
 
   /* Notify NUS of connection for TX operations */
   airspot_nus_set_conn(conn);
+
+  /* Stop pairing indicator */
+  led_indicator_stop();
 }
 
 static void disconnected(struct bt_conn *conn, uint8_t reason) {
@@ -64,6 +68,9 @@ static void disconnected(struct bt_conn *conn, uint8_t reason) {
   /* Restart advertising after disconnect */
   advertising = false;
   ble_service_start_advertising();
+
+  /* Show pairing indicator */
+  led_indicator_show_pairing();
 }
 
 BT_CONN_CB_DEFINE(conn_callbacks) = {

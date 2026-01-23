@@ -15,8 +15,10 @@
 #include <zephyr/sys/poweroff.h>
 
 #include <airspot/board.h>
+#include <drivers/battery.h>
 #include <drivers/button_driver.h>
 #include <drivers/led_driver.h>
+#include <drivers/qi_charger.h>
 #include <services/ble_service.h>
 #include <services/power_manager.h>
 #include <services/sensor_manager.h>
@@ -80,11 +82,28 @@ bool power_manager_is_wakeup_from_off(void) {
     return true;
   }
 
+  /* Check for auto-wake condition (charging from depleted state) */
+  if (qi_charger_is_charging()) {
+    /* Initialize battery to check voltage */
+    battery_init();
+    /* If battery is present and charging, allow wake up */
+    /* Note: We don't check for critical here because we WANT to wake up and
+     * show charging LED */
+    LOG_INF("Detected wake from Qi charger insertion");
+    return true;
+  }
+
   return false;
 }
 
 bool power_manager_validate_wakeup_gesture(void) {
   LOG_INF("Validating wake-up gesture...");
+
+  /* Auto-wake if charging */
+  if (qi_charger_is_charging()) {
+    LOG_INF("Charging detected - skipping gesture validation (Auto Wake)");
+    return true;
+  }
 
   /*
    * Wake-up gesture: Tap → Tap-and-hold 3s
