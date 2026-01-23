@@ -55,6 +55,26 @@ _print_error() { echo -e "${_RED}✗${_NC} $1"; }
 _print_info() { echo -e "${_BLUE}ℹ${_NC} $1"; }
 _print_warning() { echo -e "${_YELLOW}⚠${_NC} $1"; }
 
+# Extract version from version.h
+_get_firmware_version() {
+    local version_file="$AIRSPOT_PROJECT_DIR/include/airspot/version.h"
+    if [ -f "$version_file" ]; then
+        local major minor patch
+        major=$(grep 'AIRSPOT_FIRMWARE_VERSION_MAJOR' "$version_file" | grep -o '[0-9]*')
+        minor=$(grep 'AIRSPOT_FIRMWARE_VERSION_MINOR' "$version_file" | grep -o '[0-9]*')
+        patch=$(grep 'AIRSPOT_FIRMWARE_VERSION_PATCH' "$version_file" | grep -o '[0-9]*')
+        echo "${major}.${minor}.${patch}"
+    else
+        echo "0.0.0"
+    fi
+}
+
+# Get kernel bin name based on version
+_get_bin_name() {
+    local version="$(_get_firmware_version)"
+    echo "airspot_slim_v${version}"
+}
+
 _find_jlinkexe() {
     if command -v JLinkExe &> /dev/null; then
         command -v JLinkExe
@@ -105,6 +125,9 @@ airspot() {
         memory)
             airspot_memory "$@"
             ;;
+        version)
+            airspot_version
+            ;;
         menu)
             airspot_menu
             ;;
@@ -129,13 +152,31 @@ airspot() {
     esac
 }
 
+# Update prj.conf with current version
+_update_prj_conf_version() {
+    local version="$(_get_firmware_version)"
+    local prj_conf="$AIRSPOT_PROJECT_DIR/prj.conf"
+    local bin_name="airspot_slim_v${version}"
+    
+    # Check if CONFIG_KERNEL_BIN_NAME exists and update it
+    if grep -q "CONFIG_KERNEL_BIN_NAME" "$prj_conf"; then
+        # Update existing line
+        sed -i.bak "s/CONFIG_KERNEL_BIN_NAME=.*/CONFIG_KERNEL_BIN_NAME=\"${bin_name}\"/" "$prj_conf"
+        rm -f "${prj_conf}.bak"
+    fi
+}
+
 # Build command
 airspot_build() {
-    _print_info "Building AirSpot Slim firmware..."
+    local version="$(_get_firmware_version)"
+    _print_info "Building AirSpot Slim firmware v${version}..."
     cd "$AIRSPOT_PROJECT_DIR"
     
     # Ensure system git is used (NCS git has issues)
     export PATH="/usr/bin:/opt/homebrew/bin:$PATH"
+    
+    # Update prj.conf with current version
+    _update_prj_conf_version
     
     local pristine=""
     
@@ -152,7 +193,33 @@ airspot_build() {
     
     if [ $? -eq 0 ]; then
         _print_success "Build complete!"
+        local bin_name="$(_get_bin_name)"
+        _print_info "Output: build/zephyr/${bin_name}.hex"
         airspot_memory
+        
+        local timestamp=$(date +"%Y%m%d_%H%M%S")
+        
+        # Copy to builds folder (latest build, easy to find)
+        local builds_dir="$AIRSPOT_WORKSPACE/builds"
+        mkdir -p "$builds_dir"
+        cp "$AIRSPOT_BUILD_DIR/zephyr/${bin_name}.hex" "$builds_dir/${bin_name}.hex" 2>/dev/null
+        cp "$AIRSPOT_BUILD_DIR/zephyr/${bin_name}.bin" "$builds_dir/${bin_name}.bin" 2>/dev/null
+        
+        if [ -f "$builds_dir/${bin_name}.hex" ]; then
+            _print_success "Build: builds/${bin_name}.hex"
+        fi
+        
+        # Copy to releases folder with timestamp (for history)
+        local releases_dir="$AIRSPOT_WORKSPACE/releases"
+        mkdir -p "$releases_dir"
+        local release_name="${bin_name}_${timestamp}"
+        
+        cp "$AIRSPOT_BUILD_DIR/zephyr/${bin_name}.hex" "$releases_dir/${release_name}.hex" 2>/dev/null
+        cp "$AIRSPOT_BUILD_DIR/zephyr/${bin_name}.bin" "$releases_dir/${release_name}.bin" 2>/dev/null
+        
+        if [ -f "$releases_dir/${release_name}.hex" ]; then
+            _print_success "Release: releases/${release_name}.hex"
+        fi
     else
         _print_error "Build failed!"
         return 1
@@ -161,10 +228,14 @@ airspot_build() {
 
 # Flash command
 airspot_flash() {
-    # Check for hex file in sysbuild location or regular location
+    # Check for hex file in various locations (versioned name first, then fallbacks)
     local hex_file=""
+    local bin_name="$(_get_bin_name)"
+    
     if [ -f "$AIRSPOT_BUILD_DIR/merged.hex" ]; then
         hex_file="$AIRSPOT_BUILD_DIR/merged.hex"
+    elif [ -f "$AIRSPOT_BUILD_DIR/zephyr/${bin_name}.hex" ]; then
+        hex_file="$AIRSPOT_BUILD_DIR/zephyr/${bin_name}.hex"
     elif [ -f "$AIRSPOT_BUILD_DIR/application/zephyr/zephyr.hex" ]; then
         hex_file="$AIRSPOT_BUILD_DIR/application/zephyr/zephyr.hex"
     elif [ -f "$AIRSPOT_BUILD_DIR/zephyr/zephyr.hex" ]; then
@@ -380,18 +451,24 @@ airspot_clean() {
 
 # Info command
 airspot_info() {
+    local version="$(_get_firmware_version)"
+    local bin_name="$(_get_bin_name)"
+    
     echo ""
     _print_info "Device Information"
     echo "══════════════════════════════════════"
     echo ""
-    echo "Board: $AIRSPOT_BOARD"
+    echo "Firmware: AirSpot Slim v${version}"
+    echo "Board:    $AIRSPOT_BOARD"
     echo ""
     echo "Connected devices:"
-    nrfjprog --ids
+    nrfjprog --ids 2>/dev/null || echo "  (nrfjprog not available)"
     echo ""
     
     local elf_file=""
-    if [ -f "$AIRSPOT_BUILD_DIR/application/zephyr/zephyr.elf" ]; then
+    if [ -f "$AIRSPOT_BUILD_DIR/zephyr/${bin_name}.elf" ]; then
+        elf_file="$AIRSPOT_BUILD_DIR/zephyr/${bin_name}.elf"
+    elif [ -f "$AIRSPOT_BUILD_DIR/application/zephyr/zephyr.elf" ]; then
         elf_file="$AIRSPOT_BUILD_DIR/application/zephyr/zephyr.elf"
     elif [ -f "$AIRSPOT_BUILD_DIR/zephyr/zephyr.elf" ]; then
         elf_file="$AIRSPOT_BUILD_DIR/zephyr/zephyr.elf"
@@ -404,8 +481,12 @@ airspot_info() {
 
 # Memory command
 airspot_memory() {
+    local bin_name="$(_get_bin_name)"
     local elf_file=""
-    if [ -f "$AIRSPOT_BUILD_DIR/application/zephyr/zephyr.elf" ]; then
+    
+    if [ -f "$AIRSPOT_BUILD_DIR/zephyr/${bin_name}.elf" ]; then
+        elf_file="$AIRSPOT_BUILD_DIR/zephyr/${bin_name}.elf"
+    elif [ -f "$AIRSPOT_BUILD_DIR/application/zephyr/zephyr.elf" ]; then
         elf_file="$AIRSPOT_BUILD_DIR/application/zephyr/zephyr.elf"
     elif [ -f "$AIRSPOT_BUILD_DIR/zephyr/zephyr.elf" ]; then
         elf_file="$AIRSPOT_BUILD_DIR/zephyr/zephyr.elf"
@@ -420,6 +501,27 @@ airspot_memory() {
     _print_info "Memory Usage"
     echo "══════════════════════════════════════"
     "$ZEPHYR_SDK_INSTALL_DIR/arm-zephyr-eabi/bin/arm-zephyr-eabi-size" "$elf_file"
+    echo ""
+}
+
+# Version command
+airspot_version() {
+    local version="$(_get_firmware_version)"
+    echo ""
+    _print_info "AirSpot Slim Firmware"
+    echo "══════════════════════════════════════"
+    echo "Version: v${version}"
+    echo "Build name: $(_get_bin_name)"
+    echo ""
+    
+    # Show latest release if exists
+    local releases_dir="$AIRSPOT_WORKSPACE/releases"
+    if [ -d "$releases_dir" ]; then
+        local latest=$(ls -1t "$releases_dir"/*.hex 2>/dev/null | head -1)
+        if [ -n "$latest" ]; then
+            echo "Latest release: $(basename "$latest")"
+        fi
+    fi
     echo ""
 }
 
@@ -475,13 +577,14 @@ airspot_menu() {
 
 # Help command
 airspot_help() {
-    cat << 'EOF'
+    local version="$(_get_firmware_version)"
+    cat << EOF
 
-AirSpot Slim Development Tool
+AirSpot Slim Development Tool (v${version})
 ═════════════════════════════════════════════════════════
 
 COMMANDS:
-  airspot build             - Build firmware
+  airspot build             - Build firmware (creates versioned .hex)
   airspot flash             - Flash firmware to device
   airspot logs [uart|rtt]   - View logs (UART default)
   airspot monitor           - Alias for logs
@@ -490,6 +593,7 @@ COMMANDS:
   airspot clean             - Clean build directory
   airspot info              - Show device information
   airspot memory            - Show memory usage
+  airspot version           - Show firmware version
   airspot menu              - Interactive menu
   airspot help              - Show this help
 
@@ -497,14 +601,19 @@ SHORTCUTS:
   airspot bf                - Build + Flash
   airspot bfl               - Build + Flash + Logs
 
+BUILD OUTPUT:
+  Build creates versioned files automatically:
+    build/zephyr/airspot_slim_v${version}.hex   (build dir)
+    builds/airspot_slim_v${version}.hex         (easy access)
+    releases/airspot_slim_v${version}_TIMESTAMP.hex (history)
+
 EXAMPLES:
   airspot build             # Build firmware
   airspot flash             # Flash to device
   airspot logs              # View UART logs
   airspot logs rtt          # View RTT logs
-  airspot logs uart /dev/tty.usbmodemXXXX 115200
   airspot bfl               # Build, flash, and view logs
-  airspot erase -y          # Erase chip without confirmation
+  airspot version           # Show current version
 
 EOF
 }
