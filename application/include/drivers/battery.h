@@ -84,6 +84,17 @@ int32_t battery_get_raw_adc(void);
  */
 int32_t battery_get_adc_mv(void);
 
+/**
+ * @brief Get the filtered (EMA) battery voltage
+ *
+ * Returns the exponential moving average filtered battery voltage
+ * for stable readings. This is the same value returned by
+ * battery_read_voltage_mv() but without triggering a new ADC read.
+ *
+ * @return Battery voltage in mV after EMA filtering
+ */
+int32_t battery_get_filtered_mv(void);
+
 #ifdef __cplusplus
 }
 #endif

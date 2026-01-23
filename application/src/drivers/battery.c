@@ -5,6 +5,7 @@
  *
  * Battery Driver Implementation
  * Uses device tree ADC configuration for reliable operation.
+ * Implements multi-sample averaging and EMA filtering for stability.
  *
  * Based on working _working_minimal_uart ADC code.
  */
@@ -41,6 +42,17 @@ LOG_MODULE_REGISTER(battery, LOG_LEVEL_INF);
 #define BATT_VOLTAGE_CRITICAL 3000 /* ~5% */
 #define BATT_VOLTAGE_EMPTY 2800
 
+/* ============================================================================
+ * ADC Filtering Configuration
+ * ============================================================================
+ * Multi-sample averaging + Exponential Moving Average (EMA) for stability
+ */
+#define ADC_NUM_SAMPLES 4       /* Number of samples to average per reading */
+#define ADC_SAMPLE_DELAY_US 200 /* Delay between samples (microseconds) */
+#define ADC_STABILIZATION_MS 1  /* Voltage divider stabilization time (ms) */
+#define EMA_ALPHA_NUM 2         /* EMA alpha numerator (alpha = 2/10 = 0.2) */
+#define EMA_ALPHA_DEN 10        /* EMA alpha denominator */
+
 /* ADC channel from device tree (zephyr,user io-channels) */
 #if !DT_NODE_EXISTS(DT_PATH(zephyr_user)) ||                                   \
     !DT_NODE_HAS_PROP(DT_PATH(zephyr_user), io_channels)
@@ -69,6 +81,10 @@ static bool initialized = false;
 static int32_t last_raw_adc = 0;
 static int32_t last_adc_mv = 0;
 
+/* Exponential Moving Average state */
+static int32_t ema_battery_mv = 0;
+static bool ema_initialized = false;
+
 int battery_init(void) {
   int ret;
 
@@ -78,6 +94,8 @@ int battery_init(void) {
 
   LOG_INF("Initializing battery driver...");
   LOG_INF("ADC channels configured: %d", (int)ARRAY_SIZE(adc_channels));
+  LOG_INF("Using %d-sample averaging with EMA filter (alpha=%d/%d)",
+          ADC_NUM_SAMPLES, EMA_ALPHA_NUM, EMA_ALPHA_DEN);
 
   /* Setup ADC enable GPIO if available */
 #if HAS_ADC_EN_GPIO
@@ -114,82 +132,145 @@ int battery_init(void) {
   initialized = true;
   LOG_INF("Battery driver initialized successfully");
 
-  /* Take an initial reading to verify */
-  uint16_t voltage = battery_read_voltage_mv();
-  LOG_INF("Initial battery reading: %u mV (%u%%)", voltage,
+  /* Take initial readings to prime the EMA filter */
+  for (int i = 0; i < 3; i++) {
+    battery_read_voltage_mv();
+    k_msleep(10);
+  }
+
+  LOG_INF("Initial battery reading: %u mV (%u%%)", (uint16_t)ema_battery_mv,
           battery_get_percentage());
 
   return 0;
 }
 
-uint16_t battery_read_voltage_mv(void) {
+/**
+ * @brief Take a single raw ADC sample
+ * @return Raw ADC value, or -1 on error
+ */
+static int32_t adc_read_single_sample(void) {
   int ret;
-  int32_t val_mv;
   uint16_t buf;
-
-  if (!initialized) {
-    LOG_WRN("Battery driver not initialized");
-    return 0;
-  }
 
   struct adc_sequence sequence = {
       .buffer = &buf,
       .buffer_size = sizeof(buf),
   };
 
-#if HAS_ADC_EN_GPIO
-  /* Enable voltage divider */
-  gpio_pin_set_dt(&adc_en_gpio, 1);
-  k_usleep(100); /* Wait for stabilization */
-#endif
-
   /* Initialize sequence from device tree config */
   (void)adc_sequence_init_dt(&adc_channels[0], &sequence);
 
   /* Read ADC */
   ret = adc_read_dt(&adc_channels[0], &sequence);
+  if (ret < 0) {
+    LOG_ERR("ADC read failed: %d", ret);
+    return -1;
+  }
+
+  /* Handle differential vs single-ended */
+  if (adc_channels[0].channel_cfg.differential) {
+    return (int32_t)((int16_t)buf);
+  } else {
+    return (int32_t)buf;
+  }
+}
+
+/**
+ * @brief Convert raw ADC value to millivolts
+ * @param raw_adc Raw ADC value
+ * @return Voltage in millivolts
+ */
+static int32_t adc_raw_to_mv(int32_t raw_adc) {
+  int ret;
+  int32_t val_mv = raw_adc;
+
+  ret = adc_raw_to_millivolts_dt(&adc_channels[0], &val_mv);
+  if (ret < 0) {
+    /* Fallback: assume 0.6V reference, 1/4 gain, 12-bit */
+    val_mv = (raw_adc * 2400) / 4095;
+  }
+
+  return val_mv;
+}
+
+uint16_t battery_read_voltage_mv(void) {
+  int32_t raw_sum = 0;
+  int32_t raw_avg;
+  int32_t adc_mv;
+  int32_t battery_mv;
+  int valid_samples = 0;
+
+  if (!initialized) {
+    LOG_WRN("Battery driver not initialized");
+    return 0;
+  }
+
+#if HAS_ADC_EN_GPIO
+  /* Enable voltage divider with longer stabilization time */
+  gpio_pin_set_dt(&adc_en_gpio, 1);
+  k_msleep(ADC_STABILIZATION_MS);
+#endif
+
+  /* Discard first sample to eliminate switching transients */
+  (void)adc_read_single_sample();
+  k_usleep(ADC_SAMPLE_DELAY_US);
+
+  /* Take multiple samples and average */
+  for (int i = 0; i < ADC_NUM_SAMPLES; i++) {
+    int32_t sample = adc_read_single_sample();
+    if (sample >= 0) {
+      raw_sum += sample;
+      valid_samples++;
+    }
+    if (i < ADC_NUM_SAMPLES - 1) {
+      k_usleep(ADC_SAMPLE_DELAY_US);
+    }
+  }
 
 #if HAS_ADC_EN_GPIO
   /* Disable voltage divider (power saving) */
   gpio_pin_set_dt(&adc_en_gpio, 0);
 #endif
 
-  if (ret < 0) {
-    LOG_ERR("ADC read failed: %d", ret);
-    return 0;
+  if (valid_samples == 0) {
+    LOG_ERR("No valid ADC samples");
+    return (uint16_t)ema_battery_mv; /* Return last known value */
   }
 
-  /* Store raw value for debugging */
-  if (adc_channels[0].channel_cfg.differential) {
-    last_raw_adc = (int32_t)((int16_t)buf);
-  } else {
-    last_raw_adc = (int32_t)buf;
-  }
+  /* Calculate average raw value */
+  raw_avg = raw_sum / valid_samples;
+  last_raw_adc = raw_avg;
 
-  /* Convert raw to millivolts using device tree config */
-  val_mv = last_raw_adc;
-  ret = adc_raw_to_millivolts_dt(&adc_channels[0], &val_mv);
-  if (ret < 0) {
-    LOG_WRN("ADC mV conversion not available, using raw value");
-    /* Fallback: assume 0.6V reference, 1/4 gain, 12-bit */
-    /* ADC_mV = raw * (600mV * 4) / 4095 = raw * 2400 / 4095 */
-    val_mv = (last_raw_adc * 2400) / 4095;
-  }
-
-  last_adc_mv = val_mv;
+  /* Convert to millivolts */
+  adc_mv = adc_raw_to_mv(raw_avg);
+  last_adc_mv = adc_mv;
 
   /* Apply voltage divider inverse to get actual battery voltage */
-  /* Vbatt = Vadc / 0.6 */
-  float battery_mv = (float)val_mv * VOLTAGE_DIVIDER_INVERSE;
+  battery_mv = (int32_t)((float)adc_mv * VOLTAGE_DIVIDER_INVERSE);
 
-  LOG_DBG("ADC: raw=%d, adc_mv=%d, batt_mv=%.0f", last_raw_adc, last_adc_mv,
-          battery_mv);
+  /* Apply Exponential Moving Average filter */
+  /* EMA = alpha * new_value + (1 - alpha) * old_EMA */
+  /* Using integer math: EMA = (alpha_num * new + (alpha_den - alpha_num) * old)
+   * / alpha_den */
+  if (!ema_initialized) {
+    ema_battery_mv = battery_mv;
+    ema_initialized = true;
+  } else {
+    ema_battery_mv = (EMA_ALPHA_NUM * battery_mv +
+                      (EMA_ALPHA_DEN - EMA_ALPHA_NUM) * ema_battery_mv) /
+                     EMA_ALPHA_DEN;
+  }
 
-  return (uint16_t)battery_mv;
+  LOG_DBG("ADC: raw_avg=%d, adc_mv=%d, batt_mv=%d, ema_mv=%d (samples=%d)",
+          raw_avg, adc_mv, battery_mv, ema_battery_mv, valid_samples);
+
+  return (uint16_t)ema_battery_mv;
 }
 
 uint8_t battery_get_percentage(void) {
-  uint16_t mv = battery_read_voltage_mv();
+  /* Use cached EMA value instead of re-reading */
+  uint16_t mv =
+      ema_initialized ? (uint16_t)ema_battery_mv : battery_read_voltage_mv();
 
   if (mv >= BATT_VOLTAGE_FULL) {
     return 100;
@@ -216,3 +297,9 @@ bool battery_is_critical(void) {
 int32_t battery_get_raw_adc(void) { return last_raw_adc; }
 
 int32_t battery_get_adc_mv(void) { return last_adc_mv; }
+
+/**
+ * @brief Get the filtered (EMA) battery voltage
+ * @return Battery voltage in mV after EMA filtering
+ */
+int32_t battery_get_filtered_mv(void) { return ema_battery_mv; }
