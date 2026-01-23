@@ -121,6 +121,16 @@ application/
 
 See [docs/firmware/CODE_ORGANIZATION.md](./docs/firmware/CODE_ORGANIZATION.md) for detailed architecture and best practices.
 
+## Documentation
+
+- [docs/firmware/QUICK_START.md](./docs/firmware/QUICK_START.md)
+- [docs/firmware/BUILD_INSTRUCTIONS.md](./docs/firmware/BUILD_INSTRUCTIONS.md)
+- [docs/firmware/DEVELOPER_GUIDE.md](./docs/firmware/DEVELOPER_GUIDE.md)
+- [docs/firmware/CODE_ORGANIZATION.md](./docs/firmware/CODE_ORGANIZATION.md)
+- [docs/firmware/SERVICES.md](./docs/firmware/SERVICES.md)
+- [docs/firmware/SENSORS.md](./docs/firmware/SENSORS.md)
+- [docs/firmware/BLE_PROTOCOL.md](./docs/firmware/BLE_PROTOCOL.md)
+
 ## Getting Started
 
 ### 1. Install nRF Connect SDK
