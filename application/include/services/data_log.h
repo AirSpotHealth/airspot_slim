@@ -16,6 +16,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <zephyr/kernel.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -266,6 +267,17 @@ void data_log_request_erase_all(void);
  * @brief Check if erase all is pending
  */
 bool data_log_is_erase_pending(void);
+
+/**
+ * @brief Wait for a data log request (history or erase)
+ *
+ * Blocks until a request is signaled or timeout expires.
+ * Used by main loop to wake up immediately when history sync starts.
+ *
+ * @param timeout How long to wait (use K_SECONDS, K_MSEC, K_FOREVER, etc.)
+ * @return 0 if request is pending, -EAGAIN on timeout
+ */
+int data_log_wait_for_request(k_timeout_t timeout);
 
 /*
  * =============================================================================

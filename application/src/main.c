@@ -9,6 +9,7 @@
 
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/gpio.h>
+#include <zephyr/drivers/watchdog.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/printk.h>
@@ -56,6 +57,83 @@ static struct k_timer data_log_timer;
 
 /* Flags */
 static volatile bool data_log_due = false;
+
+/* =============================================================================
+ * Watchdog Timer - Auto-recovery from hard locks
+ * =============================================================================
+ */
+
+/* WDT timeout in milliseconds
+ * 5 seconds gives margin for long operations (flash erase ~100ms/sector)
+ * while still providing quick recovery from actual hangs
+ */
+#define WDT_TIMEOUT_MS 5000
+
+/* WDT device and channel */
+static const struct device *wdt_dev;
+static int wdt_channel_id = -1;
+
+/**
+ * @brief Initialize watchdog timer
+ *
+ * Sets up WDT with 2-second timeout. If firmware hangs and doesn't
+ * call wdt_feed() within 2 seconds, device will automatically reset.
+ *
+ * @return 0 on success, negative errno on failure
+ */
+static int watchdog_init(void) {
+  /* Get WDT device */
+  wdt_dev = DEVICE_DT_GET_OR_NULL(DT_ALIAS(watchdog0));
+  if (!wdt_dev) {
+    /* Try alternate node name */
+    wdt_dev = DEVICE_DT_GET_OR_NULL(DT_NODELABEL(wdt0));
+  }
+  if (!wdt_dev) {
+    wdt_dev = DEVICE_DT_GET_OR_NULL(DT_NODELABEL(wdt));
+  }
+
+  if (!wdt_dev || !device_is_ready(wdt_dev)) {
+    LOG_WRN("Watchdog device not found or not ready");
+    return -ENODEV;
+  }
+
+  /* Configure WDT window */
+  struct wdt_timeout_cfg wdt_config = {
+      .window.min = 0,                /* No minimum wait */
+      .window.max = WDT_TIMEOUT_MS,   /* 2 second timeout */
+      .callback = NULL,               /* No callback, just reset */
+      .flags = WDT_FLAG_RESET_SOC,    /* Reset entire SoC */
+  };
+
+  /* Install timeout configuration */
+  wdt_channel_id = wdt_install_timeout(wdt_dev, &wdt_config);
+  if (wdt_channel_id < 0) {
+    LOG_ERR("Failed to install WDT timeout: %d", wdt_channel_id);
+    return wdt_channel_id;
+  }
+
+  /* Start WDT - after this, must feed regularly! */
+  int ret = wdt_setup(wdt_dev, WDT_OPT_PAUSE_HALTED_BY_DBG);
+  if (ret < 0) {
+    LOG_ERR("Failed to start WDT: %d", ret);
+    return ret;
+  }
+
+  LOG_INF("Watchdog initialized: %d ms timeout", WDT_TIMEOUT_MS);
+  return 0;
+}
+
+/**
+ * @brief Feed the watchdog to prevent reset
+ *
+ * Must be called at least once every WDT_TIMEOUT_MS (2 seconds).
+ * Called from main loop and during long operations.
+ */
+void watchdog_feed(void) {
+  if (wdt_dev && wdt_channel_id >= 0) {
+    wdt_feed(wdt_dev, wdt_channel_id);
+  }
+}
 
 /* Early initialization - runs before device drivers (PRE_KERNEL_1) */
 static int flash_pins_early_init(void) {
@@ -481,6 +559,17 @@ int main(void) {
 
   /*
    * ========================================
+   * Watchdog Timer
+   * ========================================
+   */
+
+  ret = watchdog_init();
+  if (ret < 0) {
+    LOG_WRN("Watchdog init failed: %d (continuing without WDT)", ret);
+  }
+
+  /*
+   * ========================================
    * Initialization Complete
    * ========================================
    */
@@ -488,6 +577,7 @@ int main(void) {
   LOG_INF("========================================");
   LOG_INF("System initialized successfully");
   LOG_INF("BLE advertising as: %s", ble_service_get_device_name());
+  LOG_INF("Watchdog: %s", (wdt_channel_id >= 0) ? "ENABLED (5s)" : "DISABLED");
   LOG_INF("Press button to toggle LED");
   LOG_INF("Long press (3s) for secondary action");
   LOG_INF("========================================");
@@ -504,7 +594,10 @@ int main(void) {
    */
 
   while (1) {
-    /* Process any pending history requests */
+    /* Feed watchdog first - must happen at least every 2 seconds */
+    watchdog_feed();
+
+    /* Process any pending history requests - non-blocking check */
     protocol_process_history();
 
     /* Store CO2 data if due */
@@ -513,17 +606,24 @@ int main(void) {
       store_co2_data();
     }
 
-    /* Sleep longer for power savings
-     * The system wakes on:
-     * - BLE events (handled by BLE stack)
-     * - Sensor timer (handled by work queue)
-     * - Button press (handled by interrupt/polling)
+    /* Non-blocking: just yield to let other threads run
      *
-     * We only need to wake periodically for:
-     * - Processing history requests
-     * - Checking data_log_due flag
+     * All work is event-driven:
+     * - BLE events: handled by BLE stack threads
+     * - Sensor measurements: handled by sensor_manager work queue
+     * - Button press: handled by interrupt callback
+     * - History requests: signaled via semaphore, processed here
+     *
+     * We use a short wait on the semaphore to:
+     * - Process history requests immediately when they arrive
+     * - Yield CPU when idle (power savings)
+     * - Feed WDT regularly (100ms << 2s timeout)
      */
-    k_sleep(K_SECONDS(10)); /* Wake every 10 seconds instead of 1 */
+    if (data_log_wait_for_request(K_MSEC(100)) == 0) {
+      /* Semaphore signaled - history request pending, loop immediately */
+      continue;
+    }
+    /* Timeout - no request, that's fine, just loop again */
   }
 
   return 0;

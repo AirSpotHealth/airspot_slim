@@ -230,3 +230,16 @@
 		zephyr,oversampling = <8>;             /* 8x oversampling for stability */
 	};
 };
+
+/* ============================================================================
+ * Watchdog Timer - Auto-recovery from hard locks
+ * ============================================================================ */
+&wdt30 {
+	status = "okay";
+};
+
+/ {
+	aliases {
+		watchdog0 = &wdt30;
+	};
+};

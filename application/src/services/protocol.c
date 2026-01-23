@@ -680,25 +680,32 @@ void protocol_send_current_half_page(void) {
 
 void protocol_send_history_data(const uint8_t *data, uint8_t record_count,
                                 uint16_t half_page_number) {
-  /* Max frame size: header(4) + 16 records * 8 bytes + page_num(2) +
-   * checksum(1) = 4 + 128 + 2 + 1 = 135 bytes */
+  /*
+   * IMPORTANT: Must match old firmware format exactly!
+   * Old firmware always sends exactly 16 records (128 bytes) regardless of
+   * how many are valid. frame[3] is always 128 (0x80 = 16 * 8).
+   *
+   * Frame format:
+   *   [0xFF][0xAA][0x0C][0x80][16 records * 8 bytes][page_num(2)][checksum]
+   * Total: 4 + 128 + 2 + 1 = 135 bytes
+   */
   static uint8_t tx_frame[140];
 
-  const uint8_t record_size = 8; /* sizeof(record_t) */
-  uint8_t data_len = record_count * record_size;
+  const uint8_t record_size = 8;    /* sizeof(record_t) */
+  const uint8_t records_to_send = 16; /* Always send 16 records like old FW */
 
-  LOG_DBG("Sending history: %d records for half-page %d", record_count,
+  LOG_DBG("Sending history: %d valid records for half-page %d", record_count,
           half_page_number);
 
   /* Build frame header */
   tx_frame[0] = CMD_FIRST_BYTE;
   tx_frame[1] = CMD_SECOND_BYTE;
   tx_frame[2] = CMD_HISTORY_REQUEST;
-  tx_frame[3] = data_len + 2; /* Data + 2 bytes for page number */
+  tx_frame[3] = records_to_send * record_size; /* Always 128 bytes (0x80) */
 
-  /* Copy record data */
+  /* Copy all 16 records (valid or not - matches old firmware behavior) */
   uint8_t offset = 4;
-  for (uint8_t i = 0; i < record_count; i++) {
+  for (uint8_t i = 0; i < records_to_send; i++) {
     const record_t *rec = (const record_t *)&data[i * record_size];
 
     /* Timestamp (big-endian) */
@@ -707,7 +714,7 @@ void protocol_send_history_data(const uint8_t *data, uint8_t record_count,
     tx_frame[offset++] = (uint8_t)(rec->timestamp >> 8);
     tx_frame[offset++] = (uint8_t)(rec->timestamp);
 
-    /* Value (already stored big-endian in record) */
+    /* Value (little-endian in frame - LSB first, matches old firmware) */
     tx_frame[offset++] = (uint8_t)(rec->value & 0xFF);
     tx_frame[offset++] = (uint8_t)(rec->value >> 8);
 
@@ -715,10 +722,10 @@ void protocol_send_history_data(const uint8_t *data, uint8_t record_count,
     tx_frame[offset++] = rec->type;
 
     /* Reserved */
-    tx_frame[offset++] = rec->reserved;
+    tx_frame[offset++] = 0;
   }
 
-  /* Append half-page number */
+  /* Append half-page number (big-endian) */
   tx_frame[offset++] = (uint8_t)(half_page_number >> 8);
   tx_frame[offset++] = (uint8_t)(half_page_number & 0xFF);
 

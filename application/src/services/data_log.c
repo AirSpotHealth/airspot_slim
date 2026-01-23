@@ -18,6 +18,9 @@
 
 LOG_MODULE_REGISTER(data_log, CONFIG_AIRSPOT_LOG_LEVEL);
 
+/* External watchdog feed function (defined in main.c) */
+extern void watchdog_feed(void);
+
 /*
  * =============================================================================
  * Private Variables
@@ -56,6 +59,9 @@ static bool metadata_dirty = false; /* True when metadata needs to be written */
 
 /* Mutex for thread safety */
 static K_MUTEX_DEFINE(data_log_mutex);
+
+/* Semaphore to signal pending requests (for faster main loop wake-up) */
+static K_SEM_DEFINE(data_log_request_sem, 0, 1);
 
 /*
  * =============================================================================
@@ -720,6 +726,8 @@ void data_log_request(uint16_t half_page_number) {
   LOG_INF("Data log request: half-page %d", half_page_number);
   pending_request.half_page_number = half_page_number;
   request_pending = true;
+  /* Signal semaphore to wake up main loop immediately */
+  k_sem_give(&data_log_request_sem);
 }
 
 bool data_log_has_pending_request(void) { return request_pending; }
@@ -792,9 +800,15 @@ int data_log_process_request(record_page_t *out_page, uint8_t *out_count,
 void data_log_request_erase_all(void) {
   LOG_WRN("Erase all data log requested");
   erase_all_pending = true;
+  /* Signal semaphore to wake up main loop immediately */
+  k_sem_give(&data_log_request_sem);
 }
 
 bool data_log_is_erase_pending(void) { return erase_all_pending; }
+
+int data_log_wait_for_request(k_timeout_t timeout) {
+  return k_sem_take(&data_log_request_sem, timeout);
+}
 
 int data_log_erase_all(void) {
   if (!initialized) {
@@ -817,8 +831,12 @@ int data_log_erase_all(void) {
       /* Continue anyway */
     }
 
-    /* Yield periodically during long erase */
-    if (sector % 16 == 0) {
+    /* Feed watchdog and yield periodically during long erase
+     * Each sector erase takes ~50-100ms, and we have many sectors.
+     * With 5s WDT timeout, feed every 32 sectors (~3s max)
+     */
+    if (sector % 32 == 0) {
+      watchdog_feed();
       k_yield();
     }
   }
