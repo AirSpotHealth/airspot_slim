@@ -52,3 +52,4 @@ JLink*.log
 
 _old_firmware
 /application/.cache
+/embedded-i2c-stcc4

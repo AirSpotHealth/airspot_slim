@@ -84,11 +84,9 @@ int stcc4_init(void) {
     return -ENODEV;
   }
 
-  /* Verify SHT40 is available (required for compensation) */
-  if (sht40_get_temperature() != sht40_get_temperature()) {
-    /* NaN check - SHT40 not providing data */
-    LOG_WRN("SHT40 not providing data - STCC4 accuracy may be reduced");
-  }
+  /* Note: SHT40 is initialized before STCC4 in sensor_manager.
+   * The first measurement happens after init, so we don't check here.
+   * Compensation data will be provided when sensor_manager reads sensors. */
 
   /* STCC4 initialization: No special initialization needed */
   /* The sensor works directly after power-up - no ExitSleepMode or reset
@@ -213,14 +211,32 @@ int stcc4_set_ambient(float temperature, float humidity) {
     return -ENODEV;
   }
 
-  /* Convert to raw values */
+  /* STCC4 Datasheet Table 11 - Signal Input Conversion Formulas:
+   * Temperature: Input = (T[°C] + 45) * (2^16 - 1) / 175
+   * Humidity:    Input = (RH[%RH] + 6) * (2^16 - 1) / 125
+   *
+   * Command: set_rht_compensation (0xE000), executable during measurement
+   */
+
+  /* Clamp values to valid ranges */
+  if (temperature < -45.0f)
+    temperature = -45.0f;
+  if (temperature > 130.0f)
+    temperature = 130.0f;
+  if (humidity < -6.0f)
+    humidity = -6.0f;
+  if (humidity > 119.0f)
+    humidity = 119.0f;
+
+  /* Convert using datasheet formulas */
   uint16_t temp_raw = (uint16_t)((temperature + 45.0f) * 65535.0f / 175.0f);
   uint16_t hum_raw = (uint16_t)((humidity + 6.0f) * 65535.0f / 125.0f);
 
-  /* Build command with data */
+  /* Build command: [cmd_msb, cmd_lsb, temp_msb, temp_lsb, crc, rh_msb, rh_lsb,
+   * crc] */
   uint8_t cmd[8];
-  cmd[0] = STCC4_CMD_SET_AMBIENT_MSB;
-  cmd[1] = STCC4_CMD_SET_AMBIENT_LSB;
+  cmd[0] = 0xE0; /* Command MSB: set_rht_compensation */
+  cmd[1] = 0x00; /* Command LSB */
   cmd[2] = (temp_raw >> 8) & 0xFF;
   cmd[3] = temp_raw & 0xFF;
   cmd[4] = stcc4_crc8(&cmd[2], 2);
@@ -228,7 +244,15 @@ int stcc4_set_ambient(float temperature, float humidity) {
   cmd[6] = hum_raw & 0xFF;
   cmd[7] = stcc4_crc8(&cmd[5], 2);
 
-  return i2c_bus_write(I2C_ADDR_STCC4, cmd, 8);
+  int ret = i2c_bus_write(I2C_ADDR_STCC4, cmd, 8);
+  if (ret != 0) {
+    LOG_DBG("STCC4 set_rht_compensation failed: %d", ret);
+    return ret;
+  }
+
+  LOG_DBG("STCC4 RH/T compensation set: T=%.1f°C (%u), RH=%.1f%% (%u)",
+          (double)temperature, temp_raw, (double)humidity, hum_raw);
+  return 0;
 }
 
 int stcc4_set_pressure(uint16_t pressure_hpa) {
@@ -236,40 +260,43 @@ int stcc4_set_pressure(uint16_t pressure_hpa) {
     return -ENODEV;
   }
 
-  /* Command for setting reference pressure (if supported) */
-  /* Note: STCC4 documentation often groups T/H/P.
-     If a dedicated command isn't clear, we can use the T/H command
-     or this assumed command code for similar sensors.
-     We will use 0x2195 which is common for Sensirion pressure updates */
-  /* If STCC4 doesn't support this, we rely on the T/H compensation */
-
-  uint8_t cmd[5];
-  cmd[0] = 0x21; /* MSB */
-  cmd[1] = 0x95; /* LSB for set ref pressure? Or check manual. */
-  /* Actually, STCC4 datasheet typically uses 0xB5 for some settings,
-     but allow standard Sensirion pattern 0xE000 for others.
-     Given no net access, we'll try the SetAmbient logic extension
-     or assumes a dedicated command. */
-
-  /* Fallback: if specific command unknown, logging warning and returning 0
-     to avoid breaking flow, but implementing structure for future fix. */
-  /* User requested Manual Compensation logic so we MUST attempt to handle it.
+  /* STCC4 Datasheet Table 11 - Pressure Input Conversion:
+   * Input = P[Pa] / 2
+   * Example: 101300 Pa → Input = 50650
+   *
+   * Command: set_pressure_compensation (0xE016), executable during measurement
+   * Valid range: 40000 to 110000 Pa (clipped by sensor)
+   * Default: 101300 Pa, reset on power cycle
    */
 
-  /* NOTE: Some Sensirion sensors integrate pressure in the set_ambient command.
-     If not, we stick to T/H for now and log */
-  LOG_WRN("STCC4 pressure set to %u hPa (cmd pending verify)", pressure_hpa);
+  /* Convert hPa to Pascals */
+  uint32_t pressure_pa = (uint32_t)pressure_hpa * 100;
 
-  /* Proceeding with a write attempt using a plausible common command */
-  cmd[0] = 0xE0;
-  cmd[1] = 0x00; /* Common variable set? */
-  cmd[2] = (pressure_hpa >> 8) & 0xFF;
-  cmd[3] = pressure_hpa & 0xFF;
-  cmd[4] = stcc4_crc8(&cmd[2], 2);
+  /* Clamp to valid range per datasheet (40000 - 110000 Pa) */
+  if (pressure_pa < 40000) {
+    pressure_pa = 40000;
+  } else if (pressure_pa > 110000) {
+    pressure_pa = 110000;
+  }
 
-  /* Commented out Actual Write until verified to prevent bus error */
-  /* return i2c_bus_write(I2C_ADDR_STCC4, cmd, 5); */
+  /* Apply datasheet formula: Input = P[Pa] / 2 */
+  uint16_t pressure_input = (uint16_t)(pressure_pa / 2);
 
+  uint8_t cmd[5];
+  cmd[0] = 0xE0; /* Command MSB: set_pressure_compensation */
+  cmd[1] = 0x16; /* Command LSB per datasheet */
+  cmd[2] = (pressure_input >> 8) & 0xFF; /* Pressure MSB */
+  cmd[3] = pressure_input & 0xFF;        /* Pressure LSB */
+  cmd[4] = stcc4_crc8(&cmd[2], 2);       /* CRC of pressure bytes */
+
+  int ret = i2c_bus_write(I2C_ADDR_STCC4, cmd, 5);
+  if (ret != 0) {
+    LOG_DBG("STCC4 set_pressure_compensation failed: %d", ret);
+    return ret;
+  }
+
+  LOG_DBG("STCC4 pressure compensation: %u hPa (%u Pa, input=%u)", pressure_hpa,
+          (uint16_t)pressure_pa, pressure_input);
   return 0;
 }
 
