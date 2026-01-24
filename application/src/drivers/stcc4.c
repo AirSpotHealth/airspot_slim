@@ -43,6 +43,10 @@ LOG_MODULE_REGISTER(stcc4, LOG_LEVEL_DBG);
 #define STCC4_CMD_EXIT_SLEEP 0x00      /* Wake up: single byte 0x00 */
 #define STCC4_CMD_CONDITIONING_MSB 0x29
 #define STCC4_CMD_CONDITIONING_LSB 0xBC /* Conditioning: 0x29BC */
+#define STCC4_CMD_ENABLE_TESTING_MSB 0x3F
+#define STCC4_CMD_ENABLE_TESTING_LSB 0xBC /* Enable testing mode: 0x3FBC */
+#define STCC4_CMD_DISABLE_TESTING_MSB 0x3F
+#define STCC4_CMD_DISABLE_TESTING_LSB 0x3D /* Disable testing mode: 0x3F3D */
 
 /* CRC polynomial for Sensirion sensors */
 #define STCC4_CRC_POLYNOMIAL 0x31
@@ -54,10 +58,14 @@ LOG_MODULE_REGISTER(stcc4, LOG_LEVEL_DBG);
 #define STCC4_CONDITIONING_TIME_MS 22000 /* Conditioning cycle 22 seconds */
 #define STCC4_SLEEP_ENTER_TIME_MS 1      /* Time for sleep command to execute */
 #define STCC4_SLEEP_EXIT_TIME_MS 5       /* Time to wake from sleep */
+#define STCC4_STOP_TIME_MS 1200          /* Stop command execution time */
+#define STCC4_READ_RETRY_DELAY_MS 150    /* Retry delay when data not ready */
+#define STCC4_READ_RETRY_COUNT 2         /* Additional retries after first */
 
 static bool initialized = false;
 static stcc4_data_t last_data = {.co2_ppm = 0, .valid = false};
 static stcc4_mode_t current_mode = STCC4_MODE_SINGLE_SHOT;
+static int64_t continuous_start_ms = 0;
 
 /* CRC-8 calculation (same as SHT40) */
 static uint8_t stcc4_crc8(const uint8_t *data, size_t len) {
@@ -131,6 +139,7 @@ int stcc4_start_continuous(void) {
                             STCC4_CMD_START_CONTINUOUS_LSB);
   if (ret == 0) {
     current_mode = STCC4_MODE_CONTINUOUS;
+    continuous_start_ms = k_uptime_get();
     LOG_INF("STCC4 continuous mode started");
   }
   return ret;
@@ -144,6 +153,8 @@ int stcc4_stop(void) {
   int ret = stcc4_write_cmd(STCC4_CMD_STOP_MSB, STCC4_CMD_STOP_LSB);
   if (ret == 0) {
     current_mode = STCC4_MODE_SINGLE_SHOT;
+    continuous_start_ms = 0;
+    k_msleep(STCC4_STOP_TIME_MS);
     LOG_INF("STCC4 measurement stopped");
   }
   return ret;
@@ -173,6 +184,14 @@ int stcc4_read(stcc4_data_t *data) {
     return -EINVAL;
   }
 
+  /* Ensure continuous mode has had time to produce data */
+  if (current_mode == STCC4_MODE_CONTINUOUS && continuous_start_ms > 0) {
+    int64_t elapsed = k_uptime_get() - continuous_start_ms;
+    if (elapsed < STCC4_MEASUREMENT_INTERVAL_MS) {
+      k_msleep(STCC4_MEASUREMENT_INTERVAL_MS - (int32_t)elapsed);
+    }
+  }
+
   /* Send read measurement command */
   int ret = stcc4_write_cmd(STCC4_CMD_READ_MEASUREMENT_MSB,
                             STCC4_CMD_READ_MEASUREMENT_LSB);
@@ -182,30 +201,51 @@ int stcc4_read(stcc4_data_t *data) {
 
   k_msleep(1);
 
-  /* Read 9 bytes: CO2 (2 + CRC) + Temp (2 + CRC) + Status (2 + CRC) */
-  uint8_t raw[9];
-  ret = i2c_bus_read(I2C_ADDR_STCC4, raw, 9);
+  /* Read 12 bytes: CO2 (2 + CRC) + Temp (2 + CRC) + RH (2 + CRC) + Status (2 + CRC) */
+  uint8_t raw[12];
+  for (int attempt = 0; attempt <= STCC4_READ_RETRY_COUNT; attempt++) {
+    ret = i2c_bus_read(I2C_ADDR_STCC4, raw, sizeof(raw));
+    if (ret == 0) {
+      /* Verify CRC for each word */
+      if (stcc4_crc8(&raw[0], 2) != raw[2]) {
+        LOG_WRN("STCC4 CO2 CRC mismatch");
+        ret = -EIO;
+      } else if (stcc4_crc8(&raw[3], 2) != raw[5]) {
+        LOG_WRN("STCC4 temperature CRC mismatch");
+        ret = -EIO;
+      } else if (stcc4_crc8(&raw[6], 2) != raw[8]) {
+        LOG_WRN("STCC4 humidity CRC mismatch");
+        ret = -EIO;
+      } else if (stcc4_crc8(&raw[9], 2) != raw[11]) {
+        LOG_WRN("STCC4 status CRC mismatch");
+        ret = -EIO;
+      }
+
+      if (ret == 0) {
+        break;
+      }
+    }
+
+    if (attempt < STCC4_READ_RETRY_COUNT) {
+      k_msleep(STCC4_READ_RETRY_DELAY_MS);
+    }
+  }
+
   if (ret) {
     return ret;
   }
 
-  /* Verify CRC for CO2 value */
-  if (stcc4_crc8(&raw[0], 2) != raw[2]) {
-    LOG_WRN("STCC4 CO2 CRC mismatch");
-    return -EIO;
-  }
-
   /* Extract CO2 value */
   uint16_t co2_raw = (raw[0] << 8) | raw[1];
+  uint16_t temp_raw = (raw[3] << 8) | raw[4];
+  uint16_t rh_raw = (raw[6] << 8) | raw[7];
+  uint16_t status_raw = (raw[9] << 8) | raw[10];
 
   data->co2_ppm = co2_raw;
+  data->temperature = -45.0f + 175.0f * ((float)temp_raw / 65535.0f);
+  data->humidity = -6.0f + 125.0f * ((float)rh_raw / 65535.0f);
+  data->status = status_raw;
   data->valid = true;
-
-  /* Temperature from STCC4 (if available) */
-  if (stcc4_crc8(&raw[3], 2) == raw[5]) {
-    uint16_t temp_raw = (raw[3] << 8) | raw[4];
-    data->temperature = -45.0f + 175.0f * ((float)temp_raw / 65535.0f);
-  }
 
   last_data = *data;
 
@@ -373,4 +413,30 @@ int stcc4_perform_conditioning(void) {
 
   LOG_INF("STCC4 conditioning complete");
   return 0;
+}
+
+int stcc4_enable_testing_mode(void) {
+  if (!initialized) {
+    return -ENODEV;
+  }
+
+  int ret = stcc4_write_cmd(STCC4_CMD_ENABLE_TESTING_MSB,
+                            STCC4_CMD_ENABLE_TESTING_LSB);
+  if (ret == 0) {
+    LOG_INF("STCC4 testing mode enabled (ASC paused)");
+  }
+  return ret;
+}
+
+int stcc4_disable_testing_mode(void) {
+  if (!initialized) {
+    return -ENODEV;
+  }
+
+  int ret = stcc4_write_cmd(STCC4_CMD_DISABLE_TESTING_MSB,
+                            STCC4_CMD_DISABLE_TESTING_LSB);
+  if (ret == 0) {
+    LOG_INF("STCC4 testing mode disabled (ASC active)");
+  }
+  return ret;
 }

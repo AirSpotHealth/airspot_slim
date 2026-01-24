@@ -35,15 +35,20 @@ extern "C" {
 #define CMD_SET_DEVICE_NAME 0x0A
 #define CMD_GET_CURRENT_HALF_PAGE 0x0B /* History: get current write position */
 #define CMD_HISTORY_REQUEST 0x0C       /* History: request data for half-page */
-#define CMD_CALIB_START 0x0D           /* Start calibration (conditioning) */
+#define CMD_CALIB_START 0x0D           /* Start calibration (legacy behavior) */
+#define CMD_RECALI_COUNTDOWN 0x0F      /* Calibration countdown */
 #define CMD_FIND_MY_AIRSPOT 0x10       /* Blink LEDs */
+#define CMD_SET_SELF_CALIB 0x11        /* Enable/disable ASC */
 #define CMD_GET_HARDWARE_VERSION 0x12
 #define CMD_GET_SOFTWARE_VERSION 0x13
 #define CMD_GET_BATTERY_LEVEL 0x20
 #define CMD_REFRESH_CO2_VALUE 0x21
 #define CMD_SET_DND 0x22
 #define CMD_RESET_SENSOR 0x24        /* Reset CO2 sensor */
+#define CMD_GET_ASC_COUNT 0x25        /* Get last correction value */
 #define CMD_RESET_DEVICE 0x27
+#define CMD_SET_ASC_CHECK_DURATION 0x29 /* Set ASC check duration */
+#define CMD_GET_ASC_DAY_COUNT 0x2A      /* Get ASC day count */
 #define CMD_GET_SENSOR_VARIANT 0x2B  /* Get CO2 sensor type */
 #define CMD_GET_SENSOR_DETAILS 0x30  /* Get sensor details */
 #define CMD_SET_CO2_SCALE_FACTOR 0x31 /* Set CO2 scale factor (stub) */
@@ -131,6 +136,7 @@ void protocol_send_erase_done(void);
  * Handles reading from flash and sending history data.
  */
 void protocol_process_history(void);
+
 
 #ifdef __cplusplus
 }

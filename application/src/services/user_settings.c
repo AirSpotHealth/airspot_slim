@@ -29,7 +29,11 @@ static user_settings_t settings = {
     .dnd_end_hour = 7,
     .dnd_end_minute = 0,
     .buzzer_enabled = 0,  /* Stub */
-    .vibrator_enabled = 0 /* Stub */
+  .vibrator_enabled = 0, /* Stub */
+  .co2_correction = 0,
+  .calib_target = 426,
+  .auto_calibrate = 0,
+  .asc_day_count = 0
 };
 
 static bool initialized = false;
@@ -86,6 +90,30 @@ static int settings_set(const char *name, size_t len, settings_read_cb read_cb,
   if (settings_name_steq(name, "vibrator", &next) && !next) {
     rc = read_cb(cb_arg, &settings.vibrator_enabled,
                  sizeof(settings.vibrator_enabled));
+    return (rc >= 0) ? 0 : rc;
+  }
+
+  if (settings_name_steq(name, "co2_cc", &next) && !next) {
+    rc = read_cb(cb_arg, &settings.co2_correction,
+                 sizeof(settings.co2_correction));
+    return (rc >= 0) ? 0 : rc;
+  }
+
+  if (settings_name_steq(name, "calib_target", &next) && !next) {
+    rc = read_cb(cb_arg, &settings.calib_target,
+                 sizeof(settings.calib_target));
+    return (rc >= 0) ? 0 : rc;
+  }
+
+  if (settings_name_steq(name, "auto_calib", &next) && !next) {
+    rc = read_cb(cb_arg, &settings.auto_calibrate,
+                 sizeof(settings.auto_calibrate));
+    return (rc >= 0) ? 0 : rc;
+  }
+
+  if (settings_name_steq(name, "asc_day", &next) && !next) {
+    rc = read_cb(cb_arg, &settings.asc_day_count,
+                 sizeof(settings.asc_day_count));
     return (rc >= 0) ? 0 : rc;
   }
 
@@ -216,6 +244,54 @@ int user_settings_set_vibrator(uint8_t enabled) {
                            sizeof(settings.vibrator_enabled));
 }
 
+int16_t user_settings_get_co2_correction(void) {
+  return settings.co2_correction;
+}
+
+int user_settings_set_co2_correction(int16_t correction) {
+  settings.co2_correction = correction;
+  return settings_save_one(SETTINGS_KEY "/co2_cc", &settings.co2_correction,
+                           sizeof(settings.co2_correction));
+}
+
+uint16_t user_settings_get_calib_target(void) { return settings.calib_target; }
+
+int user_settings_set_calib_target(uint16_t target) {
+  settings.calib_target = target;
+  return settings_save_one(SETTINGS_KEY "/calib_target", &settings.calib_target,
+                           sizeof(settings.calib_target));
+}
+
+uint8_t user_settings_get_auto_calibrate(void) {
+  return settings.auto_calibrate;
+}
+
+int user_settings_set_auto_calibrate(uint8_t enabled) {
+  settings.auto_calibrate = enabled ? 1 : 0;
+  return settings_save_one(SETTINGS_KEY "/auto_calib", &settings.auto_calibrate,
+                           sizeof(settings.auto_calibrate));
+}
+
+uint8_t user_settings_get_asc_day_count(void) {
+  return settings.asc_day_count;
+}
+
+int user_settings_set_asc_day_count(uint8_t day_count) {
+  settings.asc_day_count = day_count;
+  return settings_save_one(SETTINGS_KEY "/asc_day", &settings.asc_day_count,
+                           sizeof(settings.asc_day_count));
+}
+
+uint16_t user_settings_apply_co2_correction(uint16_t raw_ppm) {
+  int32_t corrected = (int32_t)raw_ppm + settings.co2_correction;
+  if (corrected < 0) {
+    corrected = 0;
+  } else if (corrected > 65535) {
+    corrected = 65535;
+  }
+  return (uint16_t)corrected;
+}
+
 /* Time management functions */
 
 void user_settings_set_timebase(uint32_t time) {
@@ -260,6 +336,10 @@ int user_settings_factory_reset(void) {
   settings.power_mode = 1;      /* Normal mode */
   settings.buzzer_enabled = 1;  /* On by default */
   settings.vibrator_enabled = 1; /* On by default */
+  settings.calib_target = 426;
+  settings.co2_correction = 0;
+  settings.auto_calibrate = 0;
+  settings.asc_day_count = 0;
 
   /* Clear time */
   time_base = 0;
@@ -294,6 +374,26 @@ int user_settings_factory_reset(void) {
   rc = settings_delete(SETTINGS_KEY "/vibrator");
   if (rc && rc != -ENOENT) {
     LOG_WRN("Failed to delete vibrator: %d", rc);
+  }
+
+  rc = settings_delete(SETTINGS_KEY "/co2_cc");
+  if (rc && rc != -ENOENT) {
+    LOG_WRN("Failed to delete co2_cc: %d", rc);
+  }
+
+  rc = settings_delete(SETTINGS_KEY "/calib_target");
+  if (rc && rc != -ENOENT) {
+    LOG_WRN("Failed to delete calib_target: %d", rc);
+  }
+
+  rc = settings_delete(SETTINGS_KEY "/auto_calib");
+  if (rc && rc != -ENOENT) {
+    LOG_WRN("Failed to delete auto_calib: %d", rc);
+  }
+
+  rc = settings_delete(SETTINGS_KEY "/asc_day");
+  if (rc && rc != -ENOENT) {
+    LOG_WRN("Failed to delete asc_day: %d", rc);
   }
 
   LOG_INF("Factory reset complete - settings cleared");

@@ -34,6 +34,11 @@ typedef struct {
   /* Stub settings (no buzzer/vibrator on Slim) */
   uint8_t buzzer_enabled;
   uint8_t vibrator_enabled;
+  /* Calibration settings (matches legacy behavior) */
+  int16_t co2_correction; /* CC value (ppm) */
+  uint16_t calib_target;  /* Calibration target (ppm) */
+  uint8_t auto_calibrate; /* ASC enabled (0/1) */
+  uint8_t asc_day_count;  /* ASC day count (0-255) */
 } user_settings_t;
 
 /**
@@ -140,6 +145,51 @@ uint8_t user_settings_get_vibrator(void);
  * @brief Set vibrator state (stub - saves but no hardware effect)
  */
 int user_settings_set_vibrator(uint8_t enabled);
+
+/**
+ * @brief Get CO2 correction (CC value)
+ */
+int16_t user_settings_get_co2_correction(void);
+
+/**
+ * @brief Set CO2 correction (CC value)
+ */
+int user_settings_set_co2_correction(int16_t correction);
+
+/**
+ * @brief Get calibration target (ppm)
+ */
+uint16_t user_settings_get_calib_target(void);
+
+/**
+ * @brief Set calibration target (ppm)
+ */
+int user_settings_set_calib_target(uint16_t target);
+
+/**
+ * @brief Get auto-calibration (ASC) enable flag
+ */
+uint8_t user_settings_get_auto_calibrate(void);
+
+/**
+ * @brief Set auto-calibration (ASC) enable flag
+ */
+int user_settings_set_auto_calibrate(uint8_t enabled);
+
+/**
+ * @brief Get ASC day count
+ */
+uint8_t user_settings_get_asc_day_count(void);
+
+/**
+ * @brief Set ASC day count
+ */
+int user_settings_set_asc_day_count(uint8_t day_count);
+
+/**
+ * @brief Apply CO2 correction with clamp
+ */
+uint16_t user_settings_apply_co2_correction(uint16_t raw_ppm);
 
 /**
  * @brief Factory reset - clear all user settings to defaults

@@ -15,11 +15,13 @@
 #include <zephyr/sys/reboot.h>
 
 #include <drivers/led_driver.h>
+#include <drivers/stcc4.h>
 
 #include <airspot/version.h>
 #include <services/airspot_nus.h>
 #include <services/ble_mode_service.h>
 #include <services/ble_service.h>
+#include <services/calibration_service.h>
 #include <services/data_log.h>
 #include <services/factory_test.h>
 #include <services/power_manager.h>
@@ -37,6 +39,10 @@ static uint8_t rx_frame_idx = 0;
 /* Hardware/Software version strings */
 #define HARDWARE_VERSION "SLIM_1.0"
 #define SOFTWARE_VERSION AIRSPOT_FIRMWARE_VERSION_STRING
+
+static void protocol_calib_on_start(void);
+static void protocol_calib_on_countdown(uint16_t seconds_remaining);
+static void protocol_calib_on_done(int16_t correction);
 
 /* Forward declarations */
 static void frame_received_handler(const uint8_t *frame, uint16_t len);
@@ -95,6 +101,13 @@ int protocol_init(void)
     return ret;
   }
 
+  calibration_callbacks_t calib_cb = {
+      .on_start = protocol_calib_on_start,
+      .on_countdown = protocol_calib_on_countdown,
+      .on_done = protocol_calib_on_done,
+  };
+  calibration_service_init(&calib_cb);
+
   LOG_INF("Protocol handler initialized");
   return 0;
 }
@@ -137,6 +150,68 @@ static void send_frame(const uint8_t *frame, uint16_t len)
   }
 }
 
+static uint16_t apply_co2_correction(uint16_t raw_ppm)
+{
+  return user_settings_apply_co2_correction(raw_ppm);
+}
+
+static void protocol_send_recali_start(void)
+{
+  uint8_t tx_frame[8] = {0};
+  tx_frame[0] = CMD_FIRST_BYTE;
+  tx_frame[1] = CMD_SECOND_BYTE;
+  tx_frame[2] = CMD_CALIB_START;
+  tx_frame[3] = 0x01;
+  tx_frame[4] = 0x02; /* Calibration started */
+  set_frame_checksum(tx_frame, 6);
+  send_frame(tx_frame, 6);
+}
+
+static void protocol_send_recali_done(int16_t cc)
+{
+  uint8_t tx_frame[8] = {0};
+  uint16_t cc_abs = (uint16_t)(cc < 0 ? -cc : cc);
+
+  tx_frame[0] = CMD_FIRST_BYTE;
+  tx_frame[1] = CMD_SECOND_BYTE;
+  tx_frame[2] = CMD_CALIB_START;
+  tx_frame[3] = 0x01;
+  tx_frame[4] = (uint8_t)(cc_abs >> 8);
+  tx_frame[5] = (uint8_t)(cc_abs & 0xFF);
+  tx_frame[6] = (cc < 0) ? 0x01 : 0x00;
+
+  set_frame_checksum(tx_frame, 8);
+  send_frame(tx_frame, 8);
+}
+
+static void protocol_send_recali_countdown(uint16_t countdown)
+{
+  uint8_t tx_frame[8] = {0};
+  tx_frame[0] = CMD_FIRST_BYTE;
+  tx_frame[1] = CMD_SECOND_BYTE;
+  tx_frame[2] = CMD_RECALI_COUNTDOWN;
+  tx_frame[3] = 0x01;
+  tx_frame[4] = (uint8_t)(countdown >> 8);
+  tx_frame[5] = (uint8_t)(countdown & 0xFF);
+  set_frame_checksum(tx_frame, 7);
+  send_frame(tx_frame, 7);
+}
+
+static void protocol_calib_on_start(void)
+{
+  protocol_send_recali_start();
+}
+
+static void protocol_calib_on_countdown(uint16_t seconds_remaining)
+{
+  protocol_send_recali_countdown(seconds_remaining);
+}
+
+static void protocol_calib_on_done(int16_t correction)
+{
+  protocol_send_recali_done(correction);
+}
+
 /**
  * @brief Handle a complete received frame
  */
@@ -159,6 +234,11 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len)
 
   case CMD_REFRESH_CO2_VALUE:
     /* Trigger immediate measurement then send */
+    if (calibration_service_is_active())
+    {
+      LOG_WRN("Calibration active, skipping immediate measurement");
+      break;
+    }
     sensor_manager_measure_now();
     protocol_send_realtime_co2();
     break;
@@ -248,12 +328,13 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len)
       tx_frame[offset++] = (uint8_t)(pressure_mbar >> 8);
       tx_frame[offset++] = (uint8_t)(pressure_mbar & 0xFF);
 
-      /* ASC Enabled (1 byte) - STCC4 doesn't support this */
-      tx_frame[offset++] = 0x00;
+      /* ASC Enabled (1 byte) */
+      tx_frame[offset++] = user_settings_get_auto_calibrate();
 
       /* ASC Target (uint16_t, 2 bytes) */
-      tx_frame[offset++] = 0x00;
-      tx_frame[offset++] = 0x00;
+      uint16_t calib_target = user_settings_get_calib_target();
+      tx_frame[offset++] = (uint8_t)(calib_target >> 8);
+      tx_frame[offset++] = (uint8_t)(calib_target & 0xFF);
 
       /* Serial Number (6 bytes) - placeholder for Slim */
       tx_frame[offset++] = 'S';
@@ -549,21 +630,79 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len)
     break;
 
   case CMD_CALIB_START:
-    /* Calibration - STCC4 doesn't support FRC, trigger conditioning instead */
-    LOG_INF("Calibration request - triggering STCC4 conditioning cycle");
+    /* Legacy math-based calibration (same as old firmware) */
     {
+      uint16_t target = user_settings_get_calib_target();
+
+      if (len >= 6)
+      {
+        target = (uint16_t)((frame[4] << 8) | frame[5]);
+      }
+
+      LOG_INF("Calibration request - target=%u ppm", target);
+      (void)calibration_service_start(target);
+    }
+    break;
+
+  case CMD_SET_SELF_CALIB:
+    /* Toggle ASC (mapped to STCC4 testing mode) */
+    if (len >= 5)
+    {
+      uint8_t enabled = frame[4] ? 1 : 0;
+      if (enabled) {
+        (void)stcc4_disable_testing_mode();
+      } else {
+        (void)stcc4_enable_testing_mode();
+      }
+      user_settings_set_auto_calibrate(enabled);
+
       uint8_t tx_frame[8] = {0};
       tx_frame[0] = CMD_FIRST_BYTE;
       tx_frame[1] = CMD_SECOND_BYTE;
-      tx_frame[2] = CMD_CALIB_START;
+      tx_frame[2] = CMD_SET_SELF_CALIB;
       tx_frame[3] = 0x01;
-      tx_frame[4] = 0x01; /* ACK - conditioning started */
+      tx_frame[4] = 0x02; /* success */
       set_frame_checksum(tx_frame, 6);
       send_frame(tx_frame, 6);
     }
-    /* Note: conditioning takes 22 seconds, runs in background via sensor_manager */
-    sensor_manager_reset_co2_sensor();
     break;
+
+  case CMD_GET_ASC_COUNT:
+    /* Return last correction value (legacy behavior) */
+    {
+      int16_t correction = user_settings_get_co2_correction();
+      uint16_t correction_abs = (uint16_t)(correction < 0 ? -correction : correction);
+
+      uint8_t tx_frame[8] = {0};
+      tx_frame[0] = CMD_FIRST_BYTE;
+      tx_frame[1] = CMD_SECOND_BYTE;
+      tx_frame[2] = CMD_GET_ASC_COUNT;
+      tx_frame[3] = 0x01; /* legacy length */
+      tx_frame[4] = (uint8_t)(correction_abs >> 8);
+      tx_frame[5] = (uint8_t)(correction_abs & 0xFF);
+      tx_frame[6] = (correction < 0) ? 0x01 : 0x00;
+      set_frame_checksum(tx_frame, 8);
+      send_frame(tx_frame, 8);
+    }
+    break;
+
+  case CMD_SET_ASC_CHECK_DURATION:
+    /* Not implemented for STCC4; ignore for compatibility */
+    LOG_INF("Set ASC check duration (ignored)");
+    break;
+
+  case CMD_GET_ASC_DAY_COUNT:
+  {
+    uint8_t tx_frame[8] = {0};
+    tx_frame[0] = CMD_FIRST_BYTE;
+    tx_frame[1] = CMD_SECOND_BYTE;
+    tx_frame[2] = CMD_GET_ASC_DAY_COUNT;
+    tx_frame[3] = 0x01;
+    tx_frame[4] = user_settings_get_asc_day_count();
+    set_frame_checksum(tx_frame, 6);
+    send_frame(tx_frame, 6);
+  }
+  break;
 
   case CMD_GET_SENSOR_VARIANT:
     /* Return sensor variant - 0x02 for STCC4 (thermal conductivity) */
@@ -632,9 +771,10 @@ void protocol_send_realtime_co2(void)
     tx_frame[6] = (uint8_t)(time >> 8);
     tx_frame[7] = (uint8_t)(time);
 
-    /* CO2 value (16-bit, big-endian) */
-    tx_frame[8] = (uint8_t)(data.co2_ppm >> 8);
-    tx_frame[9] = (uint8_t)(data.co2_ppm & 0xFF);
+    /* CO2 value (16-bit, big-endian) - apply calibration correction */
+    uint16_t corrected = apply_co2_correction(data.co2_ppm);
+    tx_frame[8] = (uint8_t)(corrected >> 8);
+    tx_frame[9] = (uint8_t)(corrected & 0xFF);
   }
   else
   {
@@ -726,7 +866,7 @@ void protocol_send_device_state(void)
 
   /* Screen/Display settings - N/A for Slim */
   tx_frame[offset++] = 0; /* screen const on */
-  tx_frame[offset++] = 0; /* auto calibrate - STCC4 doesn't support ASC */
+  tx_frame[offset++] = user_settings_get_auto_calibrate();
 
   /* DND settings */
   tx_frame[offset++] = 0; /* dnd mode off */
@@ -736,7 +876,7 @@ void protocol_send_device_state(void)
   tx_frame[offset++] = 0; /* dnd end minute */
 
   /* Calibration target */
-  uint16_t calib_target = 400;
+  uint16_t calib_target = user_settings_get_calib_target();
   tx_frame[offset++] = (uint8_t)(calib_target >> 8);
   tx_frame[offset++] = (uint8_t)(calib_target & 0xFF);
 

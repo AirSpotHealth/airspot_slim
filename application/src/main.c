@@ -27,6 +27,7 @@
 /* Service includes */
 #include <services/ble_mode_service.h>
 #include <services/ble_service.h>
+#include <services/calibration_service.h>
 #include <services/data_log.h>
 #include <services/factory_test.h>
 #include <services/led_indicator.h>
@@ -202,6 +203,10 @@ static void button_event_handler(button_event_t event) {
       LOG_INF("Second press detected - checking for power-off hold");
       power_manager_on_button_pressed();
     } else {
+      if (calibration_service_is_active()) {
+        LOG_INF("Calibration active - skipping manual measurement");
+        break;
+      }
       /* Check battery state first */
       if (battery_is_low() || battery_is_critical()) {
         /* Low battery mode - show fading red for 3 seconds */
@@ -264,7 +269,12 @@ static void sensor_data_callback(const sensor_data_t *data) {
     return;
   }
 
-  LOG_INF("CO2=%uppm T=%.1f°C H=%.0f%% P=%.0fhPa Batt=%u%%%s", data->co2_ppm,
+  /* Feed calibration accumulator with raw value */
+  calibration_service_process_measurement(data->co2_ppm);
+
+  uint16_t corrected_co2 = user_settings_apply_co2_correction(data->co2_ppm);
+
+  LOG_INF("CO2=%uppm T=%.1f°C H=%.0f%% P=%.0fhPa Batt=%u%%%s", corrected_co2,
           (double)data->temperature_c, (double)data->humidity_rh,
           (double)data->pressure_hpa, data->battery_percent,
           data->is_charging ? " [CHG]" : "");
@@ -308,7 +318,8 @@ static void store_co2_data(void) {
   }
 
   /* Store record */
-  int ret = data_log_store_record(timestamp, data.co2_ppm, RECORD_TYPE_CO2);
+  uint16_t corrected = user_settings_apply_co2_correction(data.co2_ppm);
+  int ret = data_log_store_record(timestamp, corrected, RECORD_TYPE_CO2);
   if (ret != 0) {
     LOG_ERR("Failed to store CO2 record: %d", ret);
   } else {

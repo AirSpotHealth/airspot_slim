@@ -31,6 +31,8 @@ typedef enum {
 typedef struct {
   uint16_t co2_ppm;  /* CO2 concentration in ppm */
   float temperature; /* Temperature from STCC4 (if available) */
+  float humidity;    /* Relative humidity from STCC4 (if available) */
+  uint16_t status;   /* Sensor status bits */
   bool valid;        /* True if measurement is valid */
 } stcc4_data_t;
 
@@ -156,6 +158,25 @@ int stcc4_exit_sleep_mode(void);
  * @return 0 on success, negative errno on failure
  */
 int stcc4_perform_conditioning(void);
+
+/**
+ * @brief Enable testing mode (pauses ASC updates)
+ *
+ * This pauses the STCC4 ASC algorithm and prevents updates to ASC state.
+ * Use this to disable auto-calibration when custom calibration is used.
+ *
+ * @return 0 on success, negative errno on failure
+ */
+int stcc4_enable_testing_mode(void);
+
+/**
+ * @brief Disable testing mode (resumes ASC updates)
+ *
+ * This resumes the STCC4 ASC algorithm and re-enables auto-calibration.
+ *
+ * @return 0 on success, negative errno on failure
+ */
+int stcc4_disable_testing_mode(void);
 
 #ifdef __cplusplus
 }

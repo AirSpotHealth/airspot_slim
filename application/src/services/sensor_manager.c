@@ -16,6 +16,7 @@
 #include <drivers/qi_charger.h>
 #include <drivers/sht40.h>
 #include <drivers/stcc4.h>
+#include <services/user_settings.h>
 #include <services/ble_service.h>
 #include <services/sensor_manager.h>
 
@@ -58,6 +59,23 @@ static sensor_data_callback_t user_callback = NULL;
 /* Forward declaration */
 static void sensor_work_handler(struct k_work *work);
 
+static void apply_stcc4_asc_setting(void) {
+  uint8_t asc_enabled = user_settings_get_auto_calibrate();
+  int ret;
+
+  if (asc_enabled) {
+    ret = stcc4_disable_testing_mode();
+    if (ret) {
+      LOG_WRN("STCC4 ASC enable failed: %d", ret);
+    }
+  } else {
+    ret = stcc4_enable_testing_mode();
+    if (ret) {
+      LOG_WRN("STCC4 ASC disable failed: %d", ret);
+    }
+  }
+}
+
 int sensor_manager_init(void) {
   int ret;
 
@@ -90,6 +108,9 @@ int sensor_manager_init(void) {
     LOG_ERR("STCC4 init failed: %d", ret);
     return ret;
   }
+
+  /* Apply ASC setting on startup (ASC enabled by default in sensor) */
+  apply_stcc4_asc_setting();
 
   /* Default to single-shot mode for power saving.
    * Power mode can be changed via sensor_manager_set_power_mode().
@@ -430,5 +451,9 @@ int sensor_manager_reset_co2_sensor(void) {
 
   /* Stop continuous mode if active */
   /* Re-run init sequence */
-  return stcc4_init();
+  int ret = stcc4_init();
+  if (ret == 0) {
+    apply_stcc4_asc_setting();
+  }
+  return ret;
 }
