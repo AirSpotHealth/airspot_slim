@@ -192,6 +192,11 @@ static void qi_charger_callback(bool is_charging) {
 
 /* Button event handler with power gesture and LED indicator support */
 static void button_event_handler(button_event_t event) {
+  if (calibration_service_is_active()) {
+    LOG_INF("Calibration active - ignoring button event");
+    return;
+  }
+
   int64_t now = k_uptime_get();
 
   switch (event) {
@@ -203,10 +208,6 @@ static void button_event_handler(button_event_t event) {
       LOG_INF("Second press detected - checking for power-off hold");
       power_manager_on_button_pressed();
     } else {
-      if (calibration_service_is_active()) {
-        LOG_INF("Calibration active - skipping manual measurement");
-        break;
-      }
       /* Check battery state first */
       if (battery_is_low() || battery_is_critical()) {
         /* Low battery mode - show fading red for 3 seconds */
@@ -438,6 +439,8 @@ int main(void) {
     LOG_WRN("User settings init failed: %d (using defaults)", ret);
   } else {
     LOG_INF("User settings initialized");
+    LOG_INF("CO2 calibration correction loaded: %d ppm",
+            user_settings_get_co2_correction());
   }
 
   /* Initialize Factory Test Service */

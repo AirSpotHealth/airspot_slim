@@ -18,6 +18,7 @@
 #include <drivers/stcc4.h>
 
 #include <airspot/version.h>
+#include <services/led_indicator.h>
 #include <services/airspot_nus.h>
 #include <services/ble_mode_service.h>
 #include <services/ble_service.h>
@@ -199,6 +200,7 @@ static void protocol_send_recali_countdown(uint16_t countdown)
 
 static void protocol_calib_on_start(void)
 {
+  led_indicator_show_calibration(true);
   protocol_send_recali_start();
 }
 
@@ -210,6 +212,7 @@ static void protocol_calib_on_countdown(uint16_t seconds_remaining)
 static void protocol_calib_on_done(int16_t correction)
 {
   protocol_send_recali_done(correction);
+  led_indicator_show_calibration(false);
 }
 
 /**
@@ -480,7 +483,18 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len)
   case CMD_RESET_SENSOR:
     /* Reset CO2 sensor (STCC4) */
     LOG_INF("Reset sensor command received");
-    sensor_manager_reset_co2_sensor();
+    {
+      int ret = sensor_manager_reset_co2_sensor();
+      if (ret) {
+        LOG_WRN("CO2 sensor reset failed: %d", ret);
+      } else {
+        /* Trigger a measurement to verify sensor is responding */
+        ret = sensor_manager_measure_now();
+        if (ret) {
+          LOG_WRN("Post-reset measurement failed: %d", ret);
+        }
+      }
+    }
     /* ACK with same command */
     {
       uint8_t tx_frame[8] = {0};

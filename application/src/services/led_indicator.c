@@ -25,6 +25,7 @@ typedef struct {
   led_pattern_t pattern;
   led_color_t color;
   uint32_t period_ms;
+  uint32_t flash_on_ms; /* On-time for flash pattern (0 = 50%) */
   uint32_t duration_ms;
   int64_t start_time;
   bool continuous;    /* If true, pattern runs until stopped */
@@ -196,12 +197,16 @@ static void pattern_work_handler(struct k_work *work) {
   case LED_PATTERN_FLASH: {
     /* Calculate flash state based on elapsed time */
     uint32_t phase = (elapsed % state.period_ms);
-    bool led_on = phase < (state.period_ms / 2);
+    uint32_t on_time = state.flash_on_ms > 0 ? state.flash_on_ms
+                                            : (state.period_ms / 2);
+    if (on_time > state.period_ms) {
+      on_time = state.period_ms;
+    }
+    bool led_on = phase < on_time;
     set_color(state.color, led_on ? 100 : 0);
 
     /* Schedule next toggle */
-    uint32_t next_ms =
-        led_on ? (state.period_ms / 2 - phase) : (state.period_ms - phase);
+    uint32_t next_ms = led_on ? (on_time - phase) : (state.period_ms - phase);
     if (next_ms < 10)
       next_ms = 10; /* Minimum delay */
     k_work_schedule(&pattern_work, K_MSEC(next_ms));
@@ -274,6 +279,7 @@ static void start_pattern(led_pattern_t pattern, led_color_t color,
   state.pattern = pattern;
   state.color = color;
   state.period_ms = period_ms > 0 ? period_ms : LED_FLASH_PERIOD_MS;
+  state.flash_on_ms = 0;
   state.duration_ms = duration_ms;
   state.start_time = k_uptime_get();
   state.continuous = continuous;
@@ -317,6 +323,37 @@ void led_indicator_fade(led_color_t color, uint32_t duration_ms) {
 
 void led_indicator_start_flash(led_color_t color, uint32_t period_ms) {
   start_pattern(LED_PATTERN_FLASH, color, period_ms, 0, true);
+}
+
+void led_indicator_start_flash_pulse(led_color_t color, uint32_t period_ms,
+                                     uint32_t pulse_ms) {
+  k_mutex_lock(&state_mutex, K_FOREVER);
+
+  /* Stop any existing pattern */
+  k_work_cancel_delayable(&pattern_work);
+  led_driver_all_off();
+
+  /* Set new pattern state */
+  state.pattern = LED_PATTERN_FLASH;
+  state.color = color;
+  state.period_ms = period_ms > 0 ? period_ms : LED_FLASH_PERIOD_MS;
+  state.flash_on_ms = pulse_ms;
+  state.duration_ms = 0;
+  state.start_time = k_uptime_get();
+  state.continuous = true;
+  state.brightness = 0;
+  state.fade_up = true;
+  state.sequence_phase = 0;
+  state.sequence_color2 = LED_COLOR_OFF;
+  state.sequence_duration2 = 0;
+
+  LOG_DBG("LED flash pulse: color=%d period=%u on=%u", color, period_ms,
+          pulse_ms);
+
+  /* Start immediately */
+  k_work_schedule(&pattern_work, K_NO_WAIT);
+
+  k_mutex_unlock(&state_mutex);
 }
 
 void led_indicator_start_fade(led_color_t color, uint32_t period_ms) {
@@ -408,4 +445,13 @@ void led_indicator_show_connected(uint16_t co2_ppm) {
   k_work_schedule(&pattern_work, K_NO_WAIT);
 
   k_mutex_unlock(&state_mutex);
+}
+
+void led_indicator_show_calibration(bool active) {
+  if (active) {
+    /* Short pulse every 5 seconds */
+    led_indicator_start_flash_pulse(LED_COLOR_BLUE, 5000, 200);
+  } else {
+    led_indicator_stop();
+  }
 }

@@ -146,6 +146,16 @@ void led_indicator_fade(led_color_t color, uint32_t duration_ms);
 void led_indicator_start_flash(led_color_t color, uint32_t period_ms);
 
 /**
+ * @brief Start continuous flashing with custom on-time
+ *
+ * @param color LED color to flash
+ * @param period_ms Total flash period
+ * @param pulse_ms On-time within the period
+ */
+void led_indicator_start_flash_pulse(led_color_t color, uint32_t period_ms,
+                                     uint32_t pulse_ms);
+
+/**
  * @brief Start continuous fading
  *
  * @param color LED color to fade
@@ -224,6 +234,15 @@ void led_indicator_show_pairing(void);
  * @param co2_ppm Current CO2 reading
  */
 void led_indicator_show_connected(uint16_t co2_ppm);
+
+/**
+ * @brief Show calibration indicator
+ *
+ * Short pulse every few seconds while calibration is active.
+ *
+ * @param active true to start indicator, false to stop
+ */
+void led_indicator_show_calibration(bool active);
 
 #ifdef __cplusplus
 }
