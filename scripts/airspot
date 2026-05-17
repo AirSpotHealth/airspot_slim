@@ -9,7 +9,14 @@ if [[ -n "${ZSH_VERSION}" ]]; then
 else
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fi
-export AIRSPOT_WORKSPACE="${AIRSPOT_WORKSPACE:-$(dirname "$SCRIPT_DIR")}"
+
+# Always anchor workspace to this script location so stale shell env values
+# cannot redirect builds to an old checkout path.
+resolved_workspace="$(cd "$(dirname "$SCRIPT_DIR")" && pwd -P)"
+if [[ -n "${AIRSPOT_WORKSPACE}" && "${AIRSPOT_WORKSPACE}" != "${resolved_workspace}" ]]; then
+    echo "Warning: ignoring stale AIRSPOT_WORKSPACE=${AIRSPOT_WORKSPACE}" >&2
+fi
+export AIRSPOT_WORKSPACE="${resolved_workspace}"
 export AIRSPOT_PROJECT_DIR="$AIRSPOT_WORKSPACE/application"
 export AIRSPOT_BUILD_DIR="$AIRSPOT_PROJECT_DIR/build"
 export AIRSPOT_BOARD="nrf54l15dk/nrf54l05/cpuapp"
@@ -166,12 +173,59 @@ _update_prj_conf_version() {
     fi
 }
 
-# Build command
+# True if Intel HEX programs the MCUboot primary slot (app @ 0xC000+).
+_airspot_hex_is_merged_layout() {
+    local hex_file="$1"
+    python3 - "$hex_file" <<'PY'
+import sys
+path = sys.argv[1]
+ext = 0
+for line in open(path):
+    line = line.strip()
+    if not line.startswith(":"):
+        continue
+    count = int(line[1:3], 16)
+    addr = int(line[3:7], 16)
+    typ = int(line[7:9], 16)
+    if typ == 4:
+        ext = int(line[9:9 + 4], 16) << 16
+    elif typ == 0:
+        if ext + addr + count > 0xC000:
+            sys.exit(0)
+sys.exit(1)
+PY
+}
+
+_airspot_find_merged_hex() {
+    if [ -f "$AIRSPOT_BUILD_DIR/merged.hex" ]; then
+        echo "$AIRSPOT_BUILD_DIR/merged.hex"
+    elif [ -f "$AIRSPOT_BUILD_DIR/zephyr/merged.hex" ]; then
+        echo "$AIRSPOT_BUILD_DIR/zephyr/merged.hex"
+    fi
+}
+
+_airspot_locate_signed_bin() {
+    local sysbuild_dir="$1"
+    local bin_base_name="$2"
+    if [ -f "$sysbuild_dir/application/zephyr/${bin_base_name}.signed.bin" ]; then
+        echo "$sysbuild_dir/application/zephyr/${bin_base_name}.signed.bin"
+    elif [ -f "$sysbuild_dir/application/zephyr/zephyr.signed.bin" ]; then
+        echo "$sysbuild_dir/application/zephyr/zephyr.signed.bin"
+    elif [ -f "$sysbuild_dir/app/zephyr/zephyr.signed.bin" ]; then
+        echo "$sysbuild_dir/app/zephyr/zephyr.signed.bin"
+    elif [ -f "$sysbuild_dir/zephyr/zephyr.signed.bin" ]; then
+        echo "$sysbuild_dir/zephyr/zephyr.signed.bin"
+    fi
+}
+
+# Build command (default: sysbuild + merged.hex for J-Link)
 airspot_build() {
     local version="$(_get_firmware_version)"
     local bin_base_name="airspot_slim_v${version}"
     local timestamp=$(date +"%Y%m%d_%H%M%S")
-    local do_dfu=false
+    local do_dfu_zip=false
+    local do_legacy=false
+    local do_clean=false
     local pristine=""
     
     _print_info "AirSpot Slim Firmware v${version}"
@@ -187,109 +241,78 @@ airspot_build() {
     for arg in "$@"; do
         case "$arg" in
             --clean|--pristine)
+                do_clean=true
                 pristine="--pristine"
                 ;;
             --dfu)
-                do_dfu=true
+                do_dfu_zip=true
+                ;;
+            --legacy|--no-sysbuild)
+                do_legacy=true
                 ;;
         esac
     done
+
+    if [ "$do_clean" = true ]; then
+        _print_info "Removing existing build directory for a true clean build..."
+        rm -rf "$AIRSPOT_BUILD_DIR"
+    fi
     
-    if [ "$do_dfu" = true ]; then
-        _print_info "Building with DFU support (Sysbuild + MCUboot)..."
-        
-        # Build with sysbuild enabled (creates MCUboot + signed app)
-        west build -b "$AIRSPOT_BOARD" --sysbuild $pristine
-        
+    if [ "$do_legacy" = true ]; then
+        _print_warning "Legacy build (no MCUboot) — output is NOT safe to flash on Slim."
+        _print_warning "Use sysbuild merged.hex (default build) for J-Link programming."
+        west build -b "$AIRSPOT_BOARD" --no-sysbuild $pristine
         if [ $? -ne 0 ]; then
-            _print_error "Sysbuild failed!"
+            _print_error "Build failed!"
             return 1
         fi
-        
-        _print_success "Build complete (Sysbuild)!"
-        
-        # --- Artifact Collection for DFU ---
+        _print_success "Build complete (legacy, do not flash with airspot flash)."
+        airspot_memory
+        return 0
+    fi
+
+    _print_info "Building Sysbuild (MCUboot + signed app → merged.hex)..."
+    west build -b "$AIRSPOT_BOARD" --sysbuild $pristine
+    if [ $? -ne 0 ]; then
+        _print_error "Sysbuild failed!"
+        return 1
+    fi
+
+    local merged_hex
+    merged_hex="$(_airspot_find_merged_hex)"
+    if [ -z "$merged_hex" ] || ! _airspot_hex_is_merged_layout "$merged_hex"; then
+        _print_error "merged.hex missing or invalid (expected app data at 0xC000+)."
+        return 1
+    fi
+
+    _print_success "Build complete: $merged_hex"
+    airspot_memory
+
+    local release_version_dir="$AIRSPOT_WORKSPACE/releases/v${version}"
+    mkdir -p "$release_version_dir"
+    local merged_hex_name="${bin_base_name}_${timestamp}_merged.hex"
+    cp "$merged_hex" "$release_version_dir/$merged_hex_name"
+    cp "$merged_hex" "$AIRSPOT_BUILD_DIR/merged.hex"
+    _print_success "Release: releases/v${version}/$merged_hex_name"
+
+    if [ "$do_dfu_zip" = true ]; then
         local sysbuild_dir="$AIRSPOT_BUILD_DIR"
-        local app_update_bin=""
-        
-        # Locate signed binary
-        # Logic: sysbuild puts app in 'application' subdir
-        # Name: usually matches CONFIG_KERNEL_BIN_NAME + .signed.bin
-        
-        # 1. Try versioned name in application/zephyr (Most likely)
-        if [ -f "$sysbuild_dir/application/zephyr/${bin_base_name}.signed.bin" ]; then
-            app_update_bin="$sysbuild_dir/application/zephyr/${bin_base_name}.signed.bin"
-        
-        # 2. Try generic zephyr.signed.bin in application/zephyr
-        elif [ -f "$sysbuild_dir/application/zephyr/zephyr.signed.bin" ]; then
-            app_update_bin="$sysbuild_dir/application/zephyr/zephyr.signed.bin"
-            
-        # 3. Legacy locations
-        elif [ -f "$sysbuild_dir/app/zephyr/zephyr.signed.bin" ]; then
-            app_update_bin="$sysbuild_dir/app/zephyr/zephyr.signed.bin"
-        elif [ -f "$sysbuild_dir/zephyr/zephyr.signed.bin" ]; then
-            app_update_bin="$sysbuild_dir/zephyr/zephyr.signed.bin"
-        fi
-        
+        local app_update_bin
+        app_update_bin="$(_airspot_locate_signed_bin "$sysbuild_dir" "$bin_base_name")"
         if [ -z "$app_update_bin" ]; then
-           _print_error "Could not find signed binary for DFU!"
-           return 1
+            _print_error "Could not find signed binary for DFU zip."
+            return 1
         fi
 
-        # Generate DFU Zip
-        # --- Release Organization (DFU) ---
-        # Structure: releases/vX.Y.Z/
-        local release_version_dir="$AIRSPOT_WORKSPACE/releases/v${version}"
-        mkdir -p "$release_version_dir"
-
-        _print_info "Generating DFU package..."
+        _print_info "Packaging DFU zip (OTA still disabled in app — archive only)..."
         local dfu_zip_name="${bin_base_name}_${timestamp}_dfu.zip"
         local dfu_zip_path="$release_version_dir/$dfu_zip_name"
-        
-        # Check for keys (User provided or Zephyr default)
-        local key_file=""
-        if [ -f "$AIRSPOT_PROJECT_DIR/keys/airspot-signing-key-ecdsa.pem" ]; then
-            key_file="$AIRSPOT_PROJECT_DIR/keys/airspot-signing-key-ecdsa.pem"
-        elif [ -f "$AIRSPOT_PROJECT_DIR/keys/airspot-signing-key.pem" ]; then
-            key_file="$AIRSPOT_PROJECT_DIR/keys/airspot-signing-key.pem"
-        elif [ -f "$AIRSPOT_PROJECT_DIR/keys/root-ec-p256.pem" ]; then
-            key_file="$AIRSPOT_PROJECT_DIR/keys/root-ec-p256.pem"
-        fi
-        
-        local generated_nrfutil=false
-        
-        # Prefer nrfutil if available AND key exists
-        if command -v nrfutil &> /dev/null && [ -f "$key_file" ]; then
-             _print_info "Using nrfutil to generate package..."
-             nrfutil pkg generate \
-                --application "$app_update_bin" \
-                --application-version-string "$version" \
-                --hw-version 52 \
-                --sd-req 0x00 \
-                --key-file "$key_file" \
-                "$dfu_zip_path"
-                
-             if [ $? -eq 0 ]; then
-                 generated_nrfutil=true
-             else
-                 _print_warning "nrfutil command failed. Falling back to MCUmgr zip..."
-             fi
-        fi
-        
-        if [ "$generated_nrfutil" = false ]; then
-            if [ -f "$key_file" ]; then
-                # Already sounded warning above if nrfutil failed
-                if ! command -v nrfutil &> /dev/null; then
-                     _print_warning "nrfutil not found, using MCUmgr zip (Zephyr default)..."
-                fi
-            else
-                _print_warning "Signing key not found, using MCUmgr zip (Zephyr default)..."
-            fi
-            
-            # MCUmgr manual zip fallback
-            _print_info "Creating MCUmgr zip package..."
-            local manifest_file="$release_version_dir/manifest.json"
-            cat > "$manifest_file" << EOF
+        local sysbuild_dfu_zip="$sysbuild_dir/dfu_application.zip"
+        if [ -f "$sysbuild_dfu_zip" ]; then
+            cp "$sysbuild_dfu_zip" "$dfu_zip_path"
+        else
+            local tmp_manifest="$release_version_dir/.manifest_tmp.json"
+            cat > "$tmp_manifest" << EOF
 {
     "format-version": 1,
     "time": $(date +%s),
@@ -299,108 +322,57 @@ airspot_build() {
             "board": "airspot_slim",
             "soc": "nrf54l05",
             "version": "$version",
-            "file": "zephyr.signed.bin"
+            "file": "application.signed.bin"
         }
     ]
 }
 EOF
-            cp "$app_update_bin" "$release_version_dir/zephyr.signed.bin"
-            
-            _print_info "Zipping artifacts..."
-            (cd "$release_version_dir" && zip -j "$dfu_zip_path" manifest.json zephyr.signed.bin)
-            
-            if [ $? -eq 0 ]; then
-                _print_success "Zip created successfully."
-            else
-                _print_error "Zip command failed."
-            fi
-            
-            rm -f "$release_version_dir/manifest.json" "$release_version_dir/zephyr.signed.bin"
+            cp "$app_update_bin" "$release_version_dir/application.signed.bin"
+            mv "$tmp_manifest" "$release_version_dir/manifest.json"
+            (cd "$release_version_dir" && zip -j "$dfu_zip_path" manifest.json application.signed.bin)
+            rm -f "$release_version_dir/manifest.json" "$release_version_dir/application.signed.bin"
         fi
-        
-        if [ ! -f "$dfu_zip_path" ]; then
-             _print_error "Failed to create DFU package"
-             return 1
-        fi
-        _print_success "DFU Package created: releases/v${version}/$dfu_zip_name"
-        
-        # Copy Merged Hex (if exists)
-        local merged_hex_name="${bin_base_name}_${timestamp}_merged.hex"
-        if [ -f "$sysbuild_dir/zephyr/merged.hex" ]; then
-             cp "$sysbuild_dir/zephyr/merged.hex" "$release_version_dir/$merged_hex_name"
-        elif [ -f "$sysbuild_dir/merged.hex" ]; then
-             cp "$sysbuild_dir/merged.hex" "$release_version_dir/$merged_hex_name"
-        fi
-        
-        # Copy Signed Bin
-        local signed_bin_name="${bin_base_name}_${timestamp}_signed.bin"
-        cp "$app_update_bin" "$release_version_dir/$signed_bin_name"
-        
-        _print_success "Release artifact stored: releases/v${version}/"
-
-    else
-        _print_info "Building Standard application (no DFU)..."
-        
-        west build -b "$AIRSPOT_BOARD" --no-sysbuild $pristine
-        
-        if [ $? -ne 0 ]; then
-            _print_error "Build failed!"
-            return 1
-        fi
-        _print_success "Build complete!"
-        
-        airspot_memory
-        
-        # --- Release Organization (Standard) ---
-        # Structure: releases/vX.Y.Z/
-        local release_version_dir="$AIRSPOT_WORKSPACE/releases/v${version}"
-        mkdir -p "$release_version_dir"
-        
-        local hex_name="${bin_base_name}_${timestamp}.hex"
-        local bin_name="${bin_base_name}_${timestamp}.bin"
-        local elf_name="${bin_base_name}_${timestamp}.elf"
-        
-        cp "$AIRSPOT_BUILD_DIR/zephyr/${bin_base_name}.hex" "$release_version_dir/$hex_name" 2>/dev/null
-        cp "$AIRSPOT_BUILD_DIR/zephyr/${bin_base_name}.bin" "$release_version_dir/$bin_name" 2>/dev/null
-        cp "$AIRSPOT_BUILD_DIR/zephyr/${bin_base_name}.elf" "$release_version_dir/$elf_name" 2>/dev/null
-        
-        # Copy to builds/ (latest convenience)
-        local builds_dir="$AIRSPOT_WORKSPACE/builds"
-        mkdir -p "$builds_dir"
-        cp "$AIRSPOT_BUILD_DIR/zephyr/${bin_base_name}.hex" "$builds_dir/${bin_base_name}.hex" 2>/dev/null
-
-        if [ -f "$release_version_dir/$hex_name" ]; then
-            _print_success "Release artifact stored: releases/v${version}/"
-        fi
+        cp "$app_update_bin" "$release_version_dir/${bin_base_name}_${timestamp}_signed.bin"
+        _print_success "DFU archive: releases/v${version}/$dfu_zip_name"
     fi
 }
 
-# Flash command
+# Flash command — always merged.hex + full chip erase (see flash_recovery.sh)
 airspot_flash() {
-    # Check for hex file in various locations (versioned name first, then fallbacks)
-    local hex_file=""
-    local bin_name="$(_get_bin_name)"
-    
-    if [ -f "$AIRSPOT_BUILD_DIR/merged.hex" ]; then
-        hex_file="$AIRSPOT_BUILD_DIR/merged.hex"
-    elif [ -f "$AIRSPOT_BUILD_DIR/zephyr/${bin_name}.hex" ]; then
-        hex_file="$AIRSPOT_BUILD_DIR/zephyr/${bin_name}.hex"
-    elif [ -f "$AIRSPOT_BUILD_DIR/application/zephyr/zephyr.hex" ]; then
-        hex_file="$AIRSPOT_BUILD_DIR/application/zephyr/zephyr.hex"
-    elif [ -f "$AIRSPOT_BUILD_DIR/zephyr/zephyr.hex" ]; then
-        hex_file="$AIRSPOT_BUILD_DIR/zephyr/zephyr.hex"
+    local hex_file="${1:-}"
+    local force_legacy=false
+
+    if [ "$hex_file" = "--force-legacy" ]; then
+        force_legacy=true
+        hex_file="${2:-}"
     fi
-    
+
     if [ -z "$hex_file" ]; then
-        _print_error "No build found. Run 'airspot build' first."
+        hex_file="$(_airspot_find_merged_hex)"
+    fi
+
+    if [ -z "$hex_file" ] || [ ! -f "$hex_file" ]; then
+        _print_error "No merged.hex found. Run: airspot build --clean"
+        _print_info "Or: application/scripts/flash_recovery.sh releases/v0.11.0/*_merged.hex"
         return 1
     fi
-    
+
+    if ! _airspot_hex_is_merged_layout "$hex_file"; then
+        if [ "$force_legacy" != true ]; then
+            _print_error "Refusing to flash non-merged hex: $hex_file"
+            _print_error "This file only has data below 0xC000 (legacy / app-only). It will not boot with MCUboot."
+            _print_info "Use *_merged.hex from 'airspot build' or flash_recovery.sh"
+            return 1
+        fi
+        _print_warning "Flashing legacy hex (--force-legacy) — device may not boot until merged recovery."
+    fi
+
     cd "$AIRSPOT_PROJECT_DIR"
-    _print_info "Flashing $hex_file..."
+    _print_info "Recover + program (full erase): $hex_file"
 
     if command -v nrfjprog &> /dev/null; then
-        nrfjprog --program "$hex_file" --sectorerase --verify --reset -f NRF54L
+        nrfjprog --recover -f NRF54L
+        nrfjprog --program "$hex_file" --chiperase --verify --reset -f NRF54L
     else
         local jlinkexe
         jlinkexe="$(_find_jlinkexe)"
@@ -437,6 +409,24 @@ _airspot_list_uart_ports() {
     ls /dev/cu.usbmodem* /dev/cu.usbserial* /dev/tty.usbmodem* /dev/tty.usbserial* 2>/dev/null
 }
 
+# Prefer cu.* on macOS (non-blocking open; works better with multiple clients)
+_airspot_normalize_uart_port() {
+    local port="$1"
+    if [[ "$port" == /dev/tty.* ]]; then
+        local cu_port="/dev/cu.${port#/dev/tty.}"
+        if [ -e "$cu_port" ]; then
+            echo "$cu_port"
+            return
+        fi
+    fi
+    echo "$port"
+}
+
+_airspot_uart_port_holder() {
+    local port="$1"
+    lsof 2>/dev/null | awk -v p="$port" '$9 == p { print $1, $2; exit }'
+}
+
 airspot_ports() {
     echo ""
     _print_info "Detected UART ports"
@@ -447,8 +437,17 @@ airspot_ports() {
         _print_warning "No UART ports found."
         return 1
     fi
-    echo "$ports"
+    while IFS= read -r port; do
+        local holder
+        holder="$(_airspot_uart_port_holder "$port")"
+        if [ -n "$holder" ]; then
+            echo "$port  (in use: $holder)"
+        else
+            echo "$port"
+        fi
+    done <<< "$ports"
     echo ""
+    _print_info "Only one app can open a serial port (screen, nRF Connect Serial, etc.)."
 }
 
 _airspot_logs_uart() {
@@ -485,13 +484,24 @@ _airspot_logs_uart() {
     if [ -z "$port" ]; then
         _print_error "No UART device found. Pass port explicitly."
         airspot_ports
-        _print_info "Example: airspot logs uart /dev/tty.usbmodemXXXX 115200"
+        _print_info "Example: airspot logs uart /dev/cu.usbserial-XXXX 115200"
         return 1
     fi
 
-    _print_info "UART Monitor (serial)"
+    port="$(_airspot_normalize_uart_port "$port")"
+    local holder
+    holder="$(_airspot_uart_port_holder "$port")"
+    if [ -n "$holder" ]; then
+        _print_error "Port busy: $port (held by: $holder)"
+        _print_info "Close the other terminal (Ctrl+A then K in screen), or run:"
+        _print_info "  kill ${holder#* }"
+        _print_info "Then reconnect nRF Connect Serial or: airspot logs uart $port"
+        return 1
+    fi
+
+    _print_info "UART monitor — Slim debug TX on P1.02 @ ${baud} baud"
     _print_info "Port: $port"
-    _print_info "Baud: $baud"
+    _print_warning "Use a USB-serial adapter on the Slim debug header, not the nRF DK USB port"
     _print_warning "Press Ctrl+C to exit"
     echo ""
 
@@ -508,38 +518,40 @@ _airspot_logs_uart() {
 }
 
 _airspot_logs_rtt() {
-    _print_info "RTT Monitor (SEGGER Real-Time Transfer over SWD)"
+    _print_info "RTT monitor (requires firmware built with prj_rtt.conf)"
+    _print_info "Device: NRF54L05_XXAA | SWD via J-Link (same cable as flash)"
     _print_warning "Press Ctrl+C to exit"
     echo ""
 
-    _print_info "Resetting device..."
-    nrfjprog --reset -f NRF54L 2>/dev/null
-    sleep 0.5
+    if command -v nrfjprog &> /dev/null; then
+        _print_info "Resetting device..."
+        nrfjprog --reset -f NRF54L 2>/dev/null
+        sleep 0.3
+    fi
 
-    if command -v JLinkRTTLogger &> /dev/null; then
-        _print_info "Starting RTT logger..."
-        JLinkRTTLogger -Device NRF54L05_XXAA -If SWD -Speed 4000 -RTTChannel 0
+    local rtt_args=(-Device NRF54L05_XXAA -If SWD -Speed 4000 -RTTChannel 0)
+
+    if command -v JLinkRTTClient &> /dev/null; then
+        _print_info "Starting JLinkRTTClient..."
+        JLinkRTTClient "${rtt_args[@]}"
+    elif command -v JLinkRTTLogger &> /dev/null; then
+        local log_file="/tmp/airspot_rtt.log"
+        _print_info "Logging to $log_file (tail -f in another terminal)"
+        JLinkRTTLogger "${rtt_args[@]}" -OutputFile "$log_file" &
+        local pid=$!
+        trap "kill $pid 2>/dev/null" EXIT
+        tail -f "$log_file"
     elif command -v JLinkExe &> /dev/null; then
-        _print_info "Using JLinkExe for RTT..."
-        _print_warning "Type 'exit' to quit JLink"
-        echo ""
-        cat > /tmp/jlink_rtt.jlink <<EOF
-connect
-NRF54L05_XXAA
-SWD
-4000
-exit
-EOF
-        JLinkExe -CommandFile /tmp/jlink_rtt.jlink
-        rm -f /tmp/jlink_rtt.jlink
+        _print_info "Starting JLinkExe RTT viewer..."
+        JLinkExe -device NRF54L05_XXAA -if SWD -speed 4000 -RTTClient
     else
-        _print_error "JLink tools not found. Please install SEGGER J-Link tools."
-        _print_info "Download from: https://www.segger.com/downloads/jlink/"
+        _print_error "J-Link RTT tools not found (JLinkRTTClient / JLinkExe)."
+        _print_info "Install SEGGER J-Link: https://www.segger.com/downloads/jlink/"
         return 1
     fi
 }
 
-# Logs/Monitor command (default UART; optional RTT)
+# Logs/Monitor command (default UART on P1.02; optional RTT)
 airspot_logs() {
     local mode="${1:-uart}"
     [[ $# -gt 0 ]] && shift
@@ -733,13 +745,14 @@ AirSpot Slim Development Tool (v${version})
 ═════════════════════════════════════════════════════════
 
 COMMANDS:
-  airspot build [opts]      - Build firmware
+  airspot build [opts]      - Sysbuild + merged.hex (default)
     Options:
       --clean               - Clean build
-      --dfu                 - OTA Build (Sysbuild + MCUboot + DFU Zip)
+      --dfu                 - Also store DFU zip (OTA still disabled in firmware)
+      --legacy              - App-only hex (do not flash — debug link only)
   
-  airspot flash             - Flash firmware to device
-  airspot logs [uart|rtt]   - View logs (UART default)
+  airspot flash [merged.hex] - J-Link recover + program merged.hex
+  airspot logs [uart|rtt]   - View logs (UART default on P1.02 @ 115200)
   airspot monitor           - Alias for logs
   airspot erase [-y]        - Erase entire chip
   airspot reset             - Reset device
@@ -757,20 +770,17 @@ SHORTCUTS:
 RELEASE ARTIFACTS:
   Releases are organized by version in: releases/v${version}/
   
-  Standard Build:
-    - airspot_slim_v${version}_TIMESTAMP.hex
-    - airspot_slim_v${version}_TIMESTAMP.bin
-    
-  DFU Build (--dfu):
-    - airspot_slim_v${version}_TIMESTAMP_dfu.zip   (OTA Package)
+  J-Link flash (required):
+    - airspot_slim_v${version}_TIMESTAMP_merged.hex
+
+  Optional (--dfu):
+    - airspot_slim_v${version}_TIMESTAMP_dfu.zip
     - airspot_slim_v${version}_TIMESTAMP_signed.bin
-    - airspot_slim_v${version}_TIMESTAMP_merged.hex (Full Image)
 
 EXAMPLES:
-  airspot build             # Standard build
-  airspot build --dfu       # Build with DFU support
-  airspot build --clean     # Clean rebuild
-  airspot flash             # Flash to device
+  airspot build --clean     # merged.hex for J-Link
+  airspot flash             # recover + chiperase + merged.hex
+  application/scripts/flash_recovery.sh   # same, latest release merged.hex
   airspot logs              # View UART logs
   airspot bfl               # Build, flash, and view logs
 

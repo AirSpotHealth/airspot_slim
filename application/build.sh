@@ -49,6 +49,8 @@ echo ""
 # Parse command line arguments
 CLEAN=false
 FLASH=false
+DEBUG=false
+EXTRA_CONF=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -60,13 +62,22 @@ while [[ $# -gt 0 ]]; do
             FLASH=true
             shift
             ;;
+        -d|--debug)
+            DEBUG=true
+            EXTRA_CONF="-DEXTRA_CONF_FILE=prj_debug.conf"
+            shift
+            ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: $0 [-c|--clean] [-f|--flash]"
+            echo "Usage: $0 [-c|--clean] [-f|--flash] [-d|--debug]"
             exit 1
             ;;
     esac
 done
+
+if [ "$DEBUG" = true ]; then
+    echo "Debug build: UART logging enabled (prj_debug.conf)"
+fi
 
 # Clean build if requested
 if [ "$CLEAN" = true ]; then
@@ -80,7 +91,7 @@ mkdir -p build
 
 # Build using CMake (Zephyr build system)
 echo "Building with CMake (Zephyr build system)..."
-cmake -B build -GNinja -DBOARD=$BOARD -S .
+cmake -B build -GNinja -DBOARD=$BOARD $EXTRA_CONF -S .
 cmake --build build
 
 # Check if build succeeded

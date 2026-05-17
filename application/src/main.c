@@ -13,6 +13,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/printk.h>
+#include <zephyr/sys/reboot.h>
 
 /* AirSpot includes */
 #include <airspot/version.h>
@@ -36,7 +37,7 @@
 #include <services/sensor_manager.h>
 #include <services/user_settings.h>
 
-LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
+LOG_MODULE_REGISTER(main, CONFIG_AIRSPOT_LOG_LEVEL);
 
 /* Flash control pins - must be configured before SPI NOR driver init */
 #define FLASH_WP_PIN                                                           \
@@ -163,34 +164,40 @@ static void data_log_timer_handler(struct k_timer *timer) {
   data_log_due = true;
 }
 
-/* Track button state for tap detection */
+/* Button state for tap and gesture detection */
 static int64_t last_press_time = 0;
 static bool tap_completed = false;
+static bool power_hold_feedback = false;
+static int press_count = 0;
+static int64_t first_press_time_ms = 0;
 
-/* Qi charger callback - handle LED feedback on charger placement */
+#define DOUBLE_TAP_WINDOW_MS    500   /* Max gap between taps for CO2 display */
+#define POWER_OFF_HOLD_MS       5000  /* Hold duration for power off (on charger) */
+#define RAPID_PRESS_WINDOW_MS   2000  /* Window for 5-press reset gesture */
+#define RAPID_PRESS_RESET_COUNT 5
+
+static void show_device_status(void) {
+  if (battery_is_low() || battery_is_critical()) {
+    led_indicator_show_color(LED_COLOR_RED, 5000);
+  } else if (ble_service_is_connected()) {
+    led_indicator_show_color(LED_COLOR_GREEN, 5000);
+  } else {
+    led_indicator_show_color(LED_COLOR_WHITE, 5000);
+  }
+}
+
+/* Qi charger callback — placement acts like a single button press */
 static void qi_charger_callback(bool is_charging) {
   LOG_INF("Qi charger status changed: %s",
           is_charging ? "CHARGING" : "NOT CHARGING");
-
   if (is_charging) {
-    if (battery_is_low() || battery_is_critical()) {
-      /* Low battery while charging - flashing red */
-      led_indicator_show_charging_low_battery();
-    } else {
-      /* Normal battery - show white then CO2 color */
-      sensor_data_t data;
-      sensor_manager_get_data(&data);
-      /* Device is "on" if not in on-demand mode (power_mode != 0) */
-      bool device_on = (user_settings_get_power_mode() != 0);
-      led_indicator_show_charging_normal(device_on, data.co2_ppm);
-    }
+    show_device_status();
   } else {
-    /* Charger removed - stop charging LED pattern */
     led_indicator_stop();
   }
 }
 
-/* Button event handler with power gesture and LED indicator support */
+/* Button event handler */
 static void button_event_handler(button_event_t event) {
   if (calibration_service_is_active()) {
     LOG_INF("Calibration active - ignoring button event");
@@ -201,64 +208,68 @@ static void button_event_handler(button_event_t event) {
 
   switch (event) {
   case BUTTON_EVENT_PRESSED:
-    LOG_INF("Button pressed");
+    power_hold_feedback = false;
 
-    /* Check if this is a second press after a tap (for power-off gesture) */
-    if (tap_completed && (now - last_press_time) <= POWER_GESTURE_WINDOW_MS) {
-      LOG_INF("Second press detected - checking for power-off hold");
-      power_manager_on_button_pressed();
+    /* Track rapid presses for 5-press reset (while charging) */
+    if ((now - first_press_time_ms) > RAPID_PRESS_WINDOW_MS) {
+      press_count = 1;
+      first_press_time_ms = now;
     } else {
-      /* Check battery state first */
-      if (battery_is_low() || battery_is_critical()) {
-        /* Low battery mode - show fading red for 3 seconds */
-        LOG_INF("Low battery - showing fading red indicator");
-        led_indicator_show_low_battery();
-      } else if (ble_service_is_connected()) {
-        /* Connected - show white then CO2 color */
-        sensor_data_t data;
-        sensor_manager_get_data(&data);
-        led_indicator_show_connected(data.co2_ppm);
-        sensor_manager_measure_now();
-      } else {
-        /* Normal press - trigger measurement with simple LED feedback */
-        led_driver_set(LED_GREEN, true);
-        sensor_manager_measure_now();
-      }
+      press_count++;
+    }
+
+    if (press_count >= RAPID_PRESS_RESET_COUNT && qi_charger_is_charging()) {
+      LOG_INF("5-press reset while charging");
+      press_count = 0;
+      led_indicator_show_color(LED_COLOR_WHITE, 300);
+      k_msleep(300);
+      sys_reboot(SYS_REBOOT_COLD);
+      return;
+    }
+
+    /* Double tap → show CO2 level */
+    if (tap_completed && (now - last_press_time) <= DOUBLE_TAP_WINDOW_MS) {
+      tap_completed = false;
+      sensor_data_t data;
+      sensor_manager_get_data(&data);
+      uint16_t corrected = user_settings_apply_co2_correction(data.co2_ppm);
+      LOG_INF("Double tap: CO2 %u ppm", corrected);
+      led_indicator_show_co2_level(corrected, 5000);
+      sensor_manager_measure_now();
+    } else {
+      /* Single press → device status */
+      show_device_status();
     }
 
     last_press_time = now;
     tap_completed = false;
     break;
 
-  case BUTTON_EVENT_RELEASED:
-    LOG_INF("Button released");
+  case BUTTON_EVENT_RELEASED: {
+    int64_t held_ms = now - last_press_time;
 
-    /* Turn off simple LED if we used it (not using LED indicator) */
-    if (!led_indicator_is_active()) {
-      led_driver_set(LED_GREEN, false);
+    /* 5s hold while charging → power off */
+    if (power_hold_feedback && held_ms >= POWER_OFF_HOLD_MS &&
+        qi_charger_is_charging()) {
+      power_hold_feedback = false;
+      tap_completed = false;
+      LOG_INF("Power off gesture complete");
+      power_manager_enter_off_state();
+      return;
     }
+    power_hold_feedback = false;
 
-    /* Check if this was a short tap (< 300ms) */
-    if ((now - last_press_time) <= POWER_GESTURE_TAP_MAX_MS) {
-      LOG_INF("Tap detected! Now press-and-hold 3s within 500ms to power off");
-      tap_completed = true;
-      power_manager_on_tap_detected();
-    } else {
-      LOG_INF("Button held too long (%lld ms) - not a tap",
-              (now - last_press_time));
-    }
-
-    /* Notify power manager of button release */
-    if (power_manager_is_gesture_pending()) {
-      power_manager_on_button_released();
-    }
+    /* Mark as tap if short press (enables double-tap detection) */
+    tap_completed = (held_ms <= POWER_GESTURE_TAP_MAX_MS);
     break;
+  }
 
   case BUTTON_EVENT_LONG_PRESS:
-    /* Only toggle LED if not in power gesture */
-    if (!power_manager_is_gesture_pending()) {
-      LOG_INF("Button long press - toggling LED 2");
-      led_driver_toggle(LED_BLUE);
+    /* While charging: confirm hold in progress at 3s, 2s remain */
+    if (qi_charger_is_charging()) {
+      power_hold_feedback = true;
+      led_indicator_flash(LED_COLOR_WHITE, 250, 2500);
+      LOG_INF("Power hold in progress - keep holding 2s");
     }
     break;
   }
@@ -266,12 +277,16 @@ static void button_event_handler(button_event_t event) {
 
 /* Sensor data callback - called when new measurement is available */
 static void sensor_data_callback(const sensor_data_t *data) {
-  if (!data || !data->valid) {
+  if (!data) {
     return;
   }
 
   /* Feed calibration accumulator with raw value */
   calibration_service_process_measurement(data->co2_ppm);
+
+  if (!data->valid) {
+    return;
+  }
 
   uint16_t corrected_co2 = user_settings_apply_co2_correction(data->co2_ppm);
 
@@ -328,8 +343,47 @@ static void store_co2_data(void) {
   }
 }
 
+/**
+ * First-run indicator on P2.09 / P2.08 / P2.06 (see overlay + PIN_ASSIGNMENTS.md).
+ */
+static void boot_early_led_pulse(void) {
+  const struct device *gpio2 = DEVICE_DT_GET(DT_NODELABEL(gpio2));
+
+  if (!device_is_ready(gpio2)) {
+    return;
+  }
+
+  static const uint8_t led_pins[] = {9, 8, 6};
+  for (size_t i = 0; i < ARRAY_SIZE(led_pins); i++) {
+    gpio_pin_configure(gpio2, led_pins[i], GPIO_OUTPUT_INACTIVE);
+  }
+
+  for (int round = 0; round < 2; round++) {
+    for (size_t i = 0; i < ARRAY_SIZE(led_pins); i++) {
+      gpio_pin_set(gpio2, led_pins[i], 1);
+      k_msleep(80);
+      gpio_pin_set(gpio2, led_pins[i], 0);
+      k_msleep(80);
+    }
+  }
+}
+
+static void boot_wait_for_console(void) {
+  const struct device *console = DEVICE_DT_GET(DT_CHOSEN(zephyr_console));
+
+  for (int i = 0; i < 100; i++) {
+    if (device_is_ready(console)) {
+      return;
+    }
+    k_msleep(10);
+  }
+}
+
 int main(void) {
   int ret;
+
+  boot_early_led_pulse();
+  boot_wait_for_console();
 
   /*
    * ========================================
@@ -364,7 +418,7 @@ int main(void) {
   printk("\n\n");
   printk("========================================\n");
   printk("AirSpot Slim Firmware v%s\n", AIRSPOT_FIRMWARE_VERSION_STRING);
-  printk("Phase 10: Power Off Mode (Shipping)\n");
+  printk("Logs: UART P1.02 TX @ 115200 (airspot logs uart)\n");
   printk("========================================\n");
 
   LOG_INF("========================================");
@@ -505,10 +559,7 @@ int main(void) {
     LOG_INF("BLE mode service initialized");
   }
 
-  /* Show pairing indicator if not connected */
-  if (!ble_service_is_connected()) {
-    led_indicator_show_pairing();
-  }
+  /* No persistent LED at boot — startup sequence already ran */
 
   /*
    * ========================================
@@ -596,10 +647,6 @@ int main(void) {
   LOG_INF("Long press (3s) for secondary action");
   LOG_INF("========================================");
 
-  /* Signal ready with green LED */
-  led_driver_set(1, true);
-  k_msleep(500);
-  led_driver_set(1, false);
 
   /*
    * ========================================

@@ -179,8 +179,37 @@ west flash
 
 - **LEDs**: Should blink on startup
 - **Button**: Press button, check serial logs
-- **BLE**: Device advertises as "AirSpot Slim"
-- **Serial Logs**: Connect UART at 115200 baud
+- **BLE**: Device advertises as "AirSpot-XXXXXX"
+- **Serial Logs**: Production builds disable UART logs to save flash. For logs, rebuild with debug config:
+
+```bash
+cd application
+./build.sh --debug --flash
+# UART20 @ 115200 on the Slim debug connector (see board overlay)
+```
+
+### 4. Firmware updates (current policy)
+
+**BLE OTA is disabled** in firmware (no MCUmgr) and in the mobile app for Slim. Updates use **J-Link + merged.hex** only until OTA is re-enabled.
+
+```bash
+cd application/scripts
+./flash_recovery.sh   # latest merged.hex, or pass a specific .hex path
+```
+
+### 5. Device won't boot / no logs after a past OTA
+
+A bad OTA (truncated signed image) can leave MCUboot unable to start the app. Recover with J-Link (step 4), not the phone app.
+
+**Recover with J-Link** (nRF54L15 DK + 0.5mm cable):
+
+1. Flash a known-good **merged** hex (bootloader + application), e.g.  
+   `releases/v0.11.0/airspot_slim_v0.11.0_*_merged.hex`
+2. In nRF Connect Programmer or `nrfjprog --program merged.hex --chiperase --verify --reset`
+
+After recovery, use a mobile app build that includes the fixed `SlimDfuService` (full signed image, not header+body only).
+
+**Power on:** Slim does not wake from shipping/off on a single press — use **tap, then tap-and-hold ~3s** (power gesture), or place on the Qi charger.
 
 See [docs/firmware/BUILD_INSTRUCTIONS.md](./docs/firmware/BUILD_INSTRUCTIONS.md) for detailed instructions.
 
@@ -196,7 +225,7 @@ See [docs/firmware/BUILD_INSTRUCTIONS.md](./docs/firmware/BUILD_INSTRUCTIONS.md)
 | **MCUboot DFU**    | ✅ Working | OTA updates via nRF Device Manager |
 | **Button**         | ✅ Working | Tap, long-press, power gesture     |
 | **LEDs**           | ✅ Working | RGB patterns, CO2 level colors     |
-| **UART Logging**   | ✅ Working | 115200 baud                        |
+| **UART Logging**   | ✅ On      | 115200 on UART20 (P1.02 TX); use `prj_release.conf` to disable |
 | **I2C Bus**        | ✅ Working | 400kHz, 3 sensors                  |
 | **SPI Flash**      | ✅ Working | AT25XE161D, history storage        |
 | **SHT40**          | ✅ Working | Temperature & Humidity             |

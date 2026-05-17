@@ -60,7 +60,7 @@ typedef enum {
 
 /* CO2 thresholds (ppm) */
 #define CO2_GOOD_MAX 800
-#define CO2_MODERATE_MAX 1500
+#define CO2_MODERATE_MAX 1000
 
 /* LED indices */
 #define LED_RED 0

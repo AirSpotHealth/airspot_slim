@@ -194,10 +194,16 @@ void power_manager_enter_off_state(void) {
   LOG_INF("Entering Power Off (shipping mode)...");
   LOG_INF("========================================");
 
-  /* Show power-off LED sequence (quick blinks) */
-  for (int i = 0; i < 6; i++) {
-    led_driver_set(0, i % 2); /* Red LED blink */
-    k_msleep(100);
+  /* Fade all LEDs to off (~800ms) */
+  for (uint8_t i = 0; i < AIRSPOT_LED_COUNT; i++) {
+    led_driver_set_brightness(i, 80);
+  }
+  k_msleep(300);
+  for (int b = 80; b >= 0; b -= 4) {
+    for (uint8_t i = 0; i < AIRSPOT_LED_COUNT; i++) {
+      led_driver_set_brightness(i, (uint8_t)b);
+    }
+    k_msleep(25);
   }
   led_driver_all_off();
 

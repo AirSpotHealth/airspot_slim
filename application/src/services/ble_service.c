@@ -37,14 +37,19 @@ static K_WORK_DELAYABLE_DEFINE(restart_adv_work, restart_advertising_work_handle
 static void restart_advertising_work_handler(struct k_work *work) {
   ARG_UNUSED(work);
   ble_service_start_advertising();
-  led_indicator_show_pairing();
 }
 
 /* Dynamic advertising data */
 static struct bt_data ad[2];
 
+/* SMP UUID in scan response only (MCUmgr disabled) — lets the mobile app
+ * detect AirSpot Slim without exposing an OTA/DFU GATT service. */
+#define SMP_SERVICE_UUID \
+    BT_UUID_128_ENCODE(0x8D53DC1D, 0x1DB7, 0x4CD3, 0x868B, 0x8A527460AA84)
+
 static const struct bt_data sd[] = {
     BT_DATA_BYTES(BT_DATA_UUID16_ALL, BT_UUID_16_ENCODE(BT_UUID_BAS_VAL)),
+    BT_DATA_BYTES(BT_DATA_UUID128_ALL, SMP_SERVICE_UUID),
 };
 
 /* BLE connection callbacks */

@@ -80,8 +80,9 @@
 		};
 	};
 
-	/* External flash for DFU secondary slot */
 	chosen {
+		zephyr,console = &uart20;
+		zephyr,shell-uart = &uart20;
 		nordic,pm-ext-flash = &at25xe161d;
 	};
 };

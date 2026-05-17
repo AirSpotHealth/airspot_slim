@@ -33,25 +33,35 @@ static void calibration_tick_work_handler(struct k_work *work);
 static K_WORK_DELAYABLE_DEFINE(calib_tick_work, calibration_tick_work_handler);
 
 static void calibration_complete(void) {
-  int16_t correction = user_settings_get_co2_correction();
+  int16_t old_correction = user_settings_get_co2_correction();
+  int16_t new_correction = old_correction;
+  uint16_t avg = 0;
 
   if (calib_count > 0) {
-    uint16_t avg = (uint16_t)(calib_sum / calib_count);
-    correction = (int16_t)calib_target_ppm - (int16_t)avg;
-    user_settings_set_co2_correction(correction);
+    avg = (uint16_t)(calib_sum / calib_count);
+    new_correction = (int16_t)calib_target_ppm - (int16_t)avg;
+    user_settings_set_co2_correction(new_correction);
   }
+
+  /* Legacy protocol semantics: report delta CC to the app. */
+  int16_t correction_delta = new_correction - old_correction;
+
+  LOG_INF(
+      "Calibration done: target=%u avg=%u samples=%u old=%d new=%d delta=%d",
+      calib_target_ppm, avg, calib_count, old_correction, new_correction,
+      correction_delta);
 
   /* Log correction record */
   uint32_t timestamp = user_settings_is_time_set()
                            ? user_settings_get_time_now()
                            : (k_uptime_get_32() / 1000);
   (void)data_log_store_record(timestamp,
-                              (uint16_t)(correction < 0 ? -correction
-                                                        : correction),
+                              (uint16_t)(new_correction < 0 ? -new_correction
+                                                            : new_correction),
                               RECORD_TYPE_CALIBRATION_CORRECTION);
 
   if (callbacks.on_done) {
-    callbacks.on_done(correction);
+    callbacks.on_done(correction_delta);
   }
 
   if (calib_power_mode_changed) {
@@ -117,6 +127,9 @@ int calibration_service_start(uint16_t target_ppm) {
                                           : CALIB_DURATION_FAST_SEC;
   calib_active = true;
 
+  LOG_INF("Calibration started: target=%u duration=%us mode=%u", calib_target_ppm,
+          calib_remaining_sec, power_mode);
+
   if (callbacks.on_start) {
     callbacks.on_start();
   }
@@ -149,6 +162,8 @@ static void calibration_tick_work_handler(struct k_work *work) {
   if (calib_remaining_sec > 0) {
     calib_remaining_sec--;
   }
+
+  LOG_INF("Calibration countdown: %us remaining", calib_remaining_sec);
 
   if (callbacks.on_countdown) {
     callbacks.on_countdown(calib_remaining_sec);

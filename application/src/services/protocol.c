@@ -485,12 +485,16 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len)
     LOG_INF("Reset sensor command received");
     {
       int ret = sensor_manager_reset_co2_sensor();
-      if (ret) {
+      if (ret)
+      {
         LOG_WRN("CO2 sensor reset failed: %d", ret);
-      } else {
+      }
+      else
+      {
         /* Trigger a measurement to verify sensor is responding */
         ret = sensor_manager_measure_now();
-        if (ret) {
+        if (ret)
+        {
           LOG_WRN("Post-reset measurement failed: %d", ret);
         }
       }
@@ -663,9 +667,12 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len)
     if (len >= 5)
     {
       uint8_t enabled = frame[4] ? 1 : 0;
-      if (enabled) {
+      if (enabled)
+      {
         (void)stcc4_disable_testing_mode();
-      } else {
+      }
+      else
+      {
         (void)stcc4_enable_testing_mode();
       }
       user_settings_set_auto_calibrate(enabled);
@@ -759,14 +766,16 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len)
  */
 void protocol_send_realtime_co2(void)
 {
-  uint8_t tx_frame[16] = {0};
+  uint8_t tx_frame[20] = {0};
   sensor_data_t data;
 
   tx_frame[0] = CMD_FIRST_BYTE;
   tx_frame[1] = CMD_SECOND_BYTE;
   tx_frame[2] = CMD_GET_CO2_VALUE;
-  /* NOTE: Old firmware has tx_frame[3] = 0x02 (bug) but app expects it! */
-  tx_frame[3] = 0x02;
+  /* NOTE: Old firmware had tx_frame[3] = 0x02 (bug).
+   * New format: Time(4) + CO2(2) + Temp(2) + Hum(2) = 10 bytes (0x0A)
+   */
+  tx_frame[3] = 0x0A;
 
   if (sensor_manager_get_data(&data) == 0 && data.valid)
   {
@@ -789,6 +798,16 @@ void protocol_send_realtime_co2(void)
     uint16_t corrected = apply_co2_correction(data.co2_ppm);
     tx_frame[8] = (uint8_t)(corrected >> 8);
     tx_frame[9] = (uint8_t)(corrected & 0xFF);
+
+    /* Temperature (16-bit, big-endian, x100) */
+    int16_t temp = (int16_t)(data.temperature_c * 100.0f);
+    tx_frame[10] = (uint8_t)(temp >> 8);
+    tx_frame[11] = (uint8_t)(temp & 0xFF);
+
+    /* Humidity (16-bit, big-endian, x100) */
+    uint16_t hum = (uint16_t)(data.humidity_rh * 100.0f);
+    tx_frame[12] = (uint8_t)(hum >> 8);
+    tx_frame[13] = (uint8_t)(hum & 0xFF);
   }
   else
   {
@@ -799,10 +818,16 @@ void protocol_send_realtime_co2(void)
     tx_frame[7] = 0x00;
     tx_frame[8] = 0xFF;
     tx_frame[9] = 0xFF;
+
+    /* Invalid Temp/Hum */
+    tx_frame[10] = 0x00;
+    tx_frame[11] = 0x00;
+    tx_frame[12] = 0x00;
+    tx_frame[13] = 0x00;
   }
 
-  set_frame_checksum(tx_frame, 11);
-  send_frame(tx_frame, 11);
+  set_frame_checksum(tx_frame, 15);
+  send_frame(tx_frame, 15);
 }
 
 /**

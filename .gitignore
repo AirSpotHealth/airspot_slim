@@ -56,3 +56,5 @@ JLink*.log
 _old_firmware
 /application/.cache
 /embedded-i2c-stcc4
+# West/NCS dependencies (west update — do not commit)
+external/
