@@ -70,11 +70,24 @@
 		};
 	};
 
-	/* Button on P2.10 (matches working minimal UART config) */
+	/* Button on P2.10 (shared with nRESET), wired ACTIVE-HIGH.
+	 * Measured electrical reality (DIAG raw-level logging on the charger):
+	 * the pad RESTS LOW (raw=0) continuously when untouched, and a press drives
+	 * it HIGH (raw=1) briefly. The previous GPIO_ACTIVE_LOW | GPIO_PULL_UP
+	 * config was backwards: it read the LOW rest level as "pressed" forever, so
+	 * the 5 s long-press (soft power-off) gesture fired every boot on the
+	 * charger. Use GPIO_ACTIVE_HIGH: rest LOW = logical 0 = released, press
+	 * HIGH = logical 1 = pressed. gpio_pin_get_dt() returns the logical level,
+	 * so "1 == pressed" in the driver still holds. Use NO internal pull: the pad
+	 * is already strongly biased LOW externally (idle stayed raw=0 even with an
+	 * internal pull-up fighting it), and a press injects only a weak HIGH. An
+	 * internal GPIO_PULL_DOWN shunted that press pulse (button stopped
+	 * registering); with no internal pull the external bias holds idle LOW and
+	 * the press pulls the node HIGH unopposed. */
 	buttons {
 		compatible = "gpio-keys";
 		sw0: button_0 {
-			gpios = <&gpio2 10 GPIO_ACTIVE_HIGH>;  /* P2.10 - matches working config */
+			gpios = <&gpio2 10 GPIO_ACTIVE_HIGH>;  /* P2.10 */
 			label = "Button 0";
 			zephyr,code = <INPUT_KEY_0>;
 		};
@@ -202,9 +215,9 @@
 			label = "BATT_ADC_EN";
 		};
 
-		/* Qi charging status pin - active low */
+		/* Qi charging status pin - active low when charging */
 		qi_chg_status: qi_chg_status {
-			gpios = <&gpio0 0 GPIO_ACTIVE_LOW>;   /* P0.00 */
+			gpios = <&gpio0 0 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
 			label = "QI_CHG_STATUS";
 		};
 	};

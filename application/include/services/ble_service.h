@@ -69,6 +69,19 @@ int ble_service_start_advertising(void);
 int ble_service_stop_advertising(void);
 
 /**
+ * @brief Suppress (or re-allow) BLE advertising.
+ *
+ * When suppressed, the disconnect callback will NOT re-advertise and
+ * ble_service_start_advertising() becomes a no-op. Use this for soft power-off
+ * so a phone cannot reconnect in the race window between our disconnect and the
+ * callback's auto re-advertise. Suppressing also cancels any pending restart
+ * and stops advertising immediately.
+ *
+ * @param suppress true to block advertising, false to allow it again
+ */
+void ble_service_set_advertising_suppressed(bool suppress);
+
+/**
  * @brief Update the Battery Service (BAS) battery level
  *
  * @param level Battery level in percent (0-100)

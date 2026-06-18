@@ -37,6 +37,28 @@ LOG_MODULE_REGISTER(protocol, CONFIG_AIRSPOT_LOG_LEVEL);
 static uint8_t rx_frame[RX_FRAME_MAX_LEN];
 static uint8_t rx_frame_idx = 0;
 
+/*
+ * Command dispatch runs on a dedicated thread, NOT in the NUS RX callback.
+ * The RX callback executes in the Bluetooth RX thread; running long/blocking
+ * handlers there (sensor measurement ~550ms, factory test, etc.) stalls all
+ * GATT/ATT processing and delays the ATT write-response back to the app.
+ * Instead we copy each complete frame into a queue and process it here.
+ */
+typedef struct {
+  uint8_t data[RX_FRAME_MAX_LEN];
+  uint16_t len;
+} protocol_frame_t;
+
+#define PROTOCOL_QUEUE_DEPTH 8
+K_MSGQ_DEFINE(protocol_msgq, sizeof(protocol_frame_t), PROTOCOL_QUEUE_DEPTH, 4);
+
+/* Roomy enough for the heaviest handler (factory test: sensor reads +
+ * float-formatted logging). */
+#define PROTOCOL_THREAD_STACK_SIZE 3072
+#define PROTOCOL_THREAD_PRIORITY 6
+static K_THREAD_STACK_DEFINE(protocol_thread_stack, PROTOCOL_THREAD_STACK_SIZE);
+static struct k_thread protocol_thread_data;
+
 /* Hardware/Software version strings */
 #define HARDWARE_VERSION "SLIM_1.0"
 #define SOFTWARE_VERSION AIRSPOT_FIRMWARE_VERSION_STRING
@@ -81,9 +103,35 @@ static void nus_rx_callback(const uint8_t *data, uint16_t len)
       uint16_t expected_len = 4 + rx_frame[3] + 1;
       if (rx_frame_idx == expected_len)
       {
-        frame_received_handler(rx_frame, rx_frame_idx);
+        /* Hand the complete frame to the worker thread; never dispatch
+         * (and never block) inside the BLE RX callback. */
+        protocol_frame_t frame;
+        frame.len = rx_frame_idx;
+        memcpy(frame.data, rx_frame, rx_frame_idx);
+        if (k_msgq_put(&protocol_msgq, &frame, K_NO_WAIT) != 0)
+        {
+          LOG_WRN("Protocol command queue full, dropping frame");
+        }
         rx_frame_idx = 0;
       }
+    }
+  }
+}
+
+/* Worker thread: drains the command queue and dispatches frames. Blocking
+ * here is safe — it does not hold up the Bluetooth RX thread. */
+static void protocol_thread_fn(void *p1, void *p2, void *p3)
+{
+  ARG_UNUSED(p1);
+  ARG_UNUSED(p2);
+  ARG_UNUSED(p3);
+
+  protocol_frame_t frame;
+  while (1)
+  {
+    if (k_msgq_get(&protocol_msgq, &frame, K_FOREVER) == 0)
+    {
+      frame_received_handler(frame.data, frame.len);
     }
   }
 }
@@ -108,6 +156,13 @@ int protocol_init(void)
       .on_done = protocol_calib_on_done,
   };
   calibration_service_init(&calib_cb);
+
+  /* Start the command-dispatch worker thread */
+  k_tid_t tid = k_thread_create(
+      &protocol_thread_data, protocol_thread_stack,
+      K_THREAD_STACK_SIZEOF(protocol_thread_stack), protocol_thread_fn, NULL,
+      NULL, NULL, PROTOCOL_THREAD_PRIORITY, 0, K_NO_WAIT);
+  k_thread_name_set(tid, "protocol");
 
   LOG_INF("Protocol handler initialized");
   return 0;
@@ -526,8 +581,29 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len)
       set_frame_checksum(tx_frame, 6);
       send_frame(tx_frame, 6);
     }
-    /* Flash all LEDs rapidly for ~5 seconds */
-    led_driver_find_device_sequence();
+    /* Rapid white flash for ~5s (non-blocking LED indicator) */
+    led_indicator_show_find_device();
+    break;
+
+  case CMD_SET_GRAPH_YELLOW_AND_RED_START:
+    if (frame[3] >= 4 && len >= 9)
+    {
+      uint16_t yellow_start =
+          (uint16_t)((frame[4] << 8) | frame[5]);
+      uint16_t red_start = (uint16_t)((frame[6] << 8) | frame[7]);
+
+      if (user_settings_set_co2_thresholds(yellow_start, red_start) == 0)
+      {
+        LOG_INF("CO2 LED thresholds set: yellow=%u red=%u", yellow_start,
+                red_start);
+      }
+      else
+      {
+        LOG_WRN("Invalid CO2 thresholds: yellow=%u red=%u", yellow_start,
+                red_start);
+      }
+      protocol_send_device_state();
+    }
     break;
 
   case CMD_SET_BLE_DISCONNECT:
@@ -648,17 +724,27 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len)
     break;
 
   case CMD_CALIB_START:
-    /* Legacy math-based calibration (same as old firmware) */
+    /* 0x0D len 0: start calibration; len 2: set target only (mobile app) */
     {
       uint16_t target = user_settings_get_calib_target();
+      uint8_t payload_len = frame[3];
 
-      if (len >= 6)
+      if (payload_len >= 2 && len >= (uint16_t)(4 + payload_len + 1))
       {
         target = (uint16_t)((frame[4] << 8) | frame[5]);
+        user_settings_set_calib_target(target);
+        if (payload_len == 2)
+        {
+          LOG_INF("Calibration target set to %u ppm", target);
+          break;
+        }
       }
 
-      LOG_INF("Calibration request - target=%u ppm", target);
-      (void)calibration_service_start(target);
+      if (payload_len == 0)
+      {
+        LOG_INF("Calibration start - target=%u ppm", target);
+        (void)calibration_service_start(target);
+      }
     }
     break;
 
@@ -859,6 +945,26 @@ void protocol_send_battery_level(void)
   send_frame(tx_frame, 7);
 }
 
+void protocol_send_low_battery_lockout(void)
+{
+  uint8_t tx_frame[16] = {0};
+  sensor_data_t data;
+
+  tx_frame[0] = CMD_FIRST_BYTE;
+  tx_frame[1] = CMD_SECOND_BYTE;
+  tx_frame[2] = CMD_LOW_BATTERY_LOCKOUT;
+  tx_frame[3] = 0x02; /* payload length: battery %, charging flag */
+
+  if (sensor_manager_get_data(&data) == 0)
+  {
+    tx_frame[4] = data.battery_percent;
+    tx_frame[5] = data.is_charging ? 1 : 0;
+  }
+
+  set_frame_checksum(tx_frame, 7);
+  send_frame(tx_frame, 7);
+}
+
 /**
  * @brief Send full device state payload for app synchronization.
  */
@@ -895,9 +1001,8 @@ void protocol_send_device_state(void)
   tx_frame[offset++] = user_settings_get_vibrator(); /* vibrator state */
   tx_frame[offset++] = user_settings_get_power_mode();
 
-  /* Yellow/Red thresholds - defaults for Slim (800/1200 ppm) */
-  uint16_t yellow_start = 800;
-  uint16_t red_start = 1200;
+  uint16_t yellow_start = user_settings_get_co2_yellow_start();
+  uint16_t red_start = user_settings_get_co2_red_start();
   tx_frame[offset++] = (uint8_t)(yellow_start >> 8);
   tx_frame[offset++] = (uint8_t)(yellow_start & 0xFF);
   tx_frame[offset++] = (uint8_t)(red_start >> 8);
@@ -907,12 +1012,13 @@ void protocol_send_device_state(void)
   tx_frame[offset++] = 0; /* screen const on */
   tx_frame[offset++] = user_settings_get_auto_calibrate();
 
-  /* DND settings */
-  tx_frame[offset++] = 0; /* dnd mode off */
-  tx_frame[offset++] = 0; /* dnd start hour */
-  tx_frame[offset++] = 0; /* dnd start minute */
-  tx_frame[offset++] = 0; /* dnd end hour */
-  tx_frame[offset++] = 0; /* dnd end minute */
+  /* DND settings - report the values actually stored in NVS */
+  const user_settings_t *us = user_settings_get();
+  tx_frame[offset++] = us->dnd_enabled;
+  tx_frame[offset++] = us->dnd_start_hour;
+  tx_frame[offset++] = us->dnd_start_minute;
+  tx_frame[offset++] = us->dnd_end_hour;
+  tx_frame[offset++] = us->dnd_end_minute;
 
   /* Calibration target */
   uint16_t calib_target = user_settings_get_calib_target();

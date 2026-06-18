@@ -4,13 +4,19 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 RELEASES_DIR="$(cd "$SCRIPT_DIR/../../releases" && pwd)"
 
 pick_hex() {
+  local build_merged="$APP_DIR/build/merged.hex"
+  if [[ -f "$build_merged" ]]; then
+    echo "$build_merged"
+    return
+  fi
   local candidate
   candidate="$(find "$RELEASES_DIR" -name '*_merged.hex' -type f 2>/dev/null | sort | tail -1)"
   if [[ -z "$candidate" ]]; then
-    echo "No *_merged.hex under $RELEASES_DIR" >&2
+    echo "No merged.hex in build/ or releases/" >&2
     exit 1
   fi
   echo "$candidate"

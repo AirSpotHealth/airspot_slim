@@ -47,6 +47,17 @@ typedef struct {
 int stcc4_init(void);
 
 /**
+ * @brief Reset the sensor's measurement state via a sleep/wake cycle.
+ *
+ * The STCC4 has no host-visible reset register; this stops any continuous
+ * measurement, power-cycles the measurement state machine, and clears the
+ * cached reading so the next read is fresh.
+ *
+ * @return 0 on success, negative errno on failure
+ */
+int stcc4_reset(void);
+
+/**
  * @brief Start continuous measurement mode
  *
  * @return 0 on success, negative errno on failure
@@ -155,9 +166,11 @@ int stcc4_exit_sleep_mode(void);
  * Required after 3+ hours in sleep mode to restore accuracy.
  * This is a blocking operation that takes ~22 seconds.
  *
+ * @param keepalive Optional callback invoked ~once per second during the wait
+ *                  (e.g. to feed a watchdog). May be NULL.
  * @return 0 on success, negative errno on failure
  */
-int stcc4_perform_conditioning(void);
+int stcc4_perform_conditioning(void (*keepalive)(void));
 
 /**
  * @brief Enable testing mode (pauses ASC updates)

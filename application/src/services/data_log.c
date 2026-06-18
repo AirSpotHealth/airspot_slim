@@ -523,6 +523,29 @@ static int data_log_recover(void) {
     metadata_seq_num = meta.seq_num;
     total_records_count = meta.total_records;
 
+    /* Metadata is only checkpointed when a page fills (every 32 records), so
+     * cur_count can lag behind records already written into the current page
+     * since the last checkpoint. Resuming at the stale count would overwrite
+     * those records on this NOR flash (writes only clear bits), corrupting
+     * data. Re-scan the current page to recover the true write position. */
+    {
+      static record_page_t cur_page; /* 256B - avoid large stack frame */
+      if (flash_read_chunked(GET_HIS_ADDR(&cur_store_area), cur_page.buf,
+                             HISTORY_SIZE) == 0) {
+        cur_store_area.count = data_log_get_record_count(&cur_page);
+        if (cur_store_area.count >= RECORDS_PER_PAGE) {
+          /* Current page is actually full - advance to the next page. */
+          cur_store_area = get_next_store_area(&cur_store_area);
+          if (flash_read_chunked(GET_HIS_ADDR(&cur_store_area), cur_page.buf,
+                                 HISTORY_SIZE) == 0 &&
+              cur_page.records[0].timestamp != INVALID_TIMESTAMP_F) {
+            /* Stale data in the new page - erase before writing into it. */
+            format_store_area(cur_store_area);
+          }
+        }
+      }
+    }
+
     LOG_INF("Current: sector %d, page %d, count %d", cur_store_area.sector,
             cur_store_area.page, cur_store_area.count);
     LOG_INF("First: sector %d, page %d", fst_store_area.sector,

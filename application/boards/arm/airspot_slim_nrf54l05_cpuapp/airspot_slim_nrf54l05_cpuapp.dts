@@ -17,6 +17,10 @@
 		zephyr,sram = &cpuapp_sram;
 	};
 
+	aliases {
+		sw0 = &button0;
+	};
+
 	/* LED definitions - from schematic Sheet 5 (nRF54L05) */
 	/* Note: These are RGB LED control pins, not individual LEDs */
 	leds: leds {

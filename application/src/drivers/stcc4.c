@@ -113,6 +113,24 @@ int stcc4_init(void) {
   return 0;
 }
 
+int stcc4_reset(void) {
+  if (!initialized) {
+    return -ENODEV;
+  }
+
+  /* enter_sleep_mode() stops any active measurement first, then sleeps; the
+   * subsequent wake resets the sensor's measurement state machine. */
+  stcc4_enter_sleep_mode();
+  stcc4_exit_sleep_mode();
+
+  last_data.co2_ppm = 0;
+  last_data.valid = false;
+  current_mode = STCC4_MODE_SINGLE_SHOT;
+
+  LOG_INF("STCC4 reset (sleep/wake cycle)");
+  return 0;
+}
+
 int stcc4_get_product_id(uint8_t *product_id, size_t len) {
   /* GetProductID command (0x365B) - used to verify sensor communication */
   /* Per working minimal uart code: cmd_stcc4_test uses this */
@@ -235,13 +253,15 @@ int stcc4_read(stcc4_data_t *data) {
     return ret;
   }
 
-  /* Extract CO2 value */
-  uint16_t co2_raw = (raw[0] << 8) | raw[1];
+  /* Extract values. Per Sensirion reference driver, CO2 is a SIGNED int16 in
+   * ppm (can read slightly negative in clean air); temp/RH/status are unsigned. */
+  int16_t co2_signed = (int16_t)((raw[0] << 8) | raw[1]);
   uint16_t temp_raw = (raw[3] << 8) | raw[4];
   uint16_t rh_raw = (raw[6] << 8) | raw[7];
   uint16_t status_raw = (raw[9] << 8) | raw[10];
 
-  data->co2_ppm = co2_raw;
+  /* CO2 ppm cannot be physically negative - clamp noise around zero. */
+  data->co2_ppm = (co2_signed < 0) ? 0 : (uint16_t)co2_signed;
   data->temperature = -45.0f + 175.0f * ((float)temp_raw / 65535.0f);
   data->humidity = -6.0f + 125.0f * ((float)rh_raw / 65535.0f);
   data->status = status_raw;
@@ -393,7 +413,7 @@ int stcc4_exit_sleep_mode(void) {
   return 0; /* Always return success as NACK is expected */
 }
 
-int stcc4_perform_conditioning(void) {
+int stcc4_perform_conditioning(void (*keepalive)(void)) {
   if (!initialized) {
     return -ENODEV;
   }
@@ -408,8 +428,20 @@ int stcc4_perform_conditioning(void) {
     return ret;
   }
 
-  /* Wait for conditioning to complete - 22 seconds per datasheet */
-  k_msleep(STCC4_CONDITIONING_TIME_MS);
+  /* Wait for conditioning to complete - 22 seconds per datasheet. Sleep in 1s
+   * chunks and call keepalive() each chunk so the caller can feed the watchdog;
+   * the full 22s blocking wait otherwise far exceeds the WDT timeout. */
+  for (uint32_t elapsed = 0; elapsed < STCC4_CONDITIONING_TIME_MS;
+       elapsed += 1000) {
+    if (keepalive) {
+      keepalive();
+    }
+    uint32_t remaining = STCC4_CONDITIONING_TIME_MS - elapsed;
+    k_msleep(remaining < 1000 ? remaining : 1000);
+  }
+  if (keepalive) {
+    keepalive();
+  }
 
   LOG_INF("STCC4 conditioning complete");
   return 0;

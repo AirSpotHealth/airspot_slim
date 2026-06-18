@@ -30,6 +30,7 @@ extern "C" {
 #define CMD_SET_TIMEBASE 0x04
 #define CMD_SET_POWER_MODE 0x05
 #define CMD_SET_BLE_DISCONNECT 0x06
+#define CMD_SET_GRAPH_YELLOW_AND_RED_START 0x07
 #define CMD_GET_DEVICE_STATE 0x08
 #define CMD_GET_DEVICE_NAME 0x09
 #define CMD_SET_DEVICE_NAME 0x0A
@@ -53,6 +54,8 @@ extern "C" {
 #define CMD_GET_SENSOR_DETAILS 0x30  /* Get sensor details */
 #define CMD_SET_CO2_SCALE_FACTOR 0x31 /* Set CO2 scale factor (stub) */
 #define CMD_SET_FLIGHT_MODE 0x32
+#define CMD_LOW_BATTERY_LOCKOUT 0x46 /* Device entering low-battery lockout
+                                      * (notify before BLE teardown) */
 #define CMD_ENTER_FACTORY_TEST 0xD0
 #define CMD_FACTORY_TEST_RESULT 0xDD
 #define CMD_SET_DEVICE_SLEEP 0xEE    /* Enter Power Off (shipping) mode */
@@ -93,6 +96,15 @@ void protocol_send_realtime_co2(void);
  * @brief Send battery level
  */
 void protocol_send_battery_level(void);
+
+/**
+ * @brief Notify the app that the device is entering low-battery lockout.
+ *
+ * Sent once, while still connected, right before BLE is torn down so the app
+ * can show a "low battery — charging required" state instead of treating the
+ * imminent disconnect as an error. Payload: battery %, charging flag.
+ */
+void protocol_send_low_battery_lockout(void);
 
 /**
  * @brief Send device state/configuration

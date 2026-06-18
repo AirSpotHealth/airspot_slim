@@ -26,5 +26,42 @@ config AIRSPOT_BUTTON_LONG_PRESS_TIMEOUT_MS
 	help
 	  Timeout in milliseconds for detecting long button press.
 
+config AIRSPOT_STCC4_CONDITION_ON_BOOT
+	bool "Run STCC4 conditioning at startup"
+	default y
+	help
+	  Perform the STCC4 conditioning command (~22s) once during sensor
+	  init. Sensirion recommends conditioning whenever the sensor has not
+	  measured for >3 hours (i.e. after a cold boot) before the first
+	  measurement, otherwise the thermal-conductivity reading is biased
+	  (typically reads high). Adds ~24s to a cold boot; disable only if a
+	  fast boot is more important than first-reading accuracy.
+
+config AIRSPOT_BOOT_LED_SELFTEST
+	bool "Run the LED self-test (color sweep) at boot"
+	default n
+	help
+	  When enabled, led_driver_startup_sequence() runs at power-on: it
+	  blinks each LED channel in turn and then all channels together, as a
+	  visual confirmation that every LED works.
+
+	  DISABLED by default so normal/production devices boot silently (the
+	  UX rule is that the device never lights up without a reason). Enable
+	  this only for factory-test firmware where the boot color sweep is a
+	  wanted hardware check.
+
+config AIRSPOT_POWER_OFF_ENABLED
+	bool "Enable System OFF (shipping/power-off) mode"
+	default n
+	help
+	  When enabled, the button power-off gesture and the BLE
+	  "device sleep" command put the device into System OFF.
+
+	  DISABLED by default: on current hardware the button is on a GPIO
+	  port that does not support interrupt/SENSE wake (P2.10), so the
+	  device cannot wake from the button after entering System OFF and
+	  would be stranded until the Qi charger is re-toggled. Re-enable only
+	  once the wake-capable button pin (P0/P1) is in place.
+
 endmenu
 

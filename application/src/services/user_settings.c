@@ -32,8 +32,11 @@ static user_settings_t settings = {
     .vibrator_enabled = 0, /* Stub */
     .co2_correction = 0,
     .calib_target = 426,
-    .auto_calibrate = 0,
-    .asc_day_count = 0};
+    .auto_calibrate = 0, /* ASC off by default - manual recalibration is used */
+    .asc_day_count = 0,
+    .co2_yellow_start = 800,
+    .co2_red_start = 1000,
+    .paired = 0};
 
 static bool initialized = false;
 
@@ -126,6 +129,26 @@ static int settings_set(const char *name, size_t len, settings_read_cb read_cb,
   {
     rc = read_cb(cb_arg, &settings.asc_day_count,
                  sizeof(settings.asc_day_count));
+    return (rc >= 0) ? 0 : rc;
+  }
+
+  if (settings_name_steq(name, "co2_yellow", &next) && !next)
+  {
+    rc = read_cb(cb_arg, &settings.co2_yellow_start,
+                 sizeof(settings.co2_yellow_start));
+    return (rc >= 0) ? 0 : rc;
+  }
+
+  if (settings_name_steq(name, "co2_red", &next) && !next)
+  {
+    rc = read_cb(cb_arg, &settings.co2_red_start,
+                 sizeof(settings.co2_red_start));
+    return (rc >= 0) ? 0 : rc;
+  }
+
+  if (settings_name_steq(name, "paired", &next) && !next)
+  {
+    rc = read_cb(cb_arg, &settings.paired, sizeof(settings.paired));
     return (rc >= 0) ? 0 : rc;
   }
 
@@ -295,6 +318,35 @@ int user_settings_set_calib_target(uint16_t target)
                            sizeof(settings.calib_target));
 }
 
+uint16_t user_settings_get_co2_yellow_start(void)
+{
+  return settings.co2_yellow_start;
+}
+
+uint16_t user_settings_get_co2_red_start(void) { return settings.co2_red_start; }
+
+int user_settings_set_co2_thresholds(uint16_t yellow_start, uint16_t red_start)
+{
+  if (yellow_start >= red_start || yellow_start < 400 || red_start > 5000)
+  {
+    return -EINVAL;
+  }
+
+  settings.co2_yellow_start = yellow_start;
+  settings.co2_red_start = red_start;
+
+  int rc = settings_save_one(SETTINGS_KEY "/co2_yellow",
+                             &settings.co2_yellow_start,
+                             sizeof(settings.co2_yellow_start));
+  if (rc)
+  {
+    return rc;
+  }
+
+  return settings_save_one(SETTINGS_KEY "/co2_red", &settings.co2_red_start,
+                           sizeof(settings.co2_red_start));
+}
+
 uint8_t user_settings_get_auto_calibrate(void)
 {
   return settings.auto_calibrate;
@@ -317,6 +369,22 @@ int user_settings_set_asc_day_count(uint8_t day_count)
   settings.asc_day_count = day_count;
   return settings_save_one(SETTINGS_KEY "/asc_day", &settings.asc_day_count,
                            sizeof(settings.asc_day_count));
+}
+
+bool user_settings_is_paired(void) { return settings.paired != 0; }
+
+int user_settings_set_paired(bool paired)
+{
+  uint8_t value = paired ? 1 : 0;
+  if (settings.paired == value)
+  {
+    return 0; /* avoid an NVS write on every connection */
+  }
+
+  settings.paired = value;
+  LOG_INF("Paired flag set to %u", value);
+  return settings_save_one(SETTINGS_KEY "/paired", &settings.paired,
+                           sizeof(settings.paired));
 }
 
 uint16_t user_settings_apply_co2_correction(uint16_t raw_ppm)
@@ -386,8 +454,10 @@ int user_settings_factory_reset(void)
   settings.vibrator_enabled = 0; /* Stub - keep off */
   settings.calib_target = 426;
   settings.co2_correction = 0;
-  settings.auto_calibrate = 0;
+  settings.auto_calibrate = 0; /* ASC off by default - manual recalibration is used */
   settings.asc_day_count = 0;
+  settings.co2_yellow_start = 800;
+  settings.co2_red_start = 1000;
 
   /* Clear time */
   time_base = 0;
@@ -452,6 +522,24 @@ int user_settings_factory_reset(void)
   if (rc && rc != -ENOENT)
   {
     LOG_WRN("Failed to delete asc_day: %d", rc);
+  }
+
+  rc = settings_delete(SETTINGS_KEY "/co2_yellow");
+  if (rc && rc != -ENOENT)
+  {
+    LOG_WRN("Failed to delete co2_yellow: %d", rc);
+  }
+
+  rc = settings_delete(SETTINGS_KEY "/co2_red");
+  if (rc && rc != -ENOENT)
+  {
+    LOG_WRN("Failed to delete co2_red: %d", rc);
+  }
+
+  rc = settings_delete(SETTINGS_KEY "/paired");
+  if (rc && rc != -ENOENT)
+  {
+    LOG_WRN("Failed to delete paired: %d", rc);
   }
 
   LOG_INF("Factory reset complete - settings cleared");

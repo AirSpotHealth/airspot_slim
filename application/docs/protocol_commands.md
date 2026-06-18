@@ -207,11 +207,18 @@ Enables/Disables Automatic Self Calibration (ASC).
 - **Request:** `[FF][AA][11][01][Enable(1)][CS]`
 - **Response:** `[FF][AA][11][01][02][CS]`
 
+#### **Set CO₂ LED thresholds (0x07)**
+
+- **Request:** `[FF][AA][07][04][YellowStart(2)][RedStart(2)][CS]` (green/amber and amber/red boundaries in ppm)
+- **Response:** Full device state (`0x08`)
+
 #### **Start Manual Calibration (0x0D)**
 
-- **Request:** `[FF][AA][0D][02][Target(2)][CS]`
+- **Set target only:** `[FF][AA][0D][02][Target(2)][CS]` (does not start)
+- **Start:** `[FF][AA][0D][00][CS]`
 - **Response (Start):** `[FF][AA][0D][01][02][CS]`
 - **Response (Done):** `[FF][AA][0D][01][Correction(2)][Sign(1)][CS]`
+- **Countdown:** `[FF][AA][0F][01][Seconds(2)][CS]`
 
 #### **Get ASC Count (Correction) (0x25)**
 

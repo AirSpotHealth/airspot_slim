@@ -16,6 +16,11 @@
 
 LOG_MODULE_REGISTER(qi_charger, LOG_LEVEL_INF);
 
+#define QI_DEBOUNCE_SAMPLES 3
+#define QI_DEBOUNCE_INTERVAL_US 30000
+#define QI_BOOT_SETTLE_MS 250
+#define QI_GPIO_DEBOUNCE_MS 80
+
 /* Qi charger status pin from device tree */
 #define QI_CHG_NODE DT_NODELABEL(qi_chg_status)
 
@@ -32,17 +37,50 @@ static const struct device *qi_chg_dev;
 #endif
 
 static struct gpio_callback gpio_cb;
+static struct k_work_delayable debounce_work;
 static qi_charger_callback_t user_callback = NULL;
 static bool initialized = false;
+static bool stable_charging;
 
-static void qi_charger_gpio_handler(const struct device *dev,
-                                    struct gpio_callback *cb, uint32_t pins) {
-  ARG_UNUSED(dev);
-  ARG_UNUSED(cb);
-  ARG_UNUSED(pins);
+static bool read_gpio_charging(void)
+{
+  int val;
 
-  bool charging = qi_charger_is_charging();
-  LOG_INF("Qi charging status changed: %s",
+#if HAS_QI_CHG_GPIO
+  val = gpio_pin_get_dt(&qi_chg_gpio);
+#else
+  val = gpio_pin_get(qi_chg_dev, QI_CHG_PIN);
+  val = (val == 0) ? 1 : 0;
+#endif
+
+  if (val < 0) {
+    LOG_ERR("Failed to read Qi GPIO: %d", val);
+    return false;
+  }
+
+  return (val == 1);
+}
+
+static void run_debounce(void)
+{
+  int votes = 0;
+
+  for (int i = 0; i < QI_DEBOUNCE_SAMPLES; i++) {
+    if (read_gpio_charging()) {
+      votes++;
+    }
+    if (i < (QI_DEBOUNCE_SAMPLES - 1)) {
+      k_usleep(QI_DEBOUNCE_INTERVAL_US);
+    }
+  }
+
+  bool charging = votes >= 2;
+  if (charging == stable_charging) {
+    return;
+  }
+
+  stable_charging = charging;
+  LOG_INF("Qi charging (debounced): %s",
           charging ? "CHARGING" : "NOT CHARGING");
 
   if (user_callback) {
@@ -50,7 +88,24 @@ static void qi_charger_gpio_handler(const struct device *dev,
   }
 }
 
-int qi_charger_init(void) {
+static void debounce_work_handler(struct k_work *work)
+{
+  ARG_UNUSED(work);
+  run_debounce();
+}
+
+static void qi_charger_gpio_handler(const struct device *dev,
+                                    struct gpio_callback *cb, uint32_t pins)
+{
+  ARG_UNUSED(dev);
+  ARG_UNUSED(cb);
+  ARG_UNUSED(pins);
+
+  k_work_schedule(&debounce_work, K_MSEC(QI_GPIO_DEBOUNCE_MS));
+}
+
+int qi_charger_init(void)
+{
   int ret;
 
   if (initialized) {
@@ -65,20 +120,16 @@ int qi_charger_init(void) {
     return -ENODEV;
   }
 
-  /* Configure as input - device tree should have GPIO_ACTIVE_LOW set */
   ret = gpio_pin_configure_dt(&qi_chg_gpio, GPIO_INPUT);
   if (ret < 0) {
     LOG_ERR("Failed to configure Qi GPIO: %d", ret);
     return ret;
   }
 
-  /* Configure interrupt for both edges */
   ret = gpio_pin_interrupt_configure_dt(&qi_chg_gpio, GPIO_INT_EDGE_BOTH);
   if (ret < 0) {
     LOG_WRN("Failed to configure Qi interrupt: %d (using polling)", ret);
-    /* Continue without interrupt - polling will still work */
   } else {
-    /* Setup callback */
     gpio_init_callback(&gpio_cb, qi_charger_gpio_handler, BIT(qi_chg_gpio.pin));
     ret = gpio_add_callback(qi_chg_gpio.port, &gpio_cb);
     if (ret < 0) {
@@ -86,7 +137,6 @@ int qi_charger_init(void) {
     }
   }
 #else
-  /* Fallback to hardcoded configuration */
   qi_chg_dev = DEVICE_DT_GET(QI_CHG_PORT_NODE);
   if (!device_is_ready(qi_chg_dev)) {
     LOG_ERR("GPIO0 device not ready");
@@ -99,7 +149,6 @@ int qi_charger_init(void) {
     return ret;
   }
 
-  /* Try to configure interrupt */
   ret =
       gpio_pin_interrupt_configure(qi_chg_dev, QI_CHG_PIN, GPIO_INT_EDGE_BOTH);
   if (ret < 0) {
@@ -113,40 +162,26 @@ int qi_charger_init(void) {
   }
 #endif
 
+  k_work_init_delayable(&debounce_work, debounce_work_handler);
+  stable_charging = false;
   initialized = true;
 
-  bool charging = qi_charger_is_charging();
-  LOG_INF("Qi charger initialized (currently %s)",
-          charging ? "CHARGING" : "not charging");
+  /* Let the Qi status line settle before the first read (avoids false CHARGING at boot). */
+  k_work_schedule(&debounce_work, K_MSEC(QI_BOOT_SETTLE_MS));
 
   return 0;
 }
 
-bool qi_charger_is_charging(void) {
+bool qi_charger_is_charging(void)
+{
   if (!initialized) {
     return false;
   }
 
-  int val;
-
-#if HAS_QI_CHG_GPIO
-  /* gpio_pin_get_dt returns logical value (accounting for GPIO_ACTIVE_LOW) */
-  val = gpio_pin_get_dt(&qi_chg_gpio);
-#else
-  val = gpio_pin_get(qi_chg_dev, QI_CHG_PIN);
-  /* Invert for active-low */
-  val = (val == 0) ? 1 : 0;
-#endif
-
-  if (val < 0) {
-    LOG_ERR("Failed to read Qi GPIO: %d", val);
-    return false;
-  }
-
-  /* With GPIO_ACTIVE_LOW in device tree, val=1 means charging */
-  return (val == 1);
+  return stable_charging;
 }
 
-void qi_charger_register_callback(qi_charger_callback_t callback) {
+void qi_charger_register_callback(qi_charger_callback_t callback)
+{
   user_callback = callback;
 }

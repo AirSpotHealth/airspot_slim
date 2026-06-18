@@ -18,9 +18,15 @@
 #include <drivers/stcc4.h>
 #include <services/user_settings.h>
 #include <services/ble_service.h>
+#include <services/led_indicator.h>
 #include <services/sensor_manager.h>
 
 LOG_MODULE_REGISTER(sensor_mgr, CONFIG_AIRSPOT_LOG_LEVEL);
+
+/* Defined in main.c — feeds the watchdog (no-op until the WDT is set up). Used
+ * to keep the watchdog alive during the long blocking STCC4 conditioning. */
+extern void watchdog_feed(void);
+static void conditioning_keepalive(void) { watchdog_feed(); }
 
 /* Default measurement interval */
 #define DEFAULT_INTERVAL_MS 5000
@@ -49,9 +55,15 @@ static bool initialized = false;
 static bool use_single_shot_mode =
     false; /* Track if using single-shot for STCC4 */
 
-/* Latest sensor data (protected by mutex) */
+/* Latest sensor data (protected by data_mutex) */
 static struct k_mutex data_mutex;
 static sensor_data_t latest_data;
+
+/* Serializes the whole measurement sequence. do_measurement() can be invoked
+ * both from the sensor work queue (periodic) and from the protocol thread
+ * (manual refresh / reset). Without this, two measurement sequences would
+ * interleave their multi-step I2C transactions on the shared sensor bus. */
+static struct k_mutex meas_mutex;
 
 /* User callback */
 static sensor_data_callback_t user_callback = NULL;
@@ -94,6 +106,7 @@ int sensor_manager_init(void)
   LOG_INF("Initializing sensor manager...");
 
   k_mutex_init(&data_mutex);
+  k_mutex_init(&meas_mutex);
   k_work_init_delayable(&sensor_work, sensor_work_handler);
 
   /* 1. Initialize I2C bus first */
@@ -119,6 +132,31 @@ int sensor_manager_init(void)
     LOG_ERR("STCC4 init failed: %d", ret);
     return ret;
   }
+
+#if IS_ENABLED(CONFIG_AIRSPOT_STCC4_CONDITION_ON_BOOT)
+  /* Condition the STCC4 before the first measurement. Sensirion recommends
+   * this whenever the sensor has been idle >3h (i.e. a cold boot); skipping it
+   * leaves the thermal-conductivity reading biased high. ~22s + 2s settle. */
+  LOG_INF("STCC4 conditioning (~22s, one time)...");
+  /* Pulsing white = "starting up / warming up", distinct from the idle-blue and
+   * the R/Y/G air-quality colors. Runs while conditioning blocks; the main loop's
+   * idle indicator takes over once we stop it. Must be a FULL-brightness pulse,
+   * not an analog fade: these are essentially on/off LEDs, and at the partial
+   * brightness of a fade the red channel browns out first, so "white" reads as
+   * cyan. A brief full-on blip each period keeps the pulse feel while rendering
+   * true white. */
+  led_indicator_start_flash_pulse(LED_COLOR_WHITE, 1500, 400);
+  ret = stcc4_perform_conditioning(conditioning_keepalive);
+  if (ret) {
+    LOG_WRN("STCC4 conditioning failed: %d (continuing)", ret);
+  } else {
+    conditioning_keepalive();
+    k_msleep(2000); /* recommended settling time after conditioning */
+    conditioning_keepalive();
+    LOG_INF("STCC4 conditioning complete");
+  }
+  led_indicator_stop();
+#endif
 
   /* Apply ASC setting on startup (ASC enabled by default in sensor) */
   apply_stcc4_asc_setting();
@@ -169,6 +207,9 @@ static void do_measurement(void)
   lps22hh_data_t lps_data;
   int ret;
   bool all_ok = true;
+
+  /* Serialize the full sensor read sequence (periodic vs. manual). */
+  k_mutex_lock(&meas_mutex, K_FOREVER);
 
   data.timestamp_ms = k_uptime_get_32();
 
@@ -293,6 +334,8 @@ static void do_measurement(void)
   LOG_INF("Sensors: CO2=%uppm, T=%.1f°C, H=%.0f%%, P=%.0fhPa, Batt=%u%%",
           data.co2_ppm, (double)data.temperature_c, (double)data.humidity_rh,
           (double)data.pressure_hpa, data.battery_percent);
+
+  k_mutex_unlock(&meas_mutex);
 }
 
 static void sensor_work_handler(struct k_work *work)
@@ -523,11 +566,12 @@ int sensor_manager_reset_co2_sensor(void)
     LOG_WRN("Failed to clear CO2 correction: %d", rc);
   }
 
-  /* Stop continuous mode if active */
-  /* Re-run init sequence */
-  int ret = stcc4_init();
+  /* Perform a real sensor reset (sleep/wake) rather than stcc4_init(), which
+   * is a no-op once the driver is already initialized. */
+  int ret = stcc4_reset();
   if (ret == 0)
   {
+    use_single_shot_mode = true;
     apply_stcc4_asc_setting();
   }
   return ret;

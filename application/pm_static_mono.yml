@@ -1,0 +1,15 @@
+# Monolithic internal flash layout (no MCUboot) — matches AH01 / factory UART bring-up.
+# J-Link: flash build/zephyr/airspot_slim_v*.hex with full chip erase.
+#
+#   0x00000 - 0x52000: Application (~328 KB)
+#   0x52000 - 0x7D000: Settings / NVS
+
+app:
+  address: 0x0
+  size: 0x52000
+  region: flash_primary
+
+settings_storage:
+  address: 0x52000
+  size: 0x2B000
+  region: flash_primary

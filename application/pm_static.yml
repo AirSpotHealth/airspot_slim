@@ -1,61 +1,15 @@
-# Static Partition Manager - nRF54L05 with External Flash for DFU
+# Monolithic internal flash layout (no MCUboot) — matches AH01 / factory UART bring-up.
+# J-Link: flash build/zephyr/airspot_slim_v*.hex with full chip erase.
 #
-# App size with logging: ~267KB
-# Internal flash: 512KB (0x7D000 usable = ~500KB)
-# External flash: 2MB (AT25XE161D)
-#
-# Layout:
-#   Internal:
-#     0x00000 - 0x0C000: MCUboot bootloader (48KB)
-#     0x0C000 - 0x52000: Primary slot (280KB)
-#     0x52000 - 0x7D000: Settings/NVS (172KB)
-#   External:
-#     0x00000 - 0x46000: Secondary slot (280KB)
-#     0x46000+: Available for data logging
-
-mcuboot:
-  address: 0x0
-  size: 0xC000
-  region: flash_primary
-
-mcuboot_pad:
-  address: 0xC000
-  size: 0x200
+#   0x00000 - 0x52000: Application (~328 KB)
+#   0x52000 - 0x7D000: Settings / NVS
 
 app:
-  address: 0xC200
-  size: 0x45E00
-
-mcuboot_primary:
-  orig_span: &id001
-    - mcuboot_pad
-    - app
-  span: *id001
-  address: 0xC000
-  size: 0x46000
+  address: 0x0
+  size: 0x52000
   region: flash_primary
 
-mcuboot_primary_app:
-  orig_span: &id002
-    - app
-  span: *id002
-  address: 0xC200
-  size: 0x45E00
-
-# Settings starts right after primary slot - no gap
 settings_storage:
   address: 0x52000
   size: 0x2B000
   region: flash_primary
-
-mcuboot_secondary:
-  address: 0x0
-  size: 0x46000
-  device: at25xe161d
-  region: external_flash
-
-external_flash:
-  address: 0x46000
-  size: 0x1BA000
-  device: at25xe161d
-  region: external_flash

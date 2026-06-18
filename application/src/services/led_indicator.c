@@ -13,6 +13,7 @@
 
 #include <drivers/led_driver.h>
 #include <services/led_indicator.h>
+#include <services/user_settings.h>
 
 LOG_MODULE_REGISTER(led_indicator, LOG_LEVEL_INF);
 
@@ -122,9 +123,12 @@ static void set_color(led_color_t color, uint8_t brightness) {
  * ======================================== */
 
 co2_level_t led_indicator_get_co2_level(uint16_t co2_ppm) {
-  if (co2_ppm < CO2_GOOD_MAX) {
+  uint16_t yellow_start = user_settings_get_co2_yellow_start();
+  uint16_t red_start = user_settings_get_co2_red_start();
+
+  if (co2_ppm < yellow_start) {
     return CO2_LEVEL_GOOD;
-  } else if (co2_ppm < CO2_MODERATE_MAX) {
+  } else if (co2_ppm < red_start) {
     return CO2_LEVEL_MODERATE;
   } else {
     return CO2_LEVEL_POOR;
@@ -230,6 +234,36 @@ static void pattern_work_handler(struct k_work *work) {
 
     set_color(state.color, brightness);
     k_work_schedule(&pattern_work, K_MSEC(FADE_STEP_MS));
+    break;
+  }
+
+  case LED_PATTERN_FADE_PULSE: {
+    /* Smooth fade in/out over flash_on_ms, then rest (off) until the next
+     * period. Updates frequently during the fade, then sleeps through the
+     * resting gap to save power. */
+    uint32_t cycle_pos = elapsed % state.period_ms;
+    uint32_t window = state.flash_on_ms > 0 ? state.flash_on_ms : 1600;
+    if (window > state.period_ms) {
+      window = state.period_ms;
+    }
+
+    if (cycle_pos < window) {
+      uint32_t half = window / 2;
+      uint8_t brightness;
+      if (half == 0) {
+        brightness = 100;
+      } else if (cycle_pos < half) {
+        brightness = (uint8_t)((cycle_pos * 100) / half); /* fade up */
+      } else {
+        brightness = (uint8_t)(((window - cycle_pos) * 100) / half); /* down */
+      }
+      set_color(state.color, brightness);
+      k_work_schedule(&pattern_work, K_MSEC(FADE_STEP_MS));
+    } else {
+      /* Resting: LED off, sleep until the start of the next period. */
+      set_color(state.color, 0);
+      k_work_schedule(&pattern_work, K_MSEC(state.period_ms - cycle_pos));
+    }
     break;
   }
 
@@ -360,6 +394,37 @@ void led_indicator_start_fade(led_color_t color, uint32_t period_ms) {
   start_pattern(LED_PATTERN_FADE, color, period_ms, 0, true);
 }
 
+void led_indicator_start_fade_pulse(led_color_t color, uint32_t period_ms,
+                                    uint32_t fade_ms) {
+  k_mutex_lock(&state_mutex, K_FOREVER);
+
+  /* Stop any existing pattern */
+  k_work_cancel_delayable(&pattern_work);
+  led_driver_all_off();
+
+  /* Set new pattern state. flash_on_ms carries the fade in+out window. */
+  state.pattern = LED_PATTERN_FADE_PULSE;
+  state.color = color;
+  state.period_ms = period_ms > 0 ? period_ms : LED_FLASH_PERIOD_MS;
+  state.flash_on_ms = fade_ms;
+  state.duration_ms = 0;
+  state.start_time = k_uptime_get();
+  state.continuous = true;
+  state.brightness = 0;
+  state.fade_up = true;
+  state.sequence_phase = 0;
+  state.sequence_color2 = LED_COLOR_OFF;
+  state.sequence_duration2 = 0;
+
+  LOG_DBG("LED fade pulse: color=%d period=%u fade=%u", color, period_ms,
+          fade_ms);
+
+  /* Start immediately */
+  k_work_schedule(&pattern_work, K_NO_WAIT);
+
+  k_mutex_unlock(&state_mutex);
+}
+
 /* ========================================
  * High-Level Device State Indicators
  * ======================================== */
@@ -375,9 +440,9 @@ void led_indicator_show_low_battery(void) {
 }
 
 void led_indicator_show_charging_low_battery(void) {
-  LOG_INF("Showing charging low battery (flashing red)");
-  /* Slow flash (1000ms) for charging indication */
-  led_indicator_start_flash(LED_COLOR_RED, 1000);
+  LOG_INF("Showing charging low battery (flashing red, timed)");
+  /* Slow flash, but timed — the light rule says nothing stays glowing. */
+  led_indicator_flash(LED_COLOR_RED, 1000, LED_STATUS_DURATION_MS);
 }
 
 void led_indicator_show_charging_normal(bool device_on, uint16_t co2_ppm) {
@@ -453,5 +518,34 @@ void led_indicator_show_calibration(bool active) {
     led_indicator_start_flash_pulse(LED_COLOR_BLUE, 5000, 200);
   } else {
     led_indicator_stop();
+  }
+}
+
+void led_indicator_show_battery_critical(void) {
+  LOG_INF("Showing battery critical (fast red flash)");
+  led_indicator_flash(LED_COLOR_RED, LED_BATTERY_CRITICAL_PERIOD_MS,
+                      LED_BATTERY_CRITICAL_DURATION_MS);
+}
+
+void led_indicator_show_find_device(void) {
+  LOG_INF("Showing find-my-device (rapid white flash)");
+  led_indicator_flash(LED_COLOR_WHITE, LED_FIND_DEVICE_PERIOD_MS,
+                      LED_FIND_DEVICE_DURATION_MS);
+}
+
+void led_indicator_show_status(bool battery_low, bool battery_critical,
+                               bool paired) {
+  /* Device-status colors per the UX spec, sustained then auto-off:
+   * red = low battery, blue = OK and paired, white = not paired. Critical
+   * battery keeps the more urgent fast flash (still timed). Air quality is
+   * NOT shown here — that is the double-press CO2 readout. */
+  if (battery_critical) {
+    led_indicator_show_battery_critical();
+  } else if (battery_low) {
+    led_indicator_show_color(LED_COLOR_RED, LED_STATUS_DURATION_MS);
+  } else if (paired) {
+    led_indicator_show_color(LED_COLOR_BLUE, LED_STATUS_DURATION_MS);
+  } else {
+    led_indicator_show_color(LED_COLOR_WHITE, LED_STATUS_DURATION_MS);
   }
 }

@@ -224,7 +224,7 @@ airspot_build() {
     local bin_base_name="airspot_slim_v${version}"
     local timestamp=$(date +"%Y%m%d_%H%M%S")
     local do_dfu_zip=false
-    local do_legacy=false
+    local do_bootloader=false
     local do_clean=false
     local pristine=""
     
@@ -247,8 +247,11 @@ airspot_build() {
             --dfu)
                 do_dfu_zip=true
                 ;;
+            --bootloader|--mcuboot|--dfu-boot)
+                do_bootloader=true
+                ;;
             --legacy|--no-sysbuild)
-                do_legacy=true
+                _print_warning "--legacy is the default now; use --bootloader for MCUboot merged.hex"
                 ;;
         esac
     done
@@ -257,62 +260,52 @@ airspot_build() {
         _print_info "Removing existing build directory for a true clean build..."
         rm -rf "$AIRSPOT_BUILD_DIR"
     fi
-    
-    if [ "$do_legacy" = true ]; then
-        _print_warning "Legacy build (no MCUboot) — output is NOT safe to flash on Slim."
-        _print_warning "Use sysbuild merged.hex (default build) for J-Link programming."
-        west build -b "$AIRSPOT_BOARD" --no-sysbuild $pristine
+
+    if [ "$do_bootloader" = true ]; then
+        _print_info "Building with MCUboot (sysbuild → merged.hex for OTA layout)..."
+        rm -f "$AIRSPOT_BUILD_DIR/.airspot_flash_mono"
+        "${AIRSPOT_PROJECT_DIR}/scripts/ensure_mcuboot_key_link.sh"
+        west build -b "$AIRSPOT_BOARD" --sysbuild $pristine
         if [ $? -ne 0 ]; then
-            _print_error "Build failed!"
+            _print_error "Sysbuild failed!"
             return 1
         fi
-        _print_success "Build complete (legacy, do not flash with airspot flash)."
+
+        local merged_hex
+        merged_hex="$(_airspot_find_merged_hex)"
+        if [ -z "$merged_hex" ] || ! _airspot_hex_is_merged_layout "$merged_hex"; then
+            _print_error "merged.hex missing or invalid (expected app data at 0xC000+)."
+            return 1
+        fi
+
+        _print_success "Build complete: $merged_hex"
         airspot_memory
-        return 0
-    fi
 
-    _print_info "Building Sysbuild (MCUboot + signed app → merged.hex)..."
-    west build -b "$AIRSPOT_BOARD" --sysbuild $pristine
-    if [ $? -ne 0 ]; then
-        _print_error "Sysbuild failed!"
-        return 1
-    fi
+        local release_version_dir="$AIRSPOT_WORKSPACE/releases/v${version}"
+        mkdir -p "$release_version_dir"
+        local merged_hex_name="${bin_base_name}_${timestamp}_merged.hex"
+        cp "$merged_hex" "$release_version_dir/$merged_hex_name"
+        cp "$merged_hex" "$AIRSPOT_BUILD_DIR/merged.hex"
+        _print_success "Release: releases/v${version}/$merged_hex_name"
 
-    local merged_hex
-    merged_hex="$(_airspot_find_merged_hex)"
-    if [ -z "$merged_hex" ] || ! _airspot_hex_is_merged_layout "$merged_hex"; then
-        _print_error "merged.hex missing or invalid (expected app data at 0xC000+)."
-        return 1
-    fi
+        if [ "$do_dfu_zip" = true ]; then
+            local sysbuild_dir="$AIRSPOT_BUILD_DIR"
+            local app_update_bin
+            app_update_bin="$(_airspot_locate_signed_bin "$sysbuild_dir" "$bin_base_name")"
+            if [ -z "$app_update_bin" ]; then
+                _print_error "Could not find signed binary for DFU zip."
+                return 1
+            fi
 
-    _print_success "Build complete: $merged_hex"
-    airspot_memory
-
-    local release_version_dir="$AIRSPOT_WORKSPACE/releases/v${version}"
-    mkdir -p "$release_version_dir"
-    local merged_hex_name="${bin_base_name}_${timestamp}_merged.hex"
-    cp "$merged_hex" "$release_version_dir/$merged_hex_name"
-    cp "$merged_hex" "$AIRSPOT_BUILD_DIR/merged.hex"
-    _print_success "Release: releases/v${version}/$merged_hex_name"
-
-    if [ "$do_dfu_zip" = true ]; then
-        local sysbuild_dir="$AIRSPOT_BUILD_DIR"
-        local app_update_bin
-        app_update_bin="$(_airspot_locate_signed_bin "$sysbuild_dir" "$bin_base_name")"
-        if [ -z "$app_update_bin" ]; then
-            _print_error "Could not find signed binary for DFU zip."
-            return 1
-        fi
-
-        _print_info "Packaging DFU zip (OTA still disabled in app — archive only)..."
-        local dfu_zip_name="${bin_base_name}_${timestamp}_dfu.zip"
-        local dfu_zip_path="$release_version_dir/$dfu_zip_name"
-        local sysbuild_dfu_zip="$sysbuild_dir/dfu_application.zip"
-        if [ -f "$sysbuild_dfu_zip" ]; then
-            cp "$sysbuild_dfu_zip" "$dfu_zip_path"
-        else
-            local tmp_manifest="$release_version_dir/.manifest_tmp.json"
-            cat > "$tmp_manifest" << EOF
+            _print_info "Packaging DFU zip (OTA still disabled in app — archive only)..."
+            local dfu_zip_name="${bin_base_name}_${timestamp}_dfu.zip"
+            local dfu_zip_path="$release_version_dir/$dfu_zip_name"
+            local sysbuild_dfu_zip="$sysbuild_dir/dfu_application.zip"
+            if [ -f "$sysbuild_dfu_zip" ]; then
+                cp "$sysbuild_dfu_zip" "$dfu_zip_path"
+            else
+                local tmp_manifest="$release_version_dir/.manifest_tmp.json"
+                cat > "$tmp_manifest" << EOF
 {
     "format-version": 1,
     "time": $(date +%s),
@@ -327,68 +320,235 @@ airspot_build() {
     ]
 }
 EOF
-            cp "$app_update_bin" "$release_version_dir/application.signed.bin"
-            mv "$tmp_manifest" "$release_version_dir/manifest.json"
-            (cd "$release_version_dir" && zip -j "$dfu_zip_path" manifest.json application.signed.bin)
-            rm -f "$release_version_dir/manifest.json" "$release_version_dir/application.signed.bin"
+                cp "$app_update_bin" "$release_version_dir/application.signed.bin"
+                mv "$tmp_manifest" "$release_version_dir/manifest.json"
+                (cd "$release_version_dir" && zip -j "$dfu_zip_path" manifest.json application.signed.bin)
+                rm -f "$release_version_dir/manifest.json" "$release_version_dir/application.signed.bin"
+            fi
+            cp "$app_update_bin" "$release_version_dir/${bin_base_name}_${timestamp}_signed.bin"
+            _print_success "DFU archive: releases/v${version}/$dfu_zip_name"
         fi
-        cp "$app_update_bin" "$release_version_dir/${bin_base_name}_${timestamp}_signed.bin"
-        _print_success "DFU archive: releases/v${version}/$dfu_zip_name"
-    fi
-}
-
-# Flash command — always merged.hex + full chip erase (see flash_recovery.sh)
-airspot_flash() {
-    local hex_file="${1:-}"
-    local force_legacy=false
-
-    if [ "$hex_file" = "--force-legacy" ]; then
-        force_legacy=true
-        hex_file="${2:-}"
+        return 0
     fi
 
-    if [ -z "$hex_file" ]; then
-        hex_file="$(_airspot_find_merged_hex)"
-    fi
-
-    if [ -z "$hex_file" ] || [ ! -f "$hex_file" ]; then
-        _print_error "No merged.hex found. Run: airspot build --clean"
-        _print_info "Or: application/scripts/flash_recovery.sh releases/v0.11.0/*_merged.hex"
+    _print_info "Building monolithic app @ 0x0 (UART bring-up — same style as AH01)..."
+    mkdir -p "$AIRSPOT_BUILD_DIR"
+    touch "$AIRSPOT_BUILD_DIR/.airspot_flash_mono"
+    rm -f "$AIRSPOT_BUILD_DIR/merged.hex" "$AIRSPOT_BUILD_DIR/zephyr/merged.hex"
+    west build -b "$AIRSPOT_BOARD" --no-sysbuild $pristine -- \
+        -DPM_STATIC_YML_FILE="$AIRSPOT_PROJECT_DIR/pm_static_mono.yml"
+    if [ $? -ne 0 ]; then
+        _print_error "Build failed!"
         return 1
     fi
 
-    if ! _airspot_hex_is_merged_layout "$hex_file"; then
-        if [ "$force_legacy" != true ]; then
-            _print_error "Refusing to flash non-merged hex: $hex_file"
-            _print_error "This file only has data below 0xC000 (legacy / app-only). It will not boot with MCUboot."
-            _print_info "Use *_merged.hex from 'airspot build' or flash_recovery.sh"
-            return 1
+    local app_bin="$AIRSPOT_BUILD_DIR/zephyr/${bin_base_name}.bin"
+    if [ ! -f "$app_bin" ]; then
+        app_bin="$AIRSPOT_BUILD_DIR/zephyr/zephyr.bin"
+    fi
+    if [ ! -f "$app_bin" ]; then
+        _print_error "Application .bin not found under build/zephyr/"
+        return 1
+    fi
+
+    _print_success "Build complete: $app_bin (flash this — mono .hex is 64 KB only)"
+    airspot_memory
+
+    local release_version_dir="$AIRSPOT_WORKSPACE/releases/v${version}"
+    mkdir -p "$release_version_dir"
+    local bin_name="${bin_base_name}_${timestamp}.bin"
+    cp "$app_bin" "$release_version_dir/$bin_name"
+    _print_success "Release: releases/v${version}/$bin_name"
+    _print_warning "Do not J-Link flash zephyr/*.hex for mono builds — use .bin or airspot flash"
+}
+
+_airspot_find_mono_hex() {
+    local bin_name="$(_get_bin_name)"
+    if [ -f "$AIRSPOT_BUILD_DIR/zephyr/${bin_name}.hex" ]; then
+        echo "$AIRSPOT_BUILD_DIR/zephyr/${bin_name}.hex"
+    elif [ -f "$AIRSPOT_BUILD_DIR/zephyr/zephyr.hex" ]; then
+        echo "$AIRSPOT_BUILD_DIR/zephyr/zephyr.hex"
+    fi
+}
+
+_airspot_find_mono_bin() {
+    local bin_name="$(_get_bin_name)"
+    if [ -f "$AIRSPOT_BUILD_DIR/zephyr/${bin_name}.bin" ]; then
+        echo "$AIRSPOT_BUILD_DIR/zephyr/${bin_name}.bin"
+    elif [ -f "$AIRSPOT_BUILD_DIR/zephyr/zephyr.bin" ]; then
+        echo "$AIRSPOT_BUILD_DIR/zephyr/zephyr.bin"
+    fi
+}
+
+_airspot_find_flash_hex() {
+    if [ -f "$AIRSPOT_BUILD_DIR/.airspot_flash_mono" ]; then
+        _airspot_find_mono_hex
+    else
+        _airspot_find_merged_hex
+    fi
+}
+
+# Highest byte address covered by Intel HEX data records (0 if unreadable).
+_airspot_hex_image_end() {
+    local hex_file="$1"
+    python3 - "$hex_file" <<'PY'
+import sys
+path = sys.argv[1]
+ext = 0
+end = 0
+try:
+    f = open(path)
+except OSError:
+    sys.exit(0)
+for line in f:
+    line = line.strip()
+    if not line.startswith(":"):
+        continue
+    count = int(line[1:3], 16)
+    addr = int(line[3:7], 16)
+    typ = int(line[7:9], 16)
+    if typ == 4:
+        ext = int(line[9:9 + 4], 16) << 16
+    elif typ == 0:
+        end = max(end, ext + addr + count)
+print(end)
+PY
+}
+
+# Zephyr mono .hex often omits extended linear records — only the first 64 KB is programmed.
+_airspot_hex_undersized_vs_bin() {
+    local hex_file="$1"
+    local bin_file="$2"
+    [ -f "$hex_file" ] && [ -f "$bin_file" ] || return 1
+    local hex_end bin_sz
+    hex_end="$(_airspot_hex_image_end "$hex_file")"
+    bin_sz=$(wc -c < "$bin_file" | tr -d ' ')
+    [ "$bin_sz" -gt 65536 ] && [ "$hex_end" -le 65536 ]
+}
+
+# Pick .bin for truncated mono hex; merged.hex and full mono hex (e.g. AH01) stay .hex.
+_airspot_pick_flash_image() {
+    local image="${1:-}"
+
+    if [ -z "$image" ]; then
+        image="$(_airspot_find_merged_hex)"
+    fi
+    if [ -z "$image" ] || { [ -f "$AIRSPOT_BUILD_DIR/.airspot_flash_mono" ] && ! _airspot_hex_is_merged_layout "$image" 2>/dev/null; }; then
+        local mono_bin mono_hex
+        mono_bin="$(_airspot_find_mono_bin)"
+        mono_hex="$(_airspot_find_mono_hex)"
+        if [ -n "$mono_bin" ]; then
+            image="$mono_bin"
+        elif [ -n "$mono_hex" ]; then
+            image="$mono_hex"
         fi
-        _print_warning "Flashing legacy hex (--force-legacy) — device may not boot until merged recovery."
+    fi
+
+    if [ -z "$image" ] || [ ! -f "$image" ]; then
+        return 1
+    fi
+
+    case "$image" in
+        *.bin)
+            echo "$image"
+            return 0
+            ;;
+        *.hex)
+            if _airspot_hex_is_merged_layout "$image"; then
+                echo "$image"
+                return 0
+            fi
+            local paired_bin="${image%.hex}.bin"
+            if [ ! -f "$paired_bin" ]; then
+                paired_bin="$(_airspot_find_mono_bin)"
+            fi
+            if [ -n "$paired_bin" ] && _airspot_hex_undersized_vs_bin "$image" "$paired_bin"; then
+                _print_warning "Mono .hex only covers 64 KB — flashing .bin instead (required after chiperase)."
+                echo "$paired_bin"
+                return 0
+            fi
+            echo "$image"
+            return 0
+            ;;
+        *)
+            echo "$image"
+            return 0
+            ;;
+    esac
+}
+
+_airspot_nrfjprog_program() {
+    local image="$1"
+    nrfjprog --recover -f NRF54L
+    if [[ "$image" == *.bin ]]; then
+        nrfjprog --program "$image" --chiperase --verify -f NRF54L
+    else
+        nrfjprog --program "$image" --chiperase --verify -f NRF54L
+    fi
+    nrfjprog --reset -f NRF54L
+}
+
+_airspot_jlink_program() {
+    local image="$1"
+    local jlinkexe="$2"
+    local load_cmd
+    if [[ "$image" == *.bin ]]; then
+        load_cmd="loadbin $image, 0x0"
+    else
+        load_cmd="loadfile $image"
+    fi
+    cat > /tmp/jlink_flash.jlink <<EOF
+device NRF54L05_XXAA
+si SWD
+speed 4000
+r
+$load_cmd
+r
+q
+EOF
+    "$jlinkexe" -CommandFile /tmp/jlink_flash.jlink
+    rm -f /tmp/jlink_flash.jlink
+}
+
+# Flash — full chip erase; mono uses .bin @ 0x0; merged.hex for MCUboot builds
+airspot_flash() {
+    local image_arg="${1:-}"
+    local force_any=false
+
+    if [ "$image_arg" = "--force" ] || [ "$image_arg" = "--force-legacy" ]; then
+        force_any=true
+        image_arg="${2:-}"
+    fi
+
+    local image
+    image="$(_airspot_pick_flash_image "$image_arg")" || true
+    if [ -z "$image" ] || [ ! -f "$image" ]; then
+        _print_error "No firmware image found. Run: airspot build --clean"
+        return 1
+    fi
+
+    if _airspot_hex_is_merged_layout "$image" 2>/dev/null; then
+        _print_info "Image type: MCUboot merged (bootloader + app @ 0xC000)"
+    elif [[ "$image" == *.bin ]]; then
+        _print_info "Image type: monolithic .bin @ 0x0 ($(wc -c < "$image" | tr -d ' ') bytes)"
+    else
+        _print_info "Image type: monolithic hex @ 0x0"
+        if [ "$force_any" != true ] && _airspot_hex_is_merged_layout "$AIRSPOT_BUILD_DIR/merged.hex" 2>/dev/null; then
+            _print_warning "merged.hex exists in build/ but you are flashing a mono image."
+        fi
     fi
 
     cd "$AIRSPOT_PROJECT_DIR"
-    _print_info "Recover + program (full erase): $hex_file"
+    _print_info "Recover + program (full erase): $image"
 
     if command -v nrfjprog &> /dev/null; then
-        nrfjprog --recover -f NRF54L
-        nrfjprog --program "$hex_file" --chiperase --verify --reset -f NRF54L
+        _airspot_nrfjprog_program "$image"
     else
         local jlinkexe
         jlinkexe="$(_find_jlinkexe)"
         if [ -n "$jlinkexe" ]; then
             _print_warning "nrfjprog not found. Falling back to JLinkExe."
-        cat > /tmp/jlink_flash.jlink <<EOF
-device NRF54L05_XXAA
-si SWD
-speed 4000
-r
-loadfile $hex_file
-r
-q
-EOF
-            "$jlinkexe" -CommandFile /tmp/jlink_flash.jlink
-        rm -f /tmp/jlink_flash.jlink
+            _airspot_jlink_program "$image" "$jlinkexe"
         else
             _print_error "No flash tool found (nrfjprog or JLinkExe)."
             _print_info "Install Nordic nRF Command Line Tools or SEGGER J-Link."
@@ -745,13 +905,13 @@ AirSpot Slim Development Tool (v${version})
 ═════════════════════════════════════════════════════════
 
 COMMANDS:
-  airspot build [opts]      - Sysbuild + merged.hex (default)
+  airspot build [opts]      - Mono app @ 0x0 (default); --bootloader for merged.hex
     Options:
       --clean               - Clean build
-      --dfu                 - Also store DFU zip (OTA still disabled in firmware)
-      --legacy              - App-only hex (do not flash — debug link only)
+      --dfu                 - DFU zip (with --bootloader only)
+      --bootloader          - MCUboot sysbuild → merged.hex
   
-  airspot flash [merged.hex] - J-Link recover + program merged.hex
+  airspot flash [image]     - Recover + chiperase; mono uses .bin, MCUboot uses merged.hex
   airspot logs [uart|rtt]   - View logs (UART default on P1.02 @ 115200)
   airspot monitor           - Alias for logs
   airspot erase [-y]        - Erase entire chip

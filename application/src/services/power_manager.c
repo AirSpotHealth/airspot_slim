@@ -190,6 +190,13 @@ bool power_manager_validate_wakeup_gesture(void) {
 }
 
 void power_manager_enter_off_state(void) {
+#if !IS_ENABLED(CONFIG_AIRSPOT_POWER_OFF_ENABLED)
+  /* System OFF is disabled for now. On current hardware the button is on a
+   * GPIO that cannot wake from System OFF (see CONFIG_AIRSPOT_POWER_OFF_ENABLED),
+   * so powering off would strand the device. Ignore the request. */
+  LOG_WRN("Power Off requested but disabled (CONFIG_AIRSPOT_POWER_OFF_ENABLED=n)");
+  return;
+#else
   LOG_INF("========================================");
   LOG_INF("Entering Power Off (shipping mode)...");
   LOG_INF("========================================");
@@ -252,6 +259,7 @@ void power_manager_enter_off_state(void) {
 
   /* Should never reach here */
   LOG_ERR("Failed to enter System OFF!");
+#endif /* CONFIG_AIRSPOT_POWER_OFF_ENABLED */
 }
 
 /* --- Power OFF gesture detection (when device is ON) --- */

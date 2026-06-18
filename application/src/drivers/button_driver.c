@@ -2,6 +2,15 @@
  * Copyright (c) 2026 AirSpot
  *
  * SPDX-License-Identifier: Apache-2.0
+ *
+ * Button driver (polling only).
+ *
+ * The button is on P2.10. On the nRF54L05/15 that pin is in gpio2, which has no
+ * GPIOTE instance (only gpio0->gpiote30 and gpio1->gpiote20 are wired), so GPIO
+ * edge interrupts are physically unavailable on this pin; P2.10 is also shared
+ * with nRESET. The driver therefore polls at 20 Hz with firmware debounce. A
+ * future board revision is expected to move the button to an interrupt-capable
+ * P0/P1 pin, at which point an interrupt path can be reintroduced.
  */
 
 #include <errno.h>
@@ -12,7 +21,7 @@
 
 #include <drivers/button_driver.h>
 
-LOG_MODULE_REGISTER(button_driver, LOG_LEVEL_DBG);
+LOG_MODULE_REGISTER(button_driver, LOG_LEVEL_INF);
 
 #define BUTTON_NODE DT_ALIAS(sw0)
 #ifndef CONFIG_AIRSPOT_BUTTON_LONG_PRESS_TIMEOUT_MS
@@ -21,108 +30,137 @@ LOG_MODULE_REGISTER(button_driver, LOG_LEVEL_DBG);
 #define LONG_PRESS_TIMEOUT_MS CONFIG_AIRSPOT_BUTTON_LONG_PRESS_TIMEOUT_MS
 #endif
 
+/* Poll cadence and debounce. 20 Hz (50 ms) is needed to catch quick taps: a
+ * deliberate press is only ~100-300 ms, and the multi-tap gestures (double tap
+ * for CO2, 5-press reset) require each press AND release edge to be sampled.
+ * At the old 200 ms cadence a quick tap could fall entirely between polls and
+ * a registered tap took >=400 ms — longer than the 300 ms tap classifier — so
+ * multi-tap gestures could never fire. At 50 ms/poll, 2 stable polls = ~100 ms
+ * of stability before a state change is accepted. */
+#define BUTTON_POLL_INTERVAL_MS 50
+#define BUTTON_DEBOUNCE_POLLS 2
+
+/* Warm-up: P2.10 (shared with nRESET) can read a transient level during early
+ * boot before it settles. For the first BUTTON_WARMUP_POLLS polls (~1.2 s) we
+ * adopt the reading as the baseline WITHOUT emitting events, so no phantom
+ * press/long-press fires at startup. */
+#define BUTTON_WARMUP_POLLS 24
+
 static const struct gpio_dt_spec button =
     GPIO_DT_SPEC_GET_OR(BUTTON_NODE, gpios, {0});
-static struct gpio_callback button_cb_data;
 static button_callback_t user_callback = NULL;
 static struct k_work_delayable long_press_work;
 static struct k_work_delayable poll_work;
 static bool button_pressed = false;
 static bool initialized = false;
-static bool use_polling = false;
+static uint8_t warmup_remaining = BUTTON_WARMUP_POLLS;
+
+/* Dedicated workqueue for polling and event delivery. The system workqueue
+ * blocks for ~600 ms during a synchronous CO2 measurement, which at 20 Hz
+ * polling would swallow presses mid-gesture (e.g. the 5-press reset). Event
+ * callbacks run on this queue, so they must defer blocking work elsewhere. */
+#define BUTTON_WQ_STACK_SIZE 2048
+#define BUTTON_WQ_PRIORITY K_PRIO_PREEMPT(8)
+static K_KERNEL_STACK_DEFINE(button_wq_stack, BUTTON_WQ_STACK_SIZE);
+static struct k_work_q button_wq;
 
 static void button_long_press_work_handler(struct k_work *work) {
-  if (button_pressed && user_callback) {
-    LOG_INF("Button long press timer fired");
-    user_callback(BUTTON_EVENT_LONG_PRESS);
-  }
-}
-
-/* Polling mode handler - checks button state periodically */
-static void button_poll_work_handler(struct k_work *work) {
-  static uint32_t poll_count = 0;
-
-  if (!initialized || !use_polling) {
-    LOG_ERR("Button poll: not initialized or not in polling mode!");
+  ARG_UNUSED(work);
+  if (!button_pressed || !user_callback) {
     return;
   }
 
-  poll_count++;
+  /* Re-confirm the button is *physically* still held before acting. P2.10 is
+   * shared with nRESET and electrically noisy, so the 20 Hz poll can miss a
+   * release falling-edge, leaving button_pressed stuck true. Trusting that
+   * cached flag alone would fire a spurious long-press (e.g. an unwanted soft
+   * power-off) after a quick tap. Reading the pin here is the safety net: if it
+   * now reads released, treat it as a missed release rather than a long press. */
+  int pin_state = gpio_pin_get_dt(&button);
+  if (pin_state != 1) {
+    LOG_WRN("Long press timer fired but button not held (pin=%d) - "
+            "treating as missed release",
+            pin_state);
+    button_pressed = false;
+    user_callback(BUTTON_EVENT_RELEASED);
+    return;
+  }
+
+  LOG_INF("Button long press timer fired");
+  user_callback(BUTTON_EVENT_LONG_PRESS);
+}
+
+/* Polling handler - checks button state periodically and reports edges. */
+static void button_poll_work_handler(struct k_work *work) {
+  ARG_UNUSED(work);
+  static bool cand_state = false; /* candidate (pending) level */
+  static uint8_t cand_count = 0;  /* consecutive polls at candidate level */
+
+  if (!initialized) {
+    return;
+  }
 
   int pin_state = gpio_pin_get_dt(&button);
   if (pin_state < 0) {
-    /* Error reading pin - reschedule and try again */
+    /* Error reading pin - reschedule and try again. */
     LOG_ERR("Button poll: failed to read pin: %d", pin_state);
-    k_work_schedule(&poll_work, K_MSEC(200));
+    k_work_schedule_for_queue(&button_wq, &poll_work, K_MSEC(BUTTON_POLL_INTERVAL_MS));
     return;
   }
 
-  bool current_state = (pin_state == 1); /* GPIO_ACTIVE_HIGH: 1 = pressed */
+  /* gpio_pin_get_dt() returns the logical level: 1 == active == pressed,
+   * accounting for the GPIO_ACTIVE_* flag configured in the device tree. */
+  bool current_state = (pin_state == 1);
 
-  /* Detect state changes */
-  if (current_state != button_pressed) {
+  /* Warm-up: silently adopt the startup level as the baseline so a transient
+   * boot reading doesn't generate a phantom press/long-press. */
+  if (warmup_remaining > 0) {
+    warmup_remaining--;
     button_pressed = current_state;
+    cand_state = current_state;
+    cand_count = 0;
+    if (warmup_remaining == 0) {
+      LOG_INF("Button baseline established: %s",
+              button_pressed ? "pressed" : "released");
+    }
+    k_work_schedule_for_queue(&button_wq, &poll_work, K_MSEC(BUTTON_POLL_INTERVAL_MS));
+    return;
+  }
 
-    if (button_pressed) {
-      /* Button just pressed */
-      printk("\n>>> BUTTON PRESSED (polling) <<<\n");
-      LOG_INF("Button poll: pressed (pin_state=1, poll #%u)", poll_count);
-      if (user_callback) {
-        user_callback(BUTTON_EVENT_PRESSED);
-      } else {
-        LOG_WRN("Button poll: callback not registered!");
-      }
-      /* Start long press timer */
-      k_work_schedule(&long_press_work, K_MSEC(LONG_PRESS_TIMEOUT_MS));
+  if (current_state != button_pressed) {
+    /* Debounce: only accept the change after it persists across polls. */
+    if (current_state == cand_state) {
+      cand_count++;
     } else {
-      /* Button just released */
-      printk("\n>>> BUTTON RELEASED (polling) <<<\n");
-      LOG_INF("Button poll: released (pin_state=0, poll #%u)", poll_count);
-      /* Cancel long press timer */
-      k_work_cancel_delayable(&long_press_work);
-      if (user_callback) {
-        user_callback(BUTTON_EVENT_RELEASED);
+      cand_state = current_state;
+      cand_count = 1;
+    }
+
+    if (cand_count >= BUTTON_DEBOUNCE_POLLS) {
+      button_pressed = current_state;
+      cand_count = 0;
+
+      if (button_pressed) {
+        LOG_INF("Button: pressed");
+        if (user_callback) {
+          user_callback(BUTTON_EVENT_PRESSED);
+        }
+        k_work_schedule_for_queue(&button_wq, &long_press_work, K_MSEC(LONG_PRESS_TIMEOUT_MS));
       } else {
-        LOG_WRN("Button poll: callback not registered!");
+        LOG_INF("Button: released");
+        k_work_cancel_delayable(&long_press_work);
+        if (user_callback) {
+          user_callback(BUTTON_EVENT_RELEASED);
+        }
       }
     }
-  } else if (button_pressed) {
-    /* Button still pressed - check if long press timer expired */
-    /* (This is handled by the long_press_work handler) */
-  }
-
-  /* Reschedule polling (200ms = 5Hz polling rate for power savings) */
-  k_work_schedule(&poll_work, K_MSEC(200));
-}
-
-static void button_pressed_handler(const struct device *dev,
-                                   struct gpio_callback *cb, uint32_t pins) {
-  uint32_t pin_state = gpio_pin_get_dt(&button);
-
-  /* Button is GPIO_ACTIVE_HIGH, so pressed = HIGH (1), released = LOW (0) */
-  if (pin_state == 1) {
-    /* Button pressed */
-    button_pressed = true;
-    LOG_INF("Button interrupt: pressed (pin_state=1, GPIO_ACTIVE_HIGH)");
-
-    if (user_callback) {
-      user_callback(BUTTON_EVENT_PRESSED);
-    }
-
-    /* Start long press timer */
-    k_work_schedule(&long_press_work, K_MSEC(LONG_PRESS_TIMEOUT_MS));
   } else {
-    /* Button released */
-    button_pressed = false;
-    LOG_INF("Button interrupt: released (pin_state=0, GPIO_ACTIVE_HIGH)");
-
-    /* Cancel long press timer */
-    k_work_cancel_delayable(&long_press_work);
-
-    if (user_callback) {
-      user_callback(BUTTON_EVENT_RELEASED);
-    }
+    /* Matches the accepted state - clear any pending candidate. */
+    cand_count = 0;
   }
+
+  /* Reschedule polling. */
+  k_work_schedule_for_queue(&button_wq, &poll_work, K_MSEC(BUTTON_POLL_INTERVAL_MS));
 }
 
 int button_driver_init(void) {
@@ -142,53 +180,32 @@ int button_driver_init(void) {
   k_work_init_delayable(&long_press_work, button_long_press_work_handler);
   k_work_init_delayable(&poll_work, button_poll_work_handler);
 
-  /* Configure interrupt for both edges (press and release) */
-  /* Note: GPIO_INT_DEBOUNCE might not be supported on all GPIO ports */
-  ret = gpio_pin_interrupt_configure_dt(&button, GPIO_INT_EDGE_BOTH);
-  if (ret < 0) {
-    LOG_ERR("Failed to configure button interrupt: %d", ret);
-    LOG_ERR("Button pin: %d, port: %s", button.pin, button.port->name);
-    LOG_WRN(
-        "Button will work but without interrupt support - using polling mode");
-    /* Use polling mode instead */
-    use_polling = true;
-    initialized = true;
-    LOG_INF("Button driver initialized (polling mode) on pin %d", button.pin);
-    LOG_INF("Polling will start after callback is registered");
-    /* Don't start polling here - wait for callback registration */
-    return 0;
+  if (!initialized) { /* the workqueue thread can only be started once */
+    k_work_queue_init(&button_wq);
+    k_work_queue_start(&button_wq, button_wq_stack,
+                       K_KERNEL_STACK_SIZEOF(button_wq_stack),
+                       BUTTON_WQ_PRIORITY, NULL);
+    k_thread_name_set(&button_wq.thread, "button_wq");
   }
 
-  /* Interrupt mode - set up callback */
-  gpio_init_callback(&button_cb_data, button_pressed_handler, BIT(button.pin));
-  gpio_add_callback(button.port, &button_cb_data);
-
-  use_polling = false;
   initialized = true;
-  LOG_INF("Button driver initialized (interrupt mode) on pin %d", button.pin);
+  /* Polling starts once the callback is registered (see register_callback). */
+  LOG_INF("Button driver initialized (polling on P2.10)");
   return 0;
 }
 
 void button_driver_register_callback(button_callback_t callback) {
   user_callback = callback;
+  LOG_DBG("Button callback registered: %p", (void *)callback);
 
-  LOG_INF("Button callback registered: %p", (void *)callback);
-  LOG_INF("Button driver state: initialized=%d, use_polling=%d", initialized,
-          use_polling);
-
-  /* If in polling mode, start polling now that callback is registered */
-  if (initialized && use_polling && callback != NULL) {
-    LOG_INF("Starting button polling (callback registered)");
-    LOG_INF("Polling will check button every 200ms");
-    int ret = k_work_schedule(&poll_work, K_MSEC(200));
+  if (initialized && callback != NULL) {
+    warmup_remaining = BUTTON_WARMUP_POLLS; /* re-arm baseline warm-up */
+    int ret = k_work_schedule_for_queue(&button_wq, &poll_work, K_MSEC(BUTTON_POLL_INTERVAL_MS));
     if (ret < 0) {
-      LOG_ERR("Failed to schedule polling work: %d", ret);
+      LOG_ERR("Failed to schedule button polling: %d", ret);
     } else {
-      LOG_INF("Polling work scheduled successfully");
+      LOG_INF("Button polling started (%d ms)", BUTTON_POLL_INTERVAL_MS);
     }
-  } else {
-    LOG_WRN("Polling NOT started: initialized=%d, use_polling=%d, callback=%p",
-            initialized, use_polling, (void *)callback);
   }
 }
 

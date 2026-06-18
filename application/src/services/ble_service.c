@@ -17,6 +17,7 @@
 #include <services/airspot_nus.h>
 #include <services/ble_service.h>
 #include <services/led_indicator.h>
+#include <services/user_settings.h>
 
 LOG_MODULE_REGISTER(ble_service, CONFIG_AIRSPOT_LOG_LEVEL);
 
@@ -29,6 +30,9 @@ static uint8_t device_name_len = sizeof(DEVICE_NAME_BASE) - 1;
 static struct bt_conn *current_conn = NULL;
 static bool initialized = false;
 static bool advertising = false;
+/* When true, all advertising is blocked (soft power-off): the disconnect
+ * callback won't re-advertise and start_advertising() is a no-op. */
+static bool advertising_suppressed = false;
 
 /* Work item for deferred advertising restart */
 static void restart_advertising_work_handler(struct k_work *work);
@@ -62,11 +66,20 @@ static void connected(struct bt_conn *conn, uint8_t err) {
   LOG_INF("BLE Connected");
   current_conn = bt_conn_ref(conn);
 
+  /* Advertising stops automatically on connection (single peripheral); keep
+   * our state flag in sync so a later start_advertising() is not skipped. */
+  advertising = false;
+
   /* Notify NUS of connection for TX operations */
   airspot_nus_set_conn(conn);
 
-  /* Stop pairing indicator */
-  led_indicator_stop();
+  /* Remember that a phone has connected: the status LED shows blue (paired)
+   * instead of white (not paired) from now on. Persisted in NVS. */
+  user_settings_set_paired(true);
+
+  /* Brief green confirmation that a central connected (also clears any
+   * pairing/advertising indicator that was running). */
+  led_indicator_show_color(LED_COLOR_GREEN, LED_CONNECTED_FLASH_MS);
 }
 
 static void disconnected(struct bt_conn *conn, uint8_t reason) {
@@ -82,14 +95,28 @@ static void disconnected(struct bt_conn *conn, uint8_t reason) {
 
   /* Restart advertising after disconnect with a small delay
    * to allow the BLE stack to fully release connection resources.
-   * Direct call from callback can fail with -ENOMEM (-12). */
+   * Direct call from callback can fail with -ENOMEM (-12).
+   * Suppressed during soft power-off so a phone can't reconnect. */
   advertising = false;
-  k_work_schedule(&restart_adv_work, K_MSEC(100));
+  if (!advertising_suppressed) {
+    k_work_schedule(&restart_adv_work, K_MSEC(100));
+  }
+}
+
+/* Log the connection parameters the central actually agreed to, so reason-8
+ * (supervision timeout) drops can be diagnosed from the field. interval is in
+ * 1.25 ms units, timeout in 10 ms units. */
+static void le_param_updated(struct bt_conn *conn, uint16_t interval,
+                             uint16_t latency, uint16_t timeout) {
+  ARG_UNUSED(conn);
+  LOG_INF("Conn params updated: interval=%u.%02u ms, latency=%u, timeout=%u ms",
+          (interval * 5) / 4, ((interval * 5) % 4) * 25, latency, timeout * 10);
 }
 
 BT_CONN_CB_DEFINE(conn_callbacks) = {
     .connected = connected,
     .disconnected = disconnected,
+    .le_param_updated = le_param_updated,
 };
 
 /**
@@ -197,6 +224,10 @@ int ble_service_start_advertising(void) {
     return -ENODEV;
   }
 
+  if (advertising_suppressed) {
+    return 0; /* Blocked during soft power-off */
+  }
+
   if (advertising) {
     return 0; /* Already advertising */
   }
@@ -230,6 +261,17 @@ int ble_service_stop_advertising(void) {
   advertising = false;
   LOG_INF("BLE advertising stopped");
   return 0;
+}
+
+void ble_service_set_advertising_suppressed(bool suppress) {
+  advertising_suppressed = suppress;
+  if (suppress) {
+    /* Cancel any pending auto-restart and stop now so nothing can sneak an
+     * advertisement out during soft power-off. */
+    k_work_cancel_delayable(&restart_adv_work);
+    ble_service_stop_advertising();
+  }
+  LOG_INF("BLE advertising %s", suppress ? "suppressed" : "allowed");
 }
 
 void ble_service_update_battery_level(uint8_t level) {

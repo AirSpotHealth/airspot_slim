@@ -30,11 +30,12 @@ extern "C" {
  * @brief LED pattern types
  */
 typedef enum {
-  LED_PATTERN_OFF,   /**< All LEDs off */
-  LED_PATTERN_SOLID, /**< Solid color, full brightness */
-  LED_PATTERN_FLASH, /**< On/off blinking */
-  LED_PATTERN_FADE,  /**< Smooth fade in/out */
-  LED_PATTERN_PULSE, /**< Quick brightness pulse */
+  LED_PATTERN_OFF,        /**< All LEDs off */
+  LED_PATTERN_SOLID,      /**< Solid color, full brightness */
+  LED_PATTERN_FLASH,      /**< On/off blinking */
+  LED_PATTERN_FADE,       /**< Smooth continuous fade in/out (breathing) */
+  LED_PATTERN_PULSE,      /**< Quick brightness pulse */
+  LED_PATTERN_FADE_PULSE, /**< Smooth fade in/out, then rest, repeating */
 } led_pattern_t;
 
 /**
@@ -54,7 +55,7 @@ typedef enum {
  */
 typedef enum {
   CO2_LEVEL_GOOD,     /**< < 800 ppm - Green */
-  CO2_LEVEL_MODERATE, /**< 800-1500 ppm - Amber */
+  CO2_LEVEL_MODERATE, /**< amber zone (yellow_start .. red_start) */
   CO2_LEVEL_POOR,     /**< > 1500 ppm - Red */
 } co2_level_t;
 
@@ -62,10 +63,13 @@ typedef enum {
 #define CO2_GOOD_MAX 800
 #define CO2_MODERATE_MAX 1000
 
-/* LED indices */
-#define LED_RED 0
-#define LED_GREEN 1
-#define LED_BLUE 2
+/* LED driver channel indices per physical color. Verified on hardware via the
+ * boot color test: channel 0 (P2.09) = blue, 1 (P2.08) = red, 2 (P2.06) = green.
+ * (The board's RGB order does not match the channel order, so these are not
+ * 0/1/2.) */
+#define LED_RED 1
+#define LED_GREEN 2
+#define LED_BLUE 0
 
 /* Default timing constants */
 #define LED_FADE_DURATION_MS 3000
@@ -75,6 +79,12 @@ typedef enum {
 #define LED_CO2_DURATION_MS 3000
 #define LED_CHARGING_WHITE_MS 3000
 #define LED_CHARGING_CO2_MS 5000
+#define LED_STATUS_DURATION_MS 5000
+#define LED_CONNECTED_FLASH_MS 1500
+#define LED_FIND_DEVICE_PERIOD_MS 300
+#define LED_FIND_DEVICE_DURATION_MS 5000
+#define LED_BATTERY_CRITICAL_PERIOD_MS 250
+#define LED_BATTERY_CRITICAL_DURATION_MS 3000
 
 /**
  * @brief Initialize LED indicator service
@@ -163,6 +173,18 @@ void led_indicator_start_flash_pulse(led_color_t color, uint32_t period_ms,
  */
 void led_indicator_start_fade(led_color_t color, uint32_t period_ms);
 
+/**
+ * @brief Start a repeating gentle fade pulse: smooth fade in/out over
+ *        fade_ms, then off for the rest of the period. Battery-friendly
+ *        "breathing blip" — gradual, not a hard blink.
+ *
+ * @param color LED color
+ * @param period_ms Time between pulses (e.g. 10000 = one breath every 10s)
+ * @param fade_ms Duration of the fade in+out window (e.g. 1600)
+ */
+void led_indicator_start_fade_pulse(led_color_t color, uint32_t period_ms,
+                                    uint32_t fade_ms);
+
 /* ========================================
  * High-Level Device State Indicators
  * ======================================== */
@@ -203,7 +225,7 @@ void led_indicator_show_low_battery(void);
 /**
  * @brief Show charging with low battery
  *
- * Continuous flashing red until stopped.
+ * Slow red flash for a few seconds, then off (light never stays on).
  */
 void led_indicator_show_charging_low_battery(void);
 
@@ -243,6 +265,36 @@ void led_indicator_show_connected(uint16_t co2_ppm);
  * @param active true to start indicator, false to stop
  */
 void led_indicator_show_calibration(bool active);
+
+/**
+ * @brief Show overall device-status indicator (single source of truth).
+ *
+ * Single press / placement on the Qi charger both show this. Colors per the
+ * device UX spec, sustained for LED_STATUS_DURATION_MS then off:
+ *   Red   = low battery (critical battery uses a fast flash instead)
+ *   Blue  = OK and paired (a phone has connected at least once)
+ *   White = not paired yet (open the app to connect)
+ * Non-blocking; auto-stops after its duration.
+ *
+ * @param battery_low      true if battery is low
+ * @param battery_critical true if battery is critically low
+ * @param paired           true if a phone has ever connected
+ */
+void led_indicator_show_status(bool battery_low, bool battery_critical,
+                               bool paired);
+
+/**
+ * @brief Show critical-battery indicator (fast red flash, ~3s). Non-blocking.
+ */
+void led_indicator_show_battery_critical(void);
+
+/**
+ * @brief Show "find my device" indicator (rapid white flash, ~5s).
+ *
+ * Non-blocking replacement for the old blocking led_driver sequence so it can
+ * be triggered from a BLE command without stalling the connection.
+ */
+void led_indicator_show_find_device(void);
 
 #ifdef __cplusplus
 }

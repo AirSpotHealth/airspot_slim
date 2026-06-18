@@ -41,6 +41,9 @@ extern "C"
     uint16_t calib_target;  /* Calibration target (ppm) */
     uint8_t auto_calibrate; /* ASC enabled (0/1) */
     uint8_t asc_day_count;  /* ASC day count (0-255) */
+    uint16_t co2_yellow_start; /* Green/amber LED boundary (ppm) */
+    uint16_t co2_red_start;    /* Amber/red LED boundary (ppm) */
+    uint8_t paired;            /* 1 = a phone has connected at least once */
   } user_settings_t;
 
   /**
@@ -169,6 +172,21 @@ extern "C"
   int user_settings_set_calib_target(uint16_t target);
 
   /**
+   * @brief Get CO2 green/amber threshold (ppm)
+   */
+  uint16_t user_settings_get_co2_yellow_start(void);
+
+  /**
+   * @brief Get CO2 amber/red threshold (ppm)
+   */
+  uint16_t user_settings_get_co2_red_start(void);
+
+  /**
+   * @brief Set CO2 LED thresholds (ppm). yellow_start must be < red_start.
+   */
+  int user_settings_set_co2_thresholds(uint16_t yellow_start, uint16_t red_start);
+
+  /**
    * @brief Get auto-calibration (ASC) enable flag
    */
   uint8_t user_settings_get_auto_calibrate(void);
@@ -192,6 +210,17 @@ extern "C"
    * @brief Apply CO2 correction with clamp
    */
   uint16_t user_settings_apply_co2_correction(uint16_t raw_ppm);
+
+  /**
+   * @brief Has a phone ever connected to this device? ("paired" for the
+   *        status LED: blue = paired, white = never set up with the app)
+   */
+  bool user_settings_is_paired(void);
+
+  /**
+   * @brief Mark the device as paired/unpaired (persisted; no-op if unchanged)
+   */
+  int user_settings_set_paired(bool paired);
 
   /**
    * @brief Factory reset - clear all user settings to defaults

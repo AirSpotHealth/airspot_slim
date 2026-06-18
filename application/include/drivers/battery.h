@@ -26,6 +26,17 @@
 extern "C" {
 #endif
 
+/*
+ * Low-battery lockout thresholds (millivolts), with hysteresis to avoid the
+ * boot/advertise/brownout death-loop near empty:
+ *  - Below LOCKOUT while discharging (not on charger): tear down BLE/sensors
+ *    and enter the low-power charging lockout.
+ *  - Stay locked out until charged back above RECOVER, then clean-reboot.
+ * Mirrors the screen device's 3.4 V / 3.71 V hysteresis (battery.c reference).
+ */
+#define BATTERY_LOCKOUT_MV 3300 /* ~15% — matches battery_is_low() */
+#define BATTERY_RECOVER_MV 3700 /* ~60% — enough headroom to run a while */
+
 /**
  * @brief Initialize battery ADC driver
  *
