@@ -56,6 +56,19 @@ extern "C"
 	 */
 	int button_driver_get_state(bool *pressed);
 
+	/**
+	 * @brief Read the button level live, bypassing the polled/debounced cache.
+	 *
+	 * Performs a fresh GPIO read instead of returning the last polled state.
+	 * Use when the caller can't wait for the 20 Hz poll to refresh — e.g. a
+	 * blocking animation on a thread that outranks the button workqueue, which
+	 * would otherwise see a stale cached state.
+	 *
+	 * @param pressed Pointer to store state (true = pressed, false = released)
+	 * @return 0 on success, negative error code on failure
+	 */
+	int button_driver_read_now(bool *pressed);
+
 #ifdef __cplusplus
 }
 #endif

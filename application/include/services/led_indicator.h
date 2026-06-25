@@ -110,6 +110,42 @@ void led_indicator_stop(void);
 bool led_indicator_is_active(void);
 
 /* ========================================
+ * Blocking Software-PWM Ramp (one-shot transitions)
+ * ======================================== */
+
+/**
+ * @brief Continue/abort callback for led_indicator_ramp().
+ *
+ * @return true to keep ramping, false to abort (LED is turned off).
+ */
+typedef bool (*led_ramp_continue_cb)(void);
+
+/**
+ * @brief Blocking software-PWM brightness ramp between two levels.
+ *
+ * The RGB LED is wired as plain gpio-leds with no hardware PWM, so
+ * set_brightness is on/off only and a brightness ramp cannot dim. This
+ * bit-bangs the duty cycle at a flicker-free carrier and steps it from
+ * @p from_pct to @p to_pct, gamma-corrected so the change looks smooth to the
+ * eye. Intended for one-shot power on/off light cues — NOT the workqueue-driven
+ * patterns above.
+ *
+ * BLOCKS the calling thread for ~@p duration_ms (busy-wait carrier), and first
+ * stops any running pattern. Settles the LED at @p to_pct on completion.
+ *
+ * @param color           Color to ramp.
+ * @param from_pct        Start brightness 0..100.
+ * @param to_pct          End brightness 0..100.
+ * @param duration_ms     Ramp duration.
+ * @param should_continue Polled once per frame (~20 ms); return false to abort.
+ *                        Pass NULL to always run to completion.
+ * @return true if the ramp completed, false if @p should_continue aborted it.
+ */
+bool led_indicator_ramp(led_color_t color, uint8_t from_pct, uint8_t to_pct,
+                        uint32_t duration_ms,
+                        led_ramp_continue_cb should_continue);
+
+/* ========================================
  * Timed Patterns (auto-stop after duration)
  * ======================================== */
 

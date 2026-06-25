@@ -276,6 +276,20 @@ static volatile bool soft_off_requested = false;
 static volatile bool soft_off_active = false;
 static volatile bool soft_on_requested = false;
 
+/* Power-on gesture progress (only meaningful while soft_off_active). Set on the
+ * button PRESS edge while charging; the soft-off loop uses the hold duration to
+ * drive the fade-in. */
+static volatile bool soft_on_holding = false;
+static volatile uint32_t soft_on_press_uptime = 0;
+
+/* Soft power-off / power-on light cues. The power-on fade-in plays over the LAST
+ * POWER_ON_FADE_MS of the hold so the light reaches full just as the device
+ * powers on (symmetric with the fade-out). */
+#define SOFT_OFF_FADE_MS 1000
+#define POWER_ON_HOLD_MS CONFIG_AIRSPOT_BUTTON_LONG_PRESS_TIMEOUT_MS /* 5000 */
+#define POWER_ON_FADE_MS 3000
+#define POWER_ON_FADE_DELAY_MS (POWER_ON_HOLD_MS - POWER_ON_FADE_MS) /* 2000 */
+
 /* Qi charger callback — placing the device on the charger acts like a single
  * button press: show the device status. Suppressed while soft-off so the
  * device stays dark until the power-on gesture. */
@@ -385,13 +399,28 @@ static void button_event_handler(button_event_t event) {
     return;
   }
 
-  /* Soft-off: ignore everything except the power-on gesture (hold 5 s while
-   * on the Qi charger). The soft-off loop in the main thread performs the
-   * actual reboot. */
+  /* Soft-off: ignore everything except the power-on gesture (hold 5 s while on
+   * the Qi charger). Track the press/release so the soft-off loop can fade the
+   * light in over the hold; the loop performs the actual reboot. LONG_PRESS is a
+   * fallback that still honors a completed hold if the loop's fade didn't run
+   * (e.g. a just-came-on-charger race). */
   if (soft_off_active) {
-    if (event == BUTTON_EVENT_LONG_PRESS && qi_charger_is_charging()) {
-      LOG_INF("Power ON gesture (5s hold on charger)");
-      soft_on_requested = true;
+    switch (event) {
+    case BUTTON_EVENT_PRESSED:
+      if (qi_charger_is_charging()) {
+        soft_on_press_uptime = k_uptime_get_32();
+        soft_on_holding = true;
+      }
+      break;
+    case BUTTON_EVENT_RELEASED:
+      soft_on_holding = false;
+      break;
+    case BUTTON_EVENT_LONG_PRESS:
+      if (qi_charger_is_charging()) {
+        LOG_INF("Power ON gesture (5s hold on charger)");
+        soft_on_requested = true;
+      }
+      break;
     }
     return;
   }
@@ -498,18 +527,30 @@ static void sensor_data_callback(const sensor_data_t *data) {
  * soft_on_requested; we then cold-reboot so every driver/service starts
  * fresh — the boot LED sequence doubles as the "light comes on" cue.
  */
+/* Polled once per frame by led_indicator_ramp() during the power-on fade-in:
+ * keep fading only while the button is STILL physically held and on the charger.
+ * Uses a live GPIO read (button_driver_read_now) because the driver's cached
+ * state can't refresh mid-ramp — the ramp busy-waits on the main thread, which
+ * outranks the button workqueue. Also feeds the watchdog, since the ramp blocks
+ * for the full POWER_ON_FADE_MS. */
+static bool power_on_hold_active(void) {
+  watchdog_feed();
+  bool pressed = false;
+  if (button_driver_read_now(&pressed) != 0) {
+    return false;
+  }
+  return pressed && qi_charger_is_charging();
+}
+
 static void enter_soft_off(void) {
   LOG_INF("Entering soft power-off");
   soft_off_active = true;
 
-  /* Fade the light out (spec: light fades off when turning off). */
-  led_indicator_stop();
-  for (int b = 100; b >= 0; b -= 4) {
-    led_driver_set_brightness(LED_RED, (uint8_t)b);
-    led_driver_set_brightness(LED_GREEN, (uint8_t)b);
-    led_driver_set_brightness(LED_BLUE, (uint8_t)b);
-    k_msleep(25);
-  }
+  /* Real fade-out (spec: "light fades off when turning off"). Software-PWM ramp
+   * — the gpio-leds can't dim otherwise. Feed the watchdog first: the ramp
+   * busy-waits for ~1 s and teardown follows, all under the 5 s WDT window. */
+  watchdog_feed();
+  led_indicator_ramp(LED_COLOR_WHITE, 100, 0, SOFT_OFF_FADE_MS, NULL);
   led_driver_all_off();
 
   /* Tear down the high-drain subsystems (same set as the battery lockout). */
@@ -525,9 +566,29 @@ static void enter_soft_off(void) {
     ble_service_disconnect();
   }
 
+  /* Park until the power-on gesture completes. While the button is held on the
+   * charger, once the hold passes POWER_ON_FADE_DELAY_MS we fade the white light
+   * IN over the remaining hold as live feedback; completing the fade == the full
+   * hold, so we power on. Releasing (or leaving the charger) mid-fade aborts it
+   * and requires a fresh press — same 5 s commitment as before, now visible. */
   while (!soft_on_requested) {
     watchdog_feed();
-    k_msleep(200);
+
+    if (soft_on_holding && qi_charger_is_charging()) {
+      uint32_t held = k_uptime_get_32() - soft_on_press_uptime;
+      if (held >= POWER_ON_FADE_DELAY_MS) {
+        if (led_indicator_ramp(LED_COLOR_WHITE, 0, 100, POWER_ON_FADE_MS,
+                               power_on_hold_active)) {
+          soft_on_requested = true; /* held the full duration → power on */
+        } else {
+          led_driver_all_off();
+          soft_on_holding = false; /* aborted → require a fresh press */
+        }
+        continue;
+      }
+    }
+
+    k_msleep(50);
   }
 
   LOG_INF("Power ON — cold reboot for clean start");

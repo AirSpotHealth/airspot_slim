@@ -119,6 +119,76 @@ static void set_color(led_color_t color, uint8_t brightness) {
 }
 
 /* ========================================
+ * Blocking Software-PWM Ramp
+ * ======================================== */
+
+/* The gpio-leds have no hardware dimming (set_brightness is on/off only), so we
+ * render intermediate brightness by bit-banging the channels on/off at a carrier
+ * fast enough to be flicker-free. One-shot, blocking — for power on/off cues. */
+#define LED_PWM_CARRIER_US 2000 /* 500 Hz carrier — no visible flicker */
+#define LED_RAMP_FRAME_MS 20    /* per-step render window (~50 steps/s) */
+
+/* Drive `color` at `duty_pct` for `window_ms` via software PWM (busy-wait). */
+static void pwm_render_frame(led_color_t color, uint8_t duty_pct,
+                             uint32_t window_ms) {
+  if (duty_pct > 100) {
+    duty_pct = 100;
+  }
+  uint32_t on_us = (LED_PWM_CARRIER_US * duty_pct) / 100u;
+  uint32_t off_us = LED_PWM_CARRIER_US - on_us;
+  uint32_t cycles = (window_ms * 1000u) / LED_PWM_CARRIER_US;
+  if (cycles == 0) {
+    cycles = 1;
+  }
+
+  for (uint32_t c = 0; c < cycles; c++) {
+    if (on_us) {
+      set_color(color, 100);
+      k_busy_wait(on_us);
+    }
+    if (off_us) {
+      set_color(color, 0);
+      k_busy_wait(off_us);
+    }
+  }
+}
+
+bool led_indicator_ramp(led_color_t color, uint8_t from_pct, uint8_t to_pct,
+                        uint32_t duration_ms,
+                        led_ramp_continue_cb should_continue) {
+  /* Take the LED away from any running pattern for the duration of the ramp. */
+  led_indicator_stop();
+
+  uint32_t steps = duration_ms / LED_RAMP_FRAME_MS;
+  if (steps == 0) {
+    steps = 1;
+  }
+
+  for (uint32_t s = 0; s <= steps; s++) {
+    if (should_continue && !should_continue()) {
+      set_color(color, 0);
+      return false; /* aborted */
+    }
+
+    /* Linear progress, then gamma-corrected (square) so the perceived change is
+     * even rather than crowding the bright end. */
+    int lin = (int)from_pct +
+              ((int)to_pct - (int)from_pct) * (int)s / (int)steps;
+    if (lin < 0) {
+      lin = 0;
+    } else if (lin > 100) {
+      lin = 100;
+    }
+    uint8_t duty = (uint8_t)((lin * lin) / 100);
+
+    pwm_render_frame(color, duty, LED_RAMP_FRAME_MS);
+  }
+
+  set_color(color, to_pct ? 100 : 0); /* settle at the endpoint */
+  return true;
+}
+
+/* ========================================
  * CO2 Level Helpers
  * ======================================== */
 

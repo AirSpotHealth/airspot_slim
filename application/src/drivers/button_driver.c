@@ -217,3 +217,19 @@ int button_driver_get_state(bool *pressed) {
   *pressed = button_pressed;
   return 0;
 }
+
+int button_driver_read_now(bool *pressed) {
+  if (!initialized || pressed == NULL) {
+    return -ENODEV;
+  }
+
+  /* Fresh read of the logical level (1 == active == pressed), honoring the
+   * GPIO_ACTIVE_* flag — same source the debounce poll samples. */
+  int pin_state = gpio_pin_get_dt(&button);
+  if (pin_state < 0) {
+    return pin_state;
+  }
+
+  *pressed = (pin_state == 1);
+  return 0;
+}
