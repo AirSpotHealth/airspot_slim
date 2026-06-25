@@ -32,8 +32,8 @@ LOG_MODULE_REGISTER(stcc4, LOG_LEVEL_DBG);
 #define STCC4_CMD_STOP_LSB 0x86
 #define STCC4_CMD_READ_MEASUREMENT_MSB 0xEC
 #define STCC4_CMD_READ_MEASUREMENT_LSB 0x05 /* Correct: 0xEC05 */
-#define STCC4_CMD_SET_AMBIENT_MSB 0x21
-#define STCC4_CMD_SET_AMBIENT_LSB 0x0D
+/* set_rht_compensation (0xE000) and set_pressure_compensation (0xE016) opcodes
+ * are emitted inline in stcc4_set_ambient()/stcc4_set_pressure(). */
 #define STCC4_CMD_SINGLE_SHOT_MSB 0x21
 #define STCC4_CMD_SINGLE_SHOT_LSB                                              \
   0x9D /* Correct: 0x219D - per working code                                   \
@@ -47,6 +47,15 @@ LOG_MODULE_REGISTER(stcc4, LOG_LEVEL_DBG);
 #define STCC4_CMD_ENABLE_TESTING_LSB 0xBC /* Enable testing mode: 0x3FBC */
 #define STCC4_CMD_DISABLE_TESTING_MSB 0x3F
 #define STCC4_CMD_DISABLE_TESTING_LSB 0x3D /* Disable testing mode: 0x3F3D */
+#define STCC4_CMD_FORCED_RECAL_MSB 0x36
+#define STCC4_CMD_FORCED_RECAL_LSB 0x2F /* perform_forced_recalibration: 0x362F */
+#define STCC4_CMD_SELF_TEST_MSB 0x27
+#define STCC4_CMD_SELF_TEST_LSB 0x8C /* perform_self_test: 0x278C */
+
+/* FRC: i16 correction is offset-encoded as CFRC = Output - 32768 (datasheet
+ * Table 11); a raw word of 0xFFFF means the command failed. */
+#define STCC4_FRC_OUTPUT_OFFSET 32768
+#define STCC4_FRC_FAILED_WORD 0xFFFF
 
 /* CRC polynomial for Sensirion sensors */
 #define STCC4_CRC_POLYNOMIAL 0x31
@@ -61,6 +70,8 @@ LOG_MODULE_REGISTER(stcc4, LOG_LEVEL_DBG);
 #define STCC4_STOP_TIME_MS 1200          /* Stop command execution time */
 #define STCC4_READ_RETRY_DELAY_MS 150    /* Retry delay when data not ready */
 #define STCC4_READ_RETRY_COUNT 2         /* Additional retries after first */
+#define STCC4_FRC_TIME_MS 90             /* perform_forced_recalibration exec */
+#define STCC4_SELF_TEST_TIME_MS 360      /* perform_self_test exec */
 
 static bool initialized = false;
 static stcc4_data_t last_data = {.co2_ppm = 0, .valid = false};
@@ -471,4 +482,98 @@ int stcc4_disable_testing_mode(void) {
     LOG_INF("STCC4 testing mode disabled (ASC active)");
   }
   return ret;
+}
+
+int stcc4_perform_forced_recalibration(uint16_t target_ppm,
+                                       int16_t *applied_correction) {
+  if (!initialized) {
+    return -ENODEV;
+  }
+
+  /* perform_forced_recalibration (0x362F): correct the CO2 output to an
+   * externally provided reference. Per datasheet Section 3.4.15 the sensor must
+   * already have operated >=30 s continuous (or >=30 single shots) under stable
+   * conditions, and a running continuous measurement must be stopped first —
+   * the caller (sensor_manager) is responsible for that sequencing.
+   *
+   * Argument is the target ppm directly (Table 11: Input = C_Target). The
+   * sensor replies with the applied correction encoded as Output - 32768, or
+   * 0xFFFF if the command failed. */
+  uint8_t cmd[5];
+  cmd[0] = STCC4_CMD_FORCED_RECAL_MSB;
+  cmd[1] = STCC4_CMD_FORCED_RECAL_LSB;
+  cmd[2] = (target_ppm >> 8) & 0xFF;
+  cmd[3] = target_ppm & 0xFF;
+  cmd[4] = stcc4_crc8(&cmd[2], 2);
+
+  int ret = i2c_bus_write(I2C_ADDR_STCC4, cmd, sizeof(cmd));
+  if (ret != 0) {
+    LOG_ERR("STCC4 FRC write failed: %d", ret);
+    return ret;
+  }
+
+  k_msleep(STCC4_FRC_TIME_MS);
+
+  uint8_t resp[3];
+  ret = i2c_bus_read(I2C_ADDR_STCC4, resp, sizeof(resp));
+  if (ret != 0) {
+    LOG_ERR("STCC4 FRC read failed: %d", ret);
+    return ret;
+  }
+  if (stcc4_crc8(&resp[0], 2) != resp[2]) {
+    LOG_WRN("STCC4 FRC CRC mismatch");
+    return -EIO;
+  }
+
+  uint16_t word = (uint16_t)((resp[0] << 8) | resp[1]);
+  if (word == STCC4_FRC_FAILED_WORD) {
+    LOG_WRN("STCC4 FRC rejected (target=%u ppm) — precondition not met?",
+            target_ppm);
+    return -EIO;
+  }
+
+  int16_t correction = (int16_t)((int32_t)word - STCC4_FRC_OUTPUT_OFFSET);
+  if (applied_correction) {
+    *applied_correction = correction;
+  }
+  LOG_INF("STCC4 FRC applied: target=%u ppm, correction=%d ppm", target_ppm,
+          correction);
+  return 0;
+}
+
+int stcc4_perform_self_test(uint16_t *result) {
+  if (!initialized) {
+    return -ENODEV;
+  }
+
+  /* perform_self_test (0x278C): on-chip self-test, returns 0x0000 on full pass.
+   * Nonzero bits indicate faults (bit0 supply OOR, bit4 SHT not connected,
+   * bits6:5 memory error, etc. — see datasheet Section 3.4.12). */
+  int ret =
+      stcc4_write_cmd(STCC4_CMD_SELF_TEST_MSB, STCC4_CMD_SELF_TEST_LSB);
+  if (ret != 0) {
+    LOG_ERR("STCC4 self-test write failed: %d", ret);
+    return ret;
+  }
+
+  k_msleep(STCC4_SELF_TEST_TIME_MS);
+
+  uint8_t resp[3];
+  ret = i2c_bus_read(I2C_ADDR_STCC4, resp, sizeof(resp));
+  if (ret != 0) {
+    LOG_ERR("STCC4 self-test read failed: %d", ret);
+    return ret;
+  }
+  if (stcc4_crc8(&resp[0], 2) != resp[2]) {
+    LOG_WRN("STCC4 self-test CRC mismatch");
+    return -EIO;
+  }
+
+  uint16_t word = (uint16_t)((resp[0] << 8) | resp[1]);
+  if (result) {
+    *result = word;
+  }
+  LOG_INF("STCC4 self-test result: 0x%04x (%s)", word,
+          word == 0 ? "PASS" : "FAULT");
+  return 0;
 }

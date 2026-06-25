@@ -191,6 +191,35 @@ int stcc4_enable_testing_mode(void);
  */
 int stcc4_disable_testing_mode(void);
 
+/**
+ * @brief Perform forced recalibration (FRC) to a known reference (0x362F).
+ *
+ * Hardware-level CO2 calibration: corrects the sensor's own output to
+ * @p target_ppm. PRECONDITIONS (datasheet Section 3.4.15), which the caller
+ * must satisfy: the sensor must have operated for >=30 s continuous (or >=30
+ * single shots) under stable conditions, and any running continuous
+ * measurement must be stopped before calling. This is preferable to a software
+ * offset because the correction persists in the sensor.
+ *
+ * @param target_ppm Reference CO2 concentration in ppm (e.g. ~420 for fresh
+ *                    air). Accepted range 0..32000.
+ * @param applied_correction Optional out: the correction the sensor applied,
+ *                           in ppm (signed). May be NULL.
+ * @return 0 on success; -EIO if the sensor rejected the command (precondition
+ *         not met) or on CRC error; other negative errno on I2C failure.
+ */
+int stcc4_perform_forced_recalibration(uint16_t target_ppm,
+                                       int16_t *applied_correction);
+
+/**
+ * @brief Run the on-chip self-test (0x278C).
+ *
+ * @param result Optional out: raw self-test word. 0x0000 = full pass; nonzero
+ *               bits flag faults (see datasheet Section 3.4.12). May be NULL.
+ * @return 0 on success (test ran), negative errno on I2C/CRC failure.
+ */
+int stcc4_perform_self_test(uint16_t *result);
+
 #ifdef __cplusplus
 }
 #endif

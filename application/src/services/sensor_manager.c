@@ -407,6 +407,45 @@ int sensor_manager_measure_now(void)
   return 0;
 }
 
+int sensor_manager_perform_frc(uint16_t target_ppm, int16_t *applied_correction)
+{
+  if (!initialized)
+  {
+    return -ENODEV;
+  }
+
+  /* Serialize against do_measurement() so we don't issue FRC mid-read. */
+  k_mutex_lock(&meas_mutex, K_FOREVER);
+
+  /* Datasheet FRC sequence: a running continuous measurement must be stopped
+   * first (single-shot leaves the sensor idle between shots, which is fine).
+   * The caller is responsible for the >=30 s / >=30-shot operating
+   * precondition by running the sensor before calling this. */
+  bool was_continuous = !use_single_shot_mode;
+  if (was_continuous)
+  {
+    stcc4_stop();
+  }
+
+  int16_t applied = 0;
+  int ret = stcc4_perform_forced_recalibration(target_ppm, &applied);
+
+  /* Restore continuous operation if we stopped it; use_single_shot_mode is left
+   * unchanged so the sensor_manager mode state stays consistent. */
+  if (was_continuous)
+  {
+    stcc4_start_continuous();
+  }
+
+  k_mutex_unlock(&meas_mutex);
+
+  if (ret == 0 && applied_correction)
+  {
+    *applied_correction = applied;
+  }
+  return ret;
+}
+
 /**
  * @brief Get the latest sensor data snapshot.
  *

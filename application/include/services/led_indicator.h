@@ -272,16 +272,16 @@ void led_indicator_show_calibration(bool active);
  * Single press / placement on the Qi charger both show this. Colors per the
  * device UX spec, sustained for LED_STATUS_DURATION_MS then off:
  *   Red   = low battery (critical battery uses a fast flash instead)
- *   Blue  = OK and paired (a phone has connected at least once)
- *   White = not paired yet (open the app to connect)
+ *   Blue  = currently connected to a phone
+ *   White = not connected (open the app to connect)
  * Non-blocking; auto-stops after its duration.
  *
  * @param battery_low      true if battery is low
  * @param battery_critical true if battery is critically low
- * @param paired           true if a phone has ever connected
+ * @param connected        true if a phone is connected right now
  */
 void led_indicator_show_status(bool battery_low, bool battery_critical,
-                               bool paired);
+                               bool connected);
 
 /**
  * @brief Show critical-battery indicator (fast red flash, ~3s). Non-blocking.

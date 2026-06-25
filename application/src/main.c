@@ -259,10 +259,12 @@ static int tap_count = 0; /* presses in the current burst */
 #define RAPID_PRESS_RESET_COUNT 5 /* presses for reset gesture (while charging) */
 
 static void show_device_status(void) {
-  /* Device-status colors per the UX spec (red = low battery, blue = OK and
-   * paired, white = not paired), sustained 5 s then off. */
+  /* Device-status colors (red = low battery, blue = currently connected to a
+   * phone, white = not connected), sustained 5 s then off. Keyed off the LIVE
+   * BLE link state, NOT the persistent "ever paired" flag — so blue means a
+   * phone is connected right now, white means it isn't. */
   led_indicator_show_status(battery_is_low(), battery_is_critical(),
-                            user_settings_is_paired());
+                            ble_service_is_connected());
 }
 
 /* Soft power-off state. System OFF cannot be used on current hardware (the

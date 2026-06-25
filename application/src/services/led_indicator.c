@@ -534,16 +534,16 @@ void led_indicator_show_find_device(void) {
 }
 
 void led_indicator_show_status(bool battery_low, bool battery_critical,
-                               bool paired) {
-  /* Device-status colors per the UX spec, sustained then auto-off:
-   * red = low battery, blue = OK and paired, white = not paired. Critical
-   * battery keeps the more urgent fast flash (still timed). Air quality is
-   * NOT shown here — that is the double-press CO2 readout. */
+                               bool connected) {
+  /* Device-status colors, sustained then auto-off:
+   * red = low battery, blue = connected to a phone, white = not connected.
+   * Critical battery keeps the more urgent fast flash (still timed). Air
+   * quality is NOT shown here — that is the double-press CO2 readout. */
   if (battery_critical) {
     led_indicator_show_battery_critical();
   } else if (battery_low) {
     led_indicator_show_color(LED_COLOR_RED, LED_STATUS_DURATION_MS);
-  } else if (paired) {
+  } else if (connected) {
     led_indicator_show_color(LED_COLOR_BLUE, LED_STATUS_DURATION_MS);
   } else {
     led_indicator_show_color(LED_COLOR_WHITE, LED_STATUS_DURATION_MS);

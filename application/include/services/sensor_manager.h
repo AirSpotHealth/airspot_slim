@@ -112,6 +112,19 @@ bool sensor_manager_is_ready(void);
  */
 int sensor_manager_reset_co2_sensor(void);
 
+/**
+ * @brief Perform hardware forced recalibration (FRC) of the STCC4.
+ *
+ * Stops continuous measurement if active, issues FRC to @p target_ppm, then
+ * restores continuous mode. The caller must have run the sensor long enough to
+ * meet the datasheet FRC precondition (>=30 s continuous operation).
+ *
+ * @param target_ppm Reference CO2 in ppm (e.g. ~420 for fresh air).
+ * @param applied_correction Optional out: correction applied by the sensor (ppm).
+ * @return 0 on success; -EIO if the sensor rejected FRC; negative errno otherwise.
+ */
+int sensor_manager_perform_frc(uint16_t target_ppm, int16_t *applied_correction);
+
 #ifdef __cplusplus
 }
 #endif
