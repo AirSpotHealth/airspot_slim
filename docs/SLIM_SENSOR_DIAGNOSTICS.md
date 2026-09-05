@@ -258,3 +258,84 @@ qualification; its FRC step was not performed because the authorized investigati
 preserves sensor calibration history. Screen remains a comparison device, not a
 certified reference in this experiment. Do not claim absolute accuracy or a
 confirmed manufacturing/calibration root cause from these observations alone.
+
+## High mode: one-second environmental compensation
+
+The user requested testing 5-second reporting with 1-second temperature/humidity
+and pressure input. Before this change, compensation occurred only during a full
+measurement cycle. Furthermore, startup selected the saved interval but left
+STCC4 in single-shot operation until a BLE power-mode command arrived. Thus a
+saved setting of 3 did not by itself prove continuous sensor operation.
+
+0.16.4 introduced one-second compensation ticks in continuous mode with 5-second
+report deadlines. Compensation-only ticks do not run the CO2 callback, battery
+ADC or software ASC algorithm. Environmental errors invalidate affected reports;
+non-finite or failed inputs are not substituted with invented compensation data.
+Startup verification now sends the measured environmental input before reading
+ASC status. New read-only BLE 0x36 exposes continuous mode, report interval and
+compensation success/failure counts and observed gaps. Its payload is schema 1,
+continuous byte, then five big-endian uint32 values: report interval (ms), success
+count, failure count, last gap (ms), maximum gap (ms).
+
+Both devices installed and confirmed 0.16.4 via OTA. Physical counters showed
+1-second updates after explicitly selecting mode 3, but a 5001 ms historical gap
+exposed the missing startup hardware-mode restoration. The preliminary capture
+was stopped to correct boot behavior, not used as a completed five-minute test.
+
+0.16.5 applied the saved hardware mode at boot, including an equal configured
+interval. Both boards booted it but produced no periodic reports and automatically
+rolled back to confirmed 0.16.4. That candidate is withdrawn. Review of Zephyr's
+work implementation found that asynchronous cancel of already-running work sets
+CANCELLING; the subsequent k_work_schedule call silently ignores it. A worker
+waiting for meas_mutex during the boot mode change can hit that path. The initial
+host harness did not model cancellation state. Its regression scenario now does.
+
+0.16.6 replaces cancel-plus-schedule with k_work_reschedule for cadence changes,
+retaining mutex serialization. The signed production build and all 47 current
+firmware tests pass, including main's actual startup block for all saved modes,
+equal-interval hardware transitions and the running-worker cancellation case.
+No Flutter code changed. The device's public setting and existing reading packet
+layouts remain compatible; the new diagnostic command is additive.
+
+### Completed 0.16.6 physical OTA test
+
+Both C58CC9 and 81A9DC installed 0.16.6 over BLE and reported that image active
+and confirmed after the five-minute capture. The active image digest on both was
+`487201b24f9ac350612e8ceaff9ea6b58a8f308087c27b6f59247712fc3aca01`.
+No power-mode command was sent after reboot: saved mode 3 restored continuous
+operation automatically. Each Slim delivered 61 unsolicited CO2 notifications.
+
+| Observed quantity | C58CC9 | 81A9DC |
+| --- | --- | --- |
+| Mean notification interval | 5.0003 s | 5.0001 s |
+| Notification interval range | 4.951–5.041 s | 4.977–5.040 s |
+| Maximum compensation gap since mode startup | 1001 ms | 1001 ms |
+| Successful compensation updates at end | 316 | 316 |
+| Compensation failures | 0 | 0 |
+| Unavailable reading sentinels | 0 | 0 |
+| Battery, not charging | 69% | 65% |
+
+Both final settings and correction response bytes matched their initial values:
+software ASC off, manual correction zero, and High mode retained. Final sensor
+diagnostics reported ASC paused (status 0x0084) without an error on both. There
+were no BLE command errors. The clients disconnected at completion, leaving both
+devices running in High mode. No FRC, sensor factory reset, offset adjustment or
+temporary PWM command was issued during this capture.
+
+The last 12 readings averaged 23.8 ppm (19–32) on C58CC9, 1435.1 ppm
+(1423–1445) on 81A9DC and 805.5 ppm (800–812) on Screen. The remaining Slim
+mean difference was 1411.3 ppm. These are short post-reboot observations, not
+stabilized accuracy results. Screen also fell from 882 to 800 ppm during the
+capture; environmental changes and sensor settling prevent attributing changes
+from earlier experiments solely to this firmware. No unavailable sentinel does
+not imply a physically accurate measurement. The substantial discrepancy remains
+unresolved despite verified timing and paused internal ASC.
+
+Screen was polled for its cached value about every 5.13 seconds; this does not
+verify Screen's internal sampling or compensation cadence. The 1-second
+compensation and 5-second unsolicited reporting measurements above apply to Slim.
+
+Evidence is in `local_backups/slim-divergence-20260905/`:
+`high_mode_final_notifications.py`, `high-mode-final-one-second.jsonl`,
+`summarize_high_mode.py` and `high-mode-final-summary.json`. These local diagnostic
+captures are not included in the release archive.
