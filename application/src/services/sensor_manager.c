@@ -52,6 +52,10 @@ static void conditioning_keepalive(void) { watchdog_feed(); }
 static struct k_work_delayable sensor_work;
 static uint32_t measurement_interval_ms = DEFAULT_INTERVAL_MS;
 static bool running = false;
+static int64_t next_report_ms;
+static sensor_timing_diagnostic_t timing;
+static int64_t last_compensation_ms;
+static bool compensation_failed_since_report;
 static bool initialized = false;
 static bool use_single_shot_mode =
     false; /* Track if using single-shot for STCC4 */
@@ -111,6 +115,46 @@ int sensor_manager_self_test(uint16_t *result)
   software_asc_end_manual();
   return ret;
 }
+void sensor_manager_get_timing_diagnostic(sensor_timing_diagnostic_t *out)
+{
+  k_mutex_lock(&meas_mutex, K_FOREVER);
+  *out = timing;
+  out->continuous = initialized && !use_single_shot_mode;
+  out->report_interval_ms = measurement_interval_ms;
+  k_mutex_unlock(&meas_mutex);
+}
+
+/* Caller holds meas_mutex. Never send fabricated environmental values after a
+ * failed read; the report is invalid until all compensation writes succeed. */
+static int update_compensation(sensor_data_t *data)
+{
+  sht40_data_t ambient;
+  lps22hh_data_t pressure;
+  int ret = sht40_measure(&ambient, SHT40_PRECISION_HIGH);
+  if (!ret) ret = lps22hh_read(&pressure);
+  if (!ret && (!isfinite(ambient.temperature) || !isfinite(ambient.humidity) ||
+      !isfinite(pressure.pressure) || pressure.pressure <= 0 ||
+      pressure.pressure > UINT16_MAX)) ret = -ERANGE;
+  if (!ret) ret = stcc4_set_ambient(ambient.temperature, ambient.humidity);
+  if (!ret) ret = stcc4_set_pressure((uint16_t)pressure.pressure);
+  if (ret) {
+    compensation_failed_since_report = true;
+    timing.failures++;
+    return ret;
+  }
+  int64_t now = k_uptime_get();
+  if (last_compensation_ms) {
+    timing.last_gap_ms = (uint32_t)(now - last_compensation_ms);
+    if (timing.last_gap_ms > timing.max_gap_ms) timing.max_gap_ms = timing.last_gap_ms;
+  }
+  last_compensation_ms = now;
+  timing.updates++;
+  data->temperature_c = ambient.temperature;
+  data->humidity_rh = ambient.humidity;
+  data->pressure_hpa = pressure.pressure;
+  return 0;
+}
+
 static int pause_stcc4_asc(void)
 {
   asc_diagnostic = (sensor_asc_diagnostic_t){.stage = 1};
@@ -119,8 +163,8 @@ static int pause_stcc4_asc(void)
   if (!ret) {
     /* Populate compensation before the startup verification measurement. */
     asc_diagnostic.stage = 6;
-    sht40_data_t ambient;
-    ret = sht40_measure(&ambient, SHT40_PRECISION_HIGH);
+    sensor_data_t ambient = {0};
+    ret = update_compensation(&ambient);
   }
   if (!ret) { asc_diagnostic.stage = 3; ret = stcc4_trigger_single_shot(); }
   if (!ret) {
@@ -133,6 +177,7 @@ static int pause_stcc4_asc(void)
   }
   asc_diagnostic.error = ret;
   if (!ret) {
+    compensation_failed_since_report = false;
     asc_diagnostic.stage = 5;
     software_asc_sensor_restarted();
   }
@@ -203,6 +248,14 @@ static int sensor_manager_init_locked(void)
   led_indicator_stop();
 #endif
 
+  /* 4. Initialize LPS22HH pressure sensor */
+  ret = lps22hh_init();
+  if (ret)
+  {
+    LOG_ERR("LPS22HH init failed: %d", ret);
+    return ret;
+  }
+
   /* Internal ASC is independent of the AirSpot software auto-calibration flag. */
   ret = pause_stcc4_asc();
   if (ret) return ret;
@@ -215,13 +268,6 @@ static int sensor_manager_init_locked(void)
   use_single_shot_mode = true;
   LOG_INF("STCC4 initialized (single-shot mode for power saving)");
 
-  /* 4. Initialize LPS22HH pressure sensor */
-  ret = lps22hh_init();
-  if (ret)
-  {
-    LOG_ERR("LPS22HH init failed: %d", ret);
-    return ret;
-  }
 
   /* 5. Initialize battery ADC */
   ret = battery_init();
@@ -253,64 +299,15 @@ int sensor_manager_init(void)
   return ret;
 }
 
-static int do_measurement(void)
+/* Caller holds meas_mutex, including across callback/correction processing. */
+static int do_measurement_locked(void)
 {
   sensor_data_t data = {0};
-  sht40_data_t sht_data;
   stcc4_data_t stcc_data;
-  lps22hh_data_t lps_data;
   int ret;
-  bool all_ok = true;
-
-  /* Serialize the full sensor read sequence (periodic vs. manual). */
-  k_mutex_lock(&meas_mutex, K_FOREVER);
-
   data.timestamp_ms = k_uptime_get_32();
-
-  /* 1. Read SHT40 temperature and humidity (Compensation Source 1) */
-  ret = sht40_measure(&sht_data, SHT40_PRECISION_HIGH);
-  if (ret == 0)
-  {
-    data.temperature_c = sht_data.temperature;
-    data.humidity_rh = sht_data.humidity;
-    LOG_DBG("SHT40: %.1f°C, %.1f%%RH", (double)data.temperature_c,
-            (double)data.humidity_rh);
-  }
-  else
-  {
-    LOG_WRN("SHT40 read failed: %d", ret);
-    all_ok = false;
-  }
-
-  /* 2. Read LPS22HH pressure (Compensation Source 2) */
-  ret = lps22hh_read(&lps_data);
-  if (ret == 0)
-  {
-    data.pressure_hpa = lps_data.pressure;
-    LOG_DBG("LPS22HH: %.1f hPa", (double)data.pressure_hpa);
-  }
-  else
-  {
-    LOG_WRN("LPS22HH read failed: %d", ret);
-    /* Fallback to standard pressure if sensor fails */
-    data.pressure_hpa = 1013.0f;
-    all_ok = false;
-  }
-
-  /* 3. Feed Environmental Data to STCC4 for Compensation */
-  /* Note: This is critical for STCC4 accuracy */
-  if (!isnan(data.temperature_c) && !isnan(data.humidity_rh))
-  {
-    if (stcc4_set_ambient(data.temperature_c, data.humidity_rh) != 0) {
-      all_ok = false;
-    }
-  }
-  if (data.pressure_hpa > 0)
-  {
-    if (stcc4_set_pressure((uint16_t)data.pressure_hpa) != 0) {
-      all_ok = false;
-    }
-  }
+  bool all_ok = update_compensation(&data) == 0;
+  all_ok = all_ok && !compensation_failed_since_report;
 
   /* 4. Read STCC4 CO2 */
   if (use_single_shot_mode)
@@ -398,21 +395,45 @@ static int do_measurement(void)
           data.co2_ppm, (double)data.temperature_c, (double)data.humidity_rh,
           (double)data.pressure_hpa, data.battery_percent);
 
-  k_mutex_unlock(&meas_mutex);
+  compensation_failed_since_report = false;
   return all_ok ? 0 : -EIO;
+}
+
+static int do_measurement(void)
+{
+  k_mutex_lock(&meas_mutex, K_FOREVER);
+  int ret = initialized ? do_measurement_locked() : -ENODEV;
+  k_mutex_unlock(&meas_mutex);
+  return ret;
 }
 
 static void sensor_work_handler(struct k_work *work)
 {
   ARG_UNUSED(work);
-
-  do_measurement();
-
-  /* Schedule next measurement if still running */
-  if (running)
-  {
-    k_work_schedule(&sensor_work, K_MSEC(measurement_interval_ms));
+  k_mutex_lock(&meas_mutex, K_FOREVER);
+  if (!running || !initialized) {
+    k_mutex_unlock(&meas_mutex);
+    return;
   }
+  int64_t started = k_uptime_get();
+  if (use_single_shot_mode || started >= next_report_ms) {
+    do_measurement_locked();
+    next_report_ms = started + measurement_interval_ms;
+  } else {
+    sensor_data_t ambient = {0};
+    if (update_compensation(&ambient)) {
+      k_mutex_lock(&data_mutex, K_FOREVER);
+      latest_data.valid = false;
+      k_mutex_unlock(&data_mutex);
+    }
+  }
+  /* Continuous STCC4 runs at 1 Hz. Updating compensation does not publish a
+   * sample, read the battery, or feed software ASC. Account for I2C duration so
+   * a 1 s target does not drift to 1 s plus the measurement execution time. */
+  uint32_t period = use_single_shot_mode ? measurement_interval_ms : 1000;
+  int64_t delay = period - (k_uptime_get() - started);
+  if (running) k_work_schedule(&sensor_work, K_MSEC(delay > 0 ? delay : 1));
+  k_mutex_unlock(&meas_mutex);
 }
 
 /**
@@ -433,13 +454,16 @@ int sensor_manager_start(uint32_t interval_ms)
     interval_ms = MIN_INTERVAL_MS;
   }
 
+  k_mutex_lock(&meas_mutex, K_FOREVER);
   measurement_interval_ms = interval_ms;
+  next_report_ms = 0;
   running = true;
 
   LOG_INF("Starting sensor measurements (interval: %u ms)", interval_ms);
 
   /* Do first measurement immediately */
   k_work_schedule(&sensor_work, K_NO_WAIT);
+  k_mutex_unlock(&meas_mutex);
 
   return 0;
 }
@@ -449,7 +473,9 @@ int sensor_manager_start(uint32_t interval_ms)
  */
 void sensor_manager_stop(void)
 {
+  k_mutex_lock(&meas_mutex, K_FOREVER);
   running = false;
+  k_mutex_unlock(&meas_mutex);
   /* Called by main for soft-off/lockout, never from the sensor work handler. */
   struct k_work_sync sync;
   k_work_cancel_delayable_sync(&sensor_work, &sync);
@@ -620,8 +646,10 @@ void sensor_manager_set_power_mode(uint8_t power_mode)
     }
     else
     {
-      /* Switch to continuous mode */
-      int ret = stcc4_start_continuous();
+      /* Seed fresh compensation before the first continuous conversion. */
+      sensor_data_t ambient = {0};
+      int ret = update_compensation(&ambient);
+      if (!ret) ret = stcc4_start_continuous();
       if (ret == 0)
       {
         use_single_shot_mode = false;
@@ -630,6 +658,8 @@ void sensor_manager_set_power_mode(uint8_t power_mode)
       else
       {
         LOG_WRN("STCC4 continuous start failed: %d, keeping single-shot", ret);
+        k_mutex_unlock(&meas_mutex);
+        return;
       }
     }
   }
@@ -637,6 +667,9 @@ void sensor_manager_set_power_mode(uint8_t power_mode)
   if (new_interval != measurement_interval_ms)
   {
     measurement_interval_ms = new_interval;
+    next_report_ms = k_uptime_get() + new_interval;
+    timing = (sensor_timing_diagnostic_t){0};
+    last_compensation_ms = 0;
 
     if (new_interval == 0)
     {
@@ -656,7 +689,7 @@ void sensor_manager_set_power_mode(uint8_t power_mode)
       /* Reschedule if was running, or start if switching from on-demand */
       k_work_cancel_delayable(&sensor_work);
       running = true;
-      k_work_schedule(&sensor_work, K_MSEC(measurement_interval_ms));
+      k_work_schedule(&sensor_work, K_MSEC(use_single_shot_mode ? measurement_interval_ms : 1000));
     }
   }
   k_mutex_unlock(&meas_mutex);
@@ -680,6 +713,9 @@ int sensor_manager_reset_co2_sensor(void)
   k_mutex_lock(&data_mutex, K_FOREVER);
   latest_data.valid = false;
   k_mutex_unlock(&data_mutex);
+  timing = (sensor_timing_diagnostic_t){0};
+  last_compensation_ms = 0;
+  next_report_ms = 0;
   int ret = stcc4_reset();
   if (!ret) {
     use_single_shot_mode = true;

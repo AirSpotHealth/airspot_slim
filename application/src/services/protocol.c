@@ -421,6 +421,22 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len)
     break;
   }
 
+  case CMD_SENSOR_TIMING_DIAGNOSTIC:
+  {
+    sensor_timing_diagnostic_t timing;
+    sensor_manager_get_timing_diagnostic(&timing);
+    uint8_t tx_frame[27] = {CMD_FIRST_BYTE, CMD_SECOND_BYTE,
+      CMD_SENSOR_TIMING_DIAGNOSTIC, 22, 1, timing.continuous};
+    uint32_t values[] = {timing.report_interval_ms, timing.updates,
+      timing.failures, timing.last_gap_ms, timing.max_gap_ms};
+    for (unsigned i = 0; i < ARRAY_SIZE(values); i++) {
+      for (unsigned j = 0; j < 4; j++) tx_frame[6 + i * 4 + j] = values[i] >> (24 - 8 * j);
+    }
+    set_frame_checksum(tx_frame, sizeof(tx_frame));
+    send_frame(tx_frame, sizeof(tx_frame));
+    break;
+  }
+
   case CMD_GET_SENSOR_DETAILS:
     /* Return sensor details - Slim uses STCC4, not SCD4x */
     {

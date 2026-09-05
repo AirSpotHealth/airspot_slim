@@ -34,6 +34,7 @@ struct k_work {int unused;};
 struct k_work_delayable {int unused;};
 struct k_work_sync {int unused;};
 static int pause_calls, resume_calls, reset_calls, restart_calls, pause_error, read_error, reset_error, save_error;
+static int pressure_error, ambient_write_error, pressure_write_error, ambient_writes, pressure_writes, callbacks, scheduled_delay;
 static int ambient_error, sensor_restart_notifications, self_test_error, start_error, stop_error;
 static uint16_t self_test_word;
 static int64_t now=1;
@@ -43,9 +44,10 @@ static int16_t correction=123;
 static void k_mutex_lock(int *m,int t) { (*m)++; }
 static void k_mutex_unlock(int *m) { assert(*m>0); (*m)--; }
 static void k_msleep(int ms) {now+=ms;}
-static uint32_t k_uptime_get_32(void) {return now++;}
+static uint32_t k_uptime_get_32(void) {return now;}
+static int64_t k_uptime_get(void) {return now;}
 static void k_work_init_delayable(struct k_work_delayable *w,void (*f)(struct k_work *)) {}
-static void k_work_schedule(struct k_work_delayable *w,int t) {}
+static void k_work_schedule(struct k_work_delayable *w,int t) {scheduled_delay=t;}
 static void k_work_cancel_delayable(struct k_work_delayable *w) {}
 static void k_work_cancel_delayable_sync(struct k_work_delayable *w,struct k_work_sync *s) {}
 void watchdog_feed(void) {}
@@ -53,10 +55,10 @@ static int i2c_bus_init(void) {return 0;}
 static int sht40_init(void) {return 0;}
 typedef struct {float temperature,humidity;} sht40_data_t;
 #define SHT40_PRECISION_HIGH 0
-static int sht40_measure(sht40_data_t *d,int p) {d->temperature=22;d->humidity=45;return ambient_error;}
+static int sht40_measure(sht40_data_t *d,int p) {now+=12;d->temperature=22;d->humidity=45;return ambient_error;}
 typedef struct {float pressure;} lps22hh_data_t;
 static int lps22hh_init(void) {return 0;}
-static int lps22hh_read(lps22hh_data_t *d) {d->pressure=1013;return 0;}
+static int lps22hh_read(lps22hh_data_t *d) {now+=2;d->pressure=1013;return pressure_error;}
 static int battery_init(void) {return 0;}
 static int qi_charger_init(void) {return 0;}
 static uint16_t battery_read_voltage_mv(void) {return 3900;}
@@ -79,8 +81,8 @@ int stcc4_read(stcc4_data_t *d) {
   return read_error;
 }
 int stcc4_reset(void) {reset_calls++;internal_paused=false;return reset_error;}
-int stcc4_set_ambient(float t,float h) {return 0;}
-int stcc4_set_pressure(uint16_t p) {return 0;}
+int stcc4_set_ambient(float t,float h) {ambient_writes++;now++;return ambient_write_error;}
+int stcc4_set_pressure(uint16_t p) {pressure_writes++;now++;return pressure_write_error;}
 uint16_t stcc4_get_co2(void) {return 777;}
 int stcc4_enter_sleep_mode(void) {return 0;}
 int stcc4_stop(void) {return stop_error;}
@@ -90,7 +92,7 @@ int stcc4_perform_self_test(uint16_t *r) {assert(meas_mutex==1 && manual);*r=sel
 int stcc4_perform_forced_recalibration(uint16_t t,int16_t *a) {assert(false);return 0;}
 '''
         tests=r'''
-static void observed(const sensor_data_t *d) {callback_valid=d->valid;}
+static void observed(const sensor_data_t *d) {callback_valid=d->valid;callbacks++;}
 int main(void) {
   for(auto_flag=0;auto_flag<=1;auto_flag++) {
     initialized=false; internal_paused=false;
@@ -144,6 +146,49 @@ int main(void) {
   assert(sensor_manager_measure_now()==-ENODEV && correction==123);
   assert(sensor_manager_self_test(&result)==-ENODEV && result==UINT16_MAX && !manual);
   assert(sensor_manager_self_test(NULL)==-EINVAL);
+
+  /* Continuous mode: 1 s compensation starts, one publication per 5 s.
+   * I2C work costs 16 ms; scheduling must account for that execution time. */
+  start_error=0;assert(sensor_manager_init()==0);
+  sensor_manager_set_power_mode(3);
+  assert(!use_single_shot_mode && measurement_interval_ms==5000);
+  sensor_manager_start(5000);
+  callbacks=ambient_writes=pressure_writes=0;
+  now=100000;next_report_ms=0;last_compensation_ms=0;timing=(sensor_timing_diagnostic_t){0};
+  for(int i=0;i<11;i++) {
+    sensor_work_handler(NULL);
+    assert(scheduled_delay==984);
+    now+=scheduled_delay;
+  }
+  assert(ambient_writes==11 && pressure_writes==11 && callbacks==3);
+  sensor_timing_diagnostic_t timing_snapshot;
+  sensor_manager_get_timing_diagnostic(&timing_snapshot);
+  assert(timing_snapshot.continuous && timing_snapshot.updates==11);
+  assert(timing_snapshot.last_gap_ms==1000 && timing_snapshot.max_gap_ms==1000);
+  assert(timing_snapshot.report_interval_ms==5000 && timing_snapshot.failures==0);
+  /* Compensation-only ticks neither publish nor feed calibration through callback. */
+  int previous_callbacks=callbacks;
+  pressure_error=-EIO;sensor_work_handler(NULL);
+  assert(callbacks==previous_callbacks && !latest_data.valid && timing.failures==1);
+  pressure_error=0;
+  ambient_write_error=-EIO;assert(sensor_manager_measure_now()==-EIO && !callback_valid);
+  ambient_write_error=0;pressure_write_error=-EIO;
+  assert(sensor_manager_measure_now()==-EIO && !callback_valid);
+  pressure_write_error=0;assert(sensor_manager_measure_now()==0 && callback_valid);
+  sensor_manager_set_power_mode(1);
+  assert(use_single_shot_mode && measurement_interval_ms==180000);
+  callbacks=0;sensor_work_handler(NULL);assert(callbacks==1 && scheduled_delay==179434);
+  sensor_manager_set_power_mode(0);assert(!running);
+  previous_callbacks=callbacks;sensor_work_handler(NULL);assert(callbacks==previous_callbacks);
+  sensor_manager_set_power_mode(3);sensor_manager_stop();
+  assert(!running);previous_callbacks=callbacks;sensor_work_handler(NULL);
+  assert(callbacks==previous_callbacks);
+  sensor_manager_start(5000);power=3;assert(sensor_manager_reset_co2_sensor()==0);
+  assert(!use_single_shot_mode && measurement_interval_ms==5000);
+  sensor_work_handler(NULL);assert(scheduled_delay==984);
+  sensor_manager_set_power_mode(1);start_error=-EIO;
+  sensor_manager_set_power_mode(3);
+  assert(use_single_shot_mode && measurement_interval_ms==180000);
   assert(meas_mutex==0 && data_mutex==0 && resume_calls==0);
 }
 '''

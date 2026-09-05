@@ -63,6 +63,15 @@ int sensor_manager_init(void);
 typedef struct { uint8_t stage; int16_t error; uint16_t status; } sensor_asc_diagnostic_t;
 void sensor_manager_get_asc_diagnostic(sensor_asc_diagnostic_t *diagnostic);
 
+/* Successful compensation writes and observed intervals since mode change/reset.
+ * Read-only qualification data; counters wrap modulo 2^32. */
+typedef struct {
+  uint32_t updates, failures, last_gap_ms, max_gap_ms, report_interval_ms;
+  bool continuous;
+} sensor_timing_diagnostic_t;
+void sensor_manager_get_timing_diagnostic(sensor_timing_diagnostic_t *out);
+
+
 /* Run the sensor's non-calibrating self-test, restoring its measurement mode.
  * Zero return means command and restoration succeeded; inspect result for faults.
  * 0x0000 and 0x0010 are passes (external SHT40 is on the host bus).
