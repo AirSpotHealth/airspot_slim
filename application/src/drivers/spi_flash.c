@@ -136,8 +136,17 @@ int spi_flash_init(void) {
     return ret;
   }
 
-  /* AT25XE161D: Manufacturer = 0x1F (Adesto/Renesas), Device = 0x4502 */
+  /* Reject missing/wrong parts before data_log can issue writes or erases.
+   * AT25XE161D JEDEC identity is 1F 46 0C (datasheet section 10.1).
+   */
+  static const uint8_t expected_id[] = DT_PROP(AT25_NODE, jedec_id);
+  BUILD_ASSERT(sizeof(expected_id) == 3, "Expected three-byte JEDEC identity");
   LOG_INF("SPI Flash: Manufacturer 0x%02X, Device 0x%04X", mfg_id, dev_id);
+  if (mfg_id != expected_id[0] ||
+      dev_id != ((uint16_t)expected_id[1] << 8 | expected_id[2])) {
+    LOG_ERR("Unexpected flash identity; refusing storage access");
+    return -ENODEV;
+  }
 
   initialized = true;
   LOG_INF("SPI Flash initialized (2 MB AT25XE161D)");

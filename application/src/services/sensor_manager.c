@@ -273,6 +273,7 @@ static void do_measurement(void)
       else
       {
         /* Use last known value if read failed */
+        all_ok = false;
         data.co2_ppm = stcc4_get_co2();
         LOG_DBG("STCC4 single-shot read failed, using cached: %u ppm",
                 data.co2_ppm);
@@ -281,6 +282,7 @@ static void do_measurement(void)
     else
     {
       LOG_WRN("STCC4 single-shot trigger failed: %d", ret);
+      all_ok = false;
       data.co2_ppm = stcc4_get_co2();
     }
   }
@@ -296,6 +298,7 @@ static void do_measurement(void)
     else
     {
       /* First read after starting continuous might fail, use cached */
+      all_ok = false;
       data.co2_ppm = stcc4_get_co2();
       if (data.co2_ppm == 0)
       {

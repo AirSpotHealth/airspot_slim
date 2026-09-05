@@ -150,7 +150,7 @@ int battery_init(void) {
  */
 static int32_t adc_read_single_sample(void) {
   int ret;
-  uint16_t buf;
+  int16_t buf;
 
   struct adc_sequence sequence = {
       .buffer = &buf,
@@ -158,7 +158,11 @@ static int32_t adc_read_single_sample(void) {
   };
 
   /* Initialize sequence from device tree config */
-  (void)adc_sequence_init_dt(&adc_channels[0], &sequence);
+  ret = adc_sequence_init_dt(&adc_channels[0], &sequence);
+  if (ret < 0) {
+    LOG_ERR("ADC sequence setup failed: %d", ret);
+    return -1;
+  }
 
   /* Read ADC */
   ret = adc_read_dt(&adc_channels[0], &sequence);
@@ -167,12 +171,10 @@ static int32_t adc_read_single_sample(void) {
     return -1;
   }
 
-  /* Handle differential vs single-ended */
-  if (adc_channels[0].channel_cfg.differential) {
-    return (int32_t)((int16_t)buf);
-  } else {
-    return (int32_t)buf;
-  }
+  /* SAADC samples are signed even in single-ended mode. Negative readings
+   * must not wrap into a large positive battery voltage.
+   */
+  return buf;
 }
 
 /**
@@ -186,8 +188,11 @@ static int32_t adc_raw_to_mv(int32_t raw_adc) {
 
   ret = adc_raw_to_millivolts_dt(&adc_channels[0], &val_mv);
   if (ret < 0) {
-    /* Fallback: assume 0.6V reference, 1/4 gain, 12-bit */
-    val_mv = (raw_adc * 2400) / 4095;
+    /* nRF54L has a 0.9V reference. Never fabricate a voltage using the
+     * historical nRF52 0.6V fallback if the device configuration is invalid.
+     */
+    LOG_ERR("ADC voltage conversion failed: %d", ret);
+    return ret;
   }
 
   return val_mv;
@@ -207,7 +212,11 @@ uint16_t battery_read_voltage_mv(void) {
 
 #if HAS_ADC_EN_GPIO
   /* Enable voltage divider with longer stabilization time */
-  gpio_pin_set_dt(&adc_en_gpio, 1);
+  int ret = gpio_pin_set_dt(&adc_en_gpio, 1);
+  if (ret < 0) {
+    LOG_ERR("Battery divider enable failed: %d", ret);
+    return (uint16_t)ema_battery_mv;
+  }
   k_msleep(ADC_STABILIZATION_MS);
 #endif
 
@@ -229,7 +238,11 @@ uint16_t battery_read_voltage_mv(void) {
 
 #if HAS_ADC_EN_GPIO
   /* Disable voltage divider (power saving) */
-  gpio_pin_set_dt(&adc_en_gpio, 0);
+  ret = gpio_pin_set_dt(&adc_en_gpio, 0);
+  if (ret < 0) {
+    LOG_ERR("Battery divider disable failed: %d", ret);
+    return (uint16_t)ema_battery_mv;
+  }
 #endif
 
   if (valid_samples == 0) {
@@ -243,6 +256,9 @@ uint16_t battery_read_voltage_mv(void) {
 
   /* Convert to millivolts */
   adc_mv = adc_raw_to_mv(raw_avg);
+  if (adc_mv < 0) {
+    return (uint16_t)ema_battery_mv;
+  }
   last_adc_mv = adc_mv;
 
   /* Apply voltage divider inverse to get actual battery voltage */

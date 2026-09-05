@@ -199,7 +199,10 @@ int stcc4_trigger_single_shot(void) {
   float hum = sht40_get_humidity();
 
   if (!isnan(temp) && !isnan(hum)) {
-    stcc4_set_ambient(temp, hum);
+    int ret = stcc4_set_ambient(temp, hum);
+    if (ret != 0) {
+      return ret;
+    }
   }
 
   return stcc4_write_cmd(STCC4_CMD_SINGLE_SHOT_MSB, STCC4_CMD_SINGLE_SHOT_LSB);
@@ -330,6 +333,8 @@ int stcc4_set_ambient(float temperature, float humidity) {
 
   LOG_DBG("STCC4 RH/T compensation set: T=%.1f°C (%u), RH=%.1f%% (%u)",
           (double)temperature, temp_raw, (double)humidity, hum_raw);
+  /* Datasheet 3.4.4: allow execution before issuing the next command. */
+  k_msleep(1);
   return 0;
 }
 
@@ -374,7 +379,9 @@ int stcc4_set_pressure(uint16_t pressure_hpa) {
   }
 
   LOG_DBG("STCC4 pressure compensation: %u hPa (%u Pa, input=%u)", pressure_hpa,
-          (uint16_t)pressure_pa, pressure_input);
+          (unsigned int)pressure_pa, pressure_input);
+  /* Datasheet 3.4.5: back-to-back commands can NACK during this interval. */
+  k_msleep(1);
   return 0;
 }
 
