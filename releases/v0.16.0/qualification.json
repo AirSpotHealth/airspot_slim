@@ -1,0 +1,686 @@
+{
+  "date": "2026-09-05",
+  "firmware_source_commit": "7aa62be",
+  "firmware_image_hash": "0b0ac45b32d943da665e28f1e4d5073c1576029cdcb900d9912d55058a933530",
+  "devices": {
+    "slim": "AirSpot-C58CC9",
+    "screen": "AirSpot-AF94D2"
+  },
+  "policy_validation": "passed",
+  "accuracy_validation": "inconclusive; post-update field readings not stable",
+  "startup_software_asc_issue": "Saved-on reboot generated +85 ppm, reaching +116 ppm before disabling. Restored to zero through sensor reset. Proposed observation guard not implemented; product choice pending.",
+  "hardware_asc_status": "0x0084; testing flag 0x0004 per current official Sensirion driver",
+  "final_software_asc": false,
+  "final_correction_ppm": 0,
+  "phone_app_physical_test": "not performed",
+  "firmware_tests_passed": 29,
+  "flutter_tests_passed": 51,
+  "flutter_analyzer": "passed",
+  "before": {
+    "samples": 12,
+    "duration_seconds": 58.61194396018982,
+    "slim": {
+      "mean_ppm": 1179.3333333333333,
+      "min_ppm": 1171,
+      "max_ppm": 1193
+    },
+    "screen": {
+      "mean_ppm": 716.9166666666666,
+      "min_ppm": 716,
+      "max_ppm": 717
+    },
+    "slim_minus_screen_mean_ppm": 462.4166666666667
+  },
+  "after": {
+    "samples": 36,
+    "duration_seconds": 358.4242432117462,
+    "slim": {
+      "mean_ppm": 326.4166666666667,
+      "min_ppm": 279,
+      "max_ppm": 861
+    },
+    "screen": {
+      "mean_ppm": 800.4444444444445,
+      "min_ppm": 792,
+      "max_ppm": 818
+    },
+    "slim_minus_screen_mean_ppm": -474.02777777777777
+  },
+  "before_pairs": [
+    {
+      "time": 1788596060.533737,
+      "slim": {
+        "ppm": 1193,
+        "timestamp": 1788632060,
+        "frame": "ffaa010a6a9c5bfc04a90a2e11d4db"
+      },
+      "screen": {
+        "ppm": 717,
+        "timestamp": 1788632061,
+        "frame": "ffaa01026a9c5bfd02cdd9"
+      }
+    },
+    {
+      "time": 1788596065.657034,
+      "slim": {
+        "ppm": 1189,
+        "timestamp": 1788632065,
+        "frame": "ffaa010a6a9c5c0104a50a2a11babf"
+      },
+      "screen": {
+        "ppm": 717,
+        "timestamp": 1788632066,
+        "frame": "ffaa01026a9c5c0202cddf"
+      }
+    },
+    {
+      "time": 1788596070.88275,
+      "slim": {
+        "ppm": 1186,
+        "timestamp": 1788632070,
+        "frame": "ffaa010a6a9c5c0604a20a2811aeb3"
+      },
+      "screen": {
+        "ppm": 717,
+        "timestamp": 1788632071,
+        "frame": "ffaa01026a9c5c0702cde4"
+      }
+    },
+    {
+      "time": 1788596076.0507882,
+      "slim": {
+        "ppm": 1177,
+        "timestamp": 1788632076,
+        "frame": "ffaa010a6a9c5c0c04990a2711adae"
+      },
+      "screen": {
+        "ppm": 717,
+        "timestamp": 1788632076,
+        "frame": "ffaa01026a9c5c0c02cde9"
+      }
+    },
+    {
+      "time": 1788596081.2180412,
+      "slim": {
+        "ppm": 1176,
+        "timestamp": 1788632081,
+        "frame": "ffaa010a6a9c5c1104980a2711c1c6"
+      },
+      "screen": {
+        "ppm": 717,
+        "timestamp": 1788632081,
+        "frame": "ffaa01026a9c5c1102cdee"
+      }
+    },
+    {
+      "time": 1788596086.386719,
+      "slim": {
+        "ppm": 1179,
+        "timestamp": 1788632086,
+        "frame": "ffaa010a6a9c5c16049b0a2611cbd7"
+      },
+      "screen": {
+        "ppm": 717,
+        "timestamp": 1788632087,
+        "frame": "ffaa01026a9c5c1702cdf4"
+      }
+    },
+    {
+      "time": 1788596091.5544052,
+      "slim": {
+        "ppm": 1176,
+        "timestamp": 1788632091,
+        "frame": "ffaa010a6a9c5c1b04980a2811c9d9"
+      },
+      "screen": {
+        "ppm": 717,
+        "timestamp": 1788632092,
+        "frame": "ffaa01026a9c5c1c02cdf9"
+      }
+    },
+    {
+      "time": 1788596096.721335,
+      "slim": {
+        "ppm": 1177,
+        "timestamp": 1788632097,
+        "frame": "ffaa010a6a9c5c2104990a2911c4dc"
+      },
+      "screen": {
+        "ppm": 717,
+        "timestamp": 1788632097,
+        "frame": "ffaa01026a9c5c2102cdfe"
+      }
+    },
+    {
+      "time": 1788596102.278177,
+      "slim": {
+        "ppm": 1180,
+        "timestamp": 1788632102,
+        "frame": "ffaa010a6a9c5c26049c0a2611afcc"
+      },
+      "screen": {
+        "ppm": 717,
+        "timestamp": 1788632103,
+        "frame": "ffaa01026a9c5c2702cd04"
+      }
+    },
+    {
+      "time": 1788596107.9345589,
+      "slim": {
+        "ppm": 1177,
+        "timestamp": 1788632108,
+        "frame": "ffaa010a6a9c5c2c04990a2a11b4d8"
+      },
+      "screen": {
+        "ppm": 717,
+        "timestamp": 1788632109,
+        "frame": "ffaa01026a9c5c2d02cd0a"
+      }
+    },
+    {
+      "time": 1788596113.491432,
+      "slim": {
+        "ppm": 1171,
+        "timestamp": 1788632113,
+        "frame": "ffaa010a6a9c5c3104930a2711c2e2"
+      },
+      "screen": {
+        "ppm": 717,
+        "timestamp": 1788632114,
+        "frame": "ffaa01026a9c5c3202cd0f"
+      }
+    },
+    {
+      "time": 1788596119.145681,
+      "slim": {
+        "ppm": 1171,
+        "timestamp": 1788632119,
+        "frame": "ffaa010a6a9c5c3704930a2b11bce6"
+      },
+      "screen": {
+        "ppm": 716,
+        "timestamp": 1788632120,
+        "frame": "ffaa01026a9c5c3802cc14"
+      }
+    }
+  ],
+  "after_pairs": [
+    {
+      "time": 1788597821.358224,
+      "slim": {
+        "ppm": 371,
+        "timestamp": 210,
+        "frame": "ffaa010a000000d201730a201171a6"
+      },
+      "screen": {
+        "ppm": 813,
+        "timestamp": 1788633821,
+        "frame": "ffaa01026a9c62dd032d21"
+      }
+    },
+    {
+      "time": 1788597831.5109491,
+      "slim": {
+        "ppm": 362,
+        "timestamp": 220,
+        "frame": "ffaa010a000000dc016a0a1d1170a3"
+      },
+      "screen": {
+        "ppm": 811,
+        "timestamp": 1788633831,
+        "frame": "ffaa01026a9c62e7032b29"
+      }
+    },
+    {
+      "time": 1788597841.740149,
+      "slim": {
+        "ppm": 378,
+        "timestamp": 230,
+        "frame": "ffaa010a000000e6017a0a1e1189d7"
+      },
+      "screen": {
+        "ppm": 810,
+        "timestamp": 1788633841,
+        "frame": "ffaa01026a9c62f1032a32"
+      }
+    },
+    {
+      "time": 1788597851.977737,
+      "slim": {
+        "ppm": 371,
+        "timestamp": 241,
+        "frame": "ffaa010a000000f101730a1e116dbf"
+      },
+      "screen": {
+        "ppm": 809,
+        "timestamp": 1788633852,
+        "frame": "ffaa01026a9c62fc03293c"
+      }
+    },
+    {
+      "time": 1788597862.215821,
+      "slim": {
+        "ppm": 364,
+        "timestamp": 251,
+        "frame": "ffaa010a000000fb016c0a1c1178cb"
+      },
+      "screen": {
+        "ppm": 808,
+        "timestamp": 1788633862,
+        "frame": "ffaa01026a9c6306032846"
+      }
+    },
+    {
+      "time": 1788597872.4555142,
+      "slim": {
+        "ppm": 346,
+        "timestamp": 261,
+        "frame": "ffaa010a00000105015a0a17118fd6"
+      },
+      "screen": {
+        "ppm": 805,
+        "timestamp": 1788633872,
+        "frame": "ffaa01026a9c631003254d"
+      }
+    },
+    {
+      "time": 1788597882.790093,
+      "slim": {
+        "ppm": 342,
+        "timestamp": 271,
+        "frame": "ffaa010a0000010f01560a151188d3"
+      },
+      "screen": {
+        "ppm": 804,
+        "timestamp": 1788633882,
+        "frame": "ffaa01026a9c631a032456"
+      }
+    },
+    {
+      "time": 1788597893.027355,
+      "slim": {
+        "ppm": 330,
+        "timestamp": 282,
+        "frame": "ffaa010a0000011a014a0a131189d1"
+      },
+      "screen": {
+        "ppm": 804,
+        "timestamp": 1788633893,
+        "frame": "ffaa01026a9c6325032461"
+      }
+    },
+    {
+      "time": 1788597903.264242,
+      "slim": {
+        "ppm": 340,
+        "timestamp": 292,
+        "frame": "ffaa010a0000012401540a141187e4"
+      },
+      "screen": {
+        "ppm": 803,
+        "timestamp": 1788633903,
+        "frame": "ffaa01026a9c632f03236a"
+      }
+    },
+    {
+      "time": 1788597913.5042481,
+      "slim": {
+        "ppm": 331,
+        "timestamp": 302,
+        "frame": "ffaa010a0000012e014b0a14117ad8"
+      },
+      "screen": {
+        "ppm": 803,
+        "timestamp": 1788633913,
+        "frame": "ffaa01026a9c6339032374"
+      }
+    },
+    {
+      "time": 1788597923.8385642,
+      "slim": {
+        "ppm": 320,
+        "timestamp": 312,
+        "frame": "ffaa010a0000013801400a17117fdf"
+      },
+      "screen": {
+        "ppm": 804,
+        "timestamp": 1788633923,
+        "frame": "ffaa01026a9c634303247f"
+      }
+    },
+    {
+      "time": 1788597934.077437,
+      "slim": {
+        "ppm": 325,
+        "timestamp": 323,
+        "frame": "ffaa010a0000014301450a18117eef"
+      },
+      "screen": {
+        "ppm": 804,
+        "timestamp": 1788633935,
+        "frame": "ffaa01026a9c634f03248b"
+      }
+    },
+    {
+      "time": 1788597944.314178,
+      "slim": {
+        "ppm": 322,
+        "timestamp": 333,
+        "frame": "ffaa010a0000014d01420a191182fb"
+      },
+      "screen": {
+        "ppm": 803,
+        "timestamp": 1788633945,
+        "frame": "ffaa01026a9c6359032394"
+      }
+    },
+    {
+      "time": 1788597954.551856,
+      "slim": {
+        "ppm": 306,
+        "timestamp": 343,
+        "frame": "ffaa010a0000015701320a191175e8"
+      },
+      "screen": {
+        "ppm": 803,
+        "timestamp": 1788633955,
+        "frame": "ffaa01026a9c636303239e"
+      }
+    },
+    {
+      "time": 1788597964.789433,
+      "slim": {
+        "ppm": 301,
+        "timestamp": 353,
+        "frame": "ffaa010a00000161012d0a1a118b04"
+      },
+      "screen": {
+        "ppm": 801,
+        "timestamp": 1788633965,
+        "frame": "ffaa01026a9c636d0321a6"
+      }
+    },
+    {
+      "time": 1788597975.0288389,
+      "slim": {
+        "ppm": 296,
+        "timestamp": 364,
+        "frame": "ffaa010a0000016c01280a18118603"
+      },
+      "screen": {
+        "ppm": 801,
+        "timestamp": 1788633976,
+        "frame": "ffaa01026a9c63780321b1"
+      }
+    },
+    {
+      "time": 1788597985.264846,
+      "slim": {
+        "ppm": 288,
+        "timestamp": 374,
+        "frame": "ffaa010a0000017601200a151173ef"
+      },
+      "screen": {
+        "ppm": 800,
+        "timestamp": 1788633986,
+        "frame": "ffaa01026a9c63820320ba"
+      }
+    },
+    {
+      "time": 1788597995.503215,
+      "slim": {
+        "ppm": 286,
+        "timestamp": 384,
+        "frame": "ffaa010a00000180011e0a1b117903"
+      },
+      "screen": {
+        "ppm": 799,
+        "timestamp": 1788633996,
+        "frame": "ffaa01026a9c638c031fc3"
+      }
+    },
+    {
+      "time": 1788598005.739391,
+      "slim": {
+        "ppm": 287,
+        "timestamp": 394,
+        "frame": "ffaa010a0000018a011f0a1a117206"
+      },
+      "screen": {
+        "ppm": 799,
+        "timestamp": 1788634006,
+        "frame": "ffaa01026a9c6396031fcd"
+      }
+    },
+    {
+      "time": 1788598015.9781241,
+      "slim": {
+        "ppm": 300,
+        "timestamp": 405,
+        "frame": "ffaa010a00000195012c0a1c117624"
+      },
+      "screen": {
+        "ppm": 798,
+        "timestamp": 1788634016,
+        "frame": "ffaa01026a9c63a0031ed6"
+      }
+    },
+    {
+      "time": 1788598026.216436,
+      "slim": {
+        "ppm": 298,
+        "timestamp": 415,
+        "frame": "ffaa010a0000019f012a0a18117426"
+      },
+      "screen": {
+        "ppm": 797,
+        "timestamp": 1788634027,
+        "frame": "ffaa01026a9c63ab031de0"
+      }
+    },
+    {
+      "time": 1788598036.452333,
+      "slim": {
+        "ppm": 299,
+        "timestamp": 425,
+        "frame": "ffaa010a000001a9012b0a1a116b2a"
+      },
+      "screen": {
+        "ppm": 796,
+        "timestamp": 1788634037,
+        "frame": "ffaa01026a9c63b5031ce9"
+      }
+    },
+    {
+      "time": 1788598046.693272,
+      "slim": {
+        "ppm": 301,
+        "timestamp": 435,
+        "frame": "ffaa010a000001b3012d0a1c117340"
+      },
+      "screen": {
+        "ppm": 796,
+        "timestamp": 1788634047,
+        "frame": "ffaa01026a9c63bf031cf3"
+      }
+    },
+    {
+      "time": 1788598056.929617,
+      "slim": {
+        "ppm": 289,
+        "timestamp": 445,
+        "frame": "ffaa010a000001bd01210a15117e42"
+      },
+      "screen": {
+        "ppm": 795,
+        "timestamp": 1788634057,
+        "frame": "ffaa01026a9c63c9031bfc"
+      }
+    },
+    {
+      "time": 1788598067.167871,
+      "slim": {
+        "ppm": 280,
+        "timestamp": 456,
+        "frame": "ffaa010a000001c801180a16117d44"
+      },
+      "screen": {
+        "ppm": 794,
+        "timestamp": 1788634068,
+        "frame": "ffaa01026a9c63d4031a06"
+      }
+    },
+    {
+      "time": 1788598077.405257,
+      "slim": {
+        "ppm": 279,
+        "timestamp": 466,
+        "frame": "ffaa010a000001d201170a15118857"
+      },
+      "screen": {
+        "ppm": 795,
+        "timestamp": 1788634078,
+        "frame": "ffaa01026a9c63de031b11"
+      }
+    },
+    {
+      "time": 1788598087.644245,
+      "slim": {
+        "ppm": 285,
+        "timestamp": 476,
+        "frame": "ffaa010a000001dc011d0a12117c58"
+      },
+      "screen": {
+        "ppm": 795,
+        "timestamp": 1788634088,
+        "frame": "ffaa01026a9c63e8031b1b"
+      }
+    },
+    {
+      "time": 1788598097.881252,
+      "slim": {
+        "ppm": 281,
+        "timestamp": 486,
+        "frame": "ffaa010a000001e601190a11118869"
+      },
+      "screen": {
+        "ppm": 795,
+        "timestamp": 1788634098,
+        "frame": "ffaa01026a9c63f2031b25"
+      }
+    },
+    {
+      "time": 1788598108.1197271,
+      "slim": {
+        "ppm": 288,
+        "timestamp": 497,
+        "frame": "ffaa010a000001f101200a12118478"
+      },
+      "screen": {
+        "ppm": 794,
+        "timestamp": 1788634108,
+        "frame": "ffaa01026a9c63fc031a2e"
+      }
+    },
+    {
+      "time": 1788598118.356909,
+      "slim": {
+        "ppm": 299,
+        "timestamp": 507,
+        "frame": "ffaa010a000001fb012b0a11117179"
+      },
+      "screen": {
+        "ppm": 794,
+        "timestamp": 1788634119,
+        "frame": "ffaa01026a9c6407031a3a"
+      }
+    },
+    {
+      "time": 1788598128.594253,
+      "slim": {
+        "ppm": 292,
+        "timestamp": 517,
+        "frame": "ffaa010a0000020501240a10116873"
+      },
+      "screen": {
+        "ppm": 794,
+        "timestamp": 1788634129,
+        "frame": "ffaa01026a9c6411031a44"
+      }
+    },
+    {
+      "time": 1788598138.831218,
+      "slim": {
+        "ppm": 284,
+        "timestamp": 527,
+        "frame": "ffaa010a0000020f011c0a1711788c"
+      },
+      "screen": {
+        "ppm": 793,
+        "timestamp": 1788634139,
+        "frame": "ffaa01026a9c641b03194d"
+      }
+    },
+    {
+      "time": 1788598149.07113,
+      "slim": {
+        "ppm": 280,
+        "timestamp": 538,
+        "frame": "ffaa010a0000021a01180a11118da2"
+      },
+      "screen": {
+        "ppm": 793,
+        "timestamp": 1788634149,
+        "frame": "ffaa01026a9c6425031957"
+      }
+    },
+    {
+      "time": 1788598159.306879,
+      "slim": {
+        "ppm": 285,
+        "timestamp": 548,
+        "frame": "ffaa010a00000224011d0a121198bd"
+      },
+      "screen": {
+        "ppm": 793,
+        "timestamp": 1788634160,
+        "frame": "ffaa01026a9c6430031962"
+      }
+    },
+    {
+      "time": 1788598169.546612,
+      "slim": {
+        "ppm": 284,
+        "timestamp": 558,
+        "frame": "ffaa010a0000022e011c0a0e118ab4"
+      },
+      "screen": {
+        "ppm": 792,
+        "timestamp": 1788634170,
+        "frame": "ffaa01026a9c643a03186b"
+      }
+    },
+    {
+      "time": 1788598179.7824671,
+      "slim": {
+        "ppm": 861,
+        "timestamp": 568,
+        "frame": "ffaa010a00000238035d0a1d122eb5"
+      },
+      "screen": {
+        "ppm": 818,
+        "timestamp": 1788634180,
+        "frame": "ffaa01026a9c644403328f"
+      }
+    }
+  ],
+  "final_ble_frames": {
+    "0x13": "ffaa1306302e31362e30e5",
+    "0x8": "ffaa0844000003032003e80000001600070001aa0007d001900000000000000000000000000000000000000000000000000000000000000000000000000000000000003f80000000f5",
+    "0x25": "ffaa2501000000cf",
+    "0x2a": "ffaa2a0100d4",
+    "0x33": "ffaa33060105000000846c",
+    "0xfe": "ffaafe046a9c646075",
+    "0x1": "ffaa010a6a9c6460016d0a1411849f"
+  }
+}
