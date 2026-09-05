@@ -67,3 +67,23 @@ Sources:
 - [Sensirion design-in guidelines](https://sensirion.com/resource/user_guide/stcc4/design-in), sections 3–4.
 - [Sensirion testing guidelines](https://sensirion.com/media/documents/D0ABC18E/6A1D5183/CD_AN_STCC4_Testing-Guide_D1.pdf).
 - Board schematic: `docs/datasheets/AH-013-0001-SCH CO2 Monitor (Standard Build) PWA Schematics Rev3A.PDF`, sheets 5–7.
+
+## Cable-disconnected follow-up
+
+The user confirmed removal of the new Slim's programming cable. After an initial
+Bluetooth-unavailable period, the new Slim was reachable without reconnecting
+the programmer. Over 37 samples / three minutes it remained at 2383–2408 ppm,
+with 66% battery and charging false. Correction stayed zero and ASC status 0084.
+Thus removing the programmer did not resolve the high reading.
+
+A nearby Screen comparison (12 readings) averaged 658.9 ppm; the older Slim
+averaged 75.7 ppm in that preceding window. These are comparison readings, not a
+certified reference measurement.
+
+The first connection to the older Slim reported charging false / 69%. By the
+start of its subsequent 37-sample observation it reported charging true / 78%,
+ending at charging true / 80%. That observation was confounded by charging. Its
+reported temperature rose to 28.14 C while the new Slim ended at 25.34 C.
+Do not label this a matched battery-only or thermally stable comparison. A
+follow-up requires both devices off chargers and untouched in matching enclosure
+conditions. No calibration or firmware settings changed during this follow-up.
