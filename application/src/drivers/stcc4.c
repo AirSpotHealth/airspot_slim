@@ -280,7 +280,7 @@ int stcc4_read(stcc4_data_t *data) {
   data->temperature = -45.0f + 175.0f * ((float)temp_raw / 65535.0f);
   data->humidity = -6.0f + 125.0f * ((float)rh_raw / 65535.0f);
   data->status = status_raw;
-  /* Datasheet 3.4.13: byte 10 bit 6 (status bit 14) means ASC paused.
+  /* Datasheet 3.4.13: byte 10 bit 6 (status bit 6) means ASC paused.
    * Never expose a sample taken with the sensor's own ASC active. */
   data->valid = (status_raw & STCC4_STATUS_TESTING_MODE) != 0;
   if (!data->valid) {

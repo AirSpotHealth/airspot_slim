@@ -85,7 +85,7 @@ static int pause_stcc4_asc(void)
     if (!ret && !(verification.status & STCC4_STATUS_TESTING_MODE)) ret = -EACCES;
   }
   if (ret) LOG_ERR("STCC4 ASC pause/verification failed: %d", ret);
-  else LOG_INF("STCC4 internal ASC verified paused (status bit 14)");
+  else LOG_INF("STCC4 internal ASC verified paused (status bit 6)");
   return ret;
 }
 

@@ -72,7 +72,7 @@ int stcc4_enable_testing_mode(void) {pause_calls++;if(!pause_error)internal_paus
 int stcc4_disable_testing_mode(void) {resume_calls++;internal_paused=false;return 0;}
 int stcc4_trigger_single_shot(void) {return 0;}
 int stcc4_read(stcc4_data_t *d) {
-  *d=(stcc4_data_t){.co2_ppm=800,.valid=true,.status=internal_paused?0x4000:0};
+  *d=(stcc4_data_t){.co2_ppm=800,.valid=true,.status=internal_paused?0x0040:0};
   return read_error;
 }
 int stcc4_reset(void) {reset_calls++;internal_paused=false;return reset_error;}
