@@ -377,6 +377,20 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len)
     }
     break;
 
+  case CMD_GET_ASC_DIAGNOSTIC:
+  {
+    sensor_asc_diagnostic_t diagnostic;
+    sensor_manager_get_asc_diagnostic(&diagnostic);
+    uint16_t error = (uint16_t)diagnostic.error;
+    uint8_t tx_frame[11] = {CMD_FIRST_BYTE, CMD_SECOND_BYTE,
+      CMD_GET_ASC_DIAGNOSTIC, 6, 1, diagnostic.stage,
+      (uint8_t)(error >> 8), (uint8_t)error,
+      (uint8_t)(diagnostic.status >> 8), (uint8_t)diagnostic.status, 0};
+    set_frame_checksum(tx_frame, sizeof(tx_frame));
+    send_frame(tx_frame, sizeof(tx_frame));
+    break;
+  }
+
   case CMD_GET_SENSOR_DETAILS:
     /* Return sensor details - Slim uses STCC4, not SCD4x */
     {

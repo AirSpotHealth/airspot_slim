@@ -34,6 +34,7 @@ struct k_work {int unused;};
 struct k_work_delayable {int unused;};
 struct k_work_sync {int unused;};
 static int pause_calls, resume_calls, reset_calls, restart_calls, pause_error, read_error, reset_error, save_error;
+static int ambient_error;
 static int64_t now=1;
 static bool internal_paused, manual, callback_valid;
 static uint8_t auto_flag, power=2;
@@ -51,7 +52,7 @@ static int i2c_bus_init(void) {return 0;}
 static int sht40_init(void) {return 0;}
 typedef struct {float temperature,humidity;} sht40_data_t;
 #define SHT40_PRECISION_HIGH 0
-static int sht40_measure(sht40_data_t *d,int p) {d->temperature=22;d->humidity=45;return 0;}
+static int sht40_measure(sht40_data_t *d,int p) {d->temperature=22;d->humidity=45;return ambient_error;}
 typedef struct {float pressure;} lps22hh_data_t;
 static int lps22hh_init(void) {return 0;}
 static int lps22hh_read(lps22hh_data_t *d) {d->pressure=1013;return 0;}
@@ -72,7 +73,7 @@ int stcc4_enable_testing_mode(void) {pause_calls++;if(!pause_error)internal_paus
 int stcc4_disable_testing_mode(void) {resume_calls++;internal_paused=false;return 0;}
 int stcc4_trigger_single_shot(void) {return 0;}
 int stcc4_read(stcc4_data_t *d) {
-  *d=(stcc4_data_t){.co2_ppm=800,.valid=true,.status=internal_paused?0x0040:0};
+  *d=(stcc4_data_t){.co2_ppm=800,.valid=true,.status=internal_paused?0x0084:0};
   return read_error;
 }
 int stcc4_reset(void) {reset_calls++;internal_paused=false;return reset_error;}
@@ -90,6 +91,9 @@ int main(void) {
   for(auto_flag=0;auto_flag<=1;auto_flag++) {
     initialized=false; internal_paused=false;
     assert(sensor_manager_init()==0 && internal_paused);
+    sensor_asc_diagnostic_t diagnostic;
+    sensor_manager_get_asc_diagnostic(&diagnostic);
+    assert(diagnostic.stage==5 && diagnostic.error==0 && diagnostic.status==0x0084);
     sensor_manager_register_callback(observed);
     assert(sensor_manager_measure_now()==0 && callback_valid);
     internal_paused=false;
@@ -101,8 +105,13 @@ int main(void) {
     assert(sensor_manager_measure_now()==0 && callback_valid);
   }
   assert(pause_calls==4 && resume_calls==0);
+  initialized=false;ambient_error=-EIO;assert(sensor_manager_init()==-EIO);
+  ambient_error=0;
   initialized=false;pause_error=-EIO;internal_paused=false;
   assert(sensor_manager_init()==-EIO && !initialized);
+  sensor_asc_diagnostic_t diagnostic;
+  sensor_manager_get_asc_diagnostic(&diagnostic);
+  assert(diagnostic.stage==2 && diagnostic.error==-EIO && diagnostic.status==0);
   assert(sensor_manager_measure_now()==-ENODEV);
   pause_error=0;read_error=-EIO;assert(sensor_manager_init()==-EIO && !initialized);
   read_error=0;assert(sensor_manager_reset_co2_sensor()==0 && initialized && !manual);

@@ -73,19 +73,37 @@ static sensor_data_callback_t user_callback = NULL;
 static void sensor_work_handler(struct k_work *work);
 
 /* Caller holds meas_mutex or is in startup before measurements are enabled. */
+static sensor_asc_diagnostic_t asc_diagnostic;
+void sensor_manager_get_asc_diagnostic(sensor_asc_diagnostic_t *diagnostic)
+{
+  k_mutex_lock(&meas_mutex, K_FOREVER);
+  *diagnostic = asc_diagnostic;
+  k_mutex_unlock(&meas_mutex);
+}
 static int pause_stcc4_asc(void)
 {
+  asc_diagnostic = (sensor_asc_diagnostic_t){.stage = 1};
   int ret = stcc4_stop();
-  if (!ret) ret = stcc4_enable_testing_mode();
-  if (!ret) ret = stcc4_trigger_single_shot();
+  if (!ret) { asc_diagnostic.stage = 2; ret = stcc4_enable_testing_mode(); }
+  if (!ret) {
+    /* Populate compensation before the startup verification measurement. */
+    asc_diagnostic.stage = 6;
+    sht40_data_t ambient;
+    ret = sht40_measure(&ambient, SHT40_PRECISION_HIGH);
+  }
+  if (!ret) { asc_diagnostic.stage = 3; ret = stcc4_trigger_single_shot(); }
   if (!ret) {
     k_msleep(STCC4_SINGLE_SHOT_WAIT_MS);
-    stcc4_data_t verification;
+    asc_diagnostic.stage = 4;
+    stcc4_data_t verification = {0};
     ret = stcc4_read(&verification);
+    asc_diagnostic.status = verification.status;
     if (!ret && !(verification.status & STCC4_STATUS_TESTING_MODE)) ret = -EACCES;
   }
+  asc_diagnostic.error = ret;
+  if (!ret) asc_diagnostic.stage = 5;
   if (ret) LOG_ERR("STCC4 ASC pause/verification failed: %d", ret);
-  else LOG_INF("STCC4 internal ASC verified paused (status bit 6)");
+  else LOG_INF("STCC4 internal ASC verified paused (status bit 2)");
   return ret;
 }
 

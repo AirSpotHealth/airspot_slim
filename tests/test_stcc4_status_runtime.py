@@ -45,10 +45,13 @@ int main(void) {
   assert(stcc4_init()==0);
   assert(stcc4_enable_testing_mode()==0 && last_command==0x3fbc);
   stcc4_data_t d;
-  sample(0x0040);assert(stcc4_read(&d)==0 && d.valid && d.co2_ppm==800);
+  sample(0x0004);assert(stcc4_read(&d)==0 && d.valid && d.co2_ppm==800);
+  sample(0x0084);assert(stcc4_read(&d)==0 && d.valid);
+  sample(0x0080);assert(stcc4_read(&d)==-EACCES);
+  sample(0x0040);assert(stcc4_read(&d)==-EACCES);
   sample(0);assert(stcc4_read(&d)==-EACCES && !d.valid && stcc4_get_co2()==0);
   sample(0x4000);assert(stcc4_read(&d)==-EACCES); /* correct byte/bit required */
-  sample(0x0040);wire[11]^=1;assert(stcc4_read(&d)==-EIO);
+  sample(0x0004);wire[11]^=1;assert(stcc4_read(&d)==-EIO);
   failed_command=0x3fbc;assert(stcc4_enable_testing_mode()==-EIO);
   failed_command=0x3f86;assert(stcc4_reset()==-EIO && last_command==0x3f86);
   failed_command=0x3650;assert(stcc4_reset()==-EIO && last_command==0x3650);

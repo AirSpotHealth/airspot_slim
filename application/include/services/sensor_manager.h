@@ -57,6 +57,12 @@ typedef void (*sensor_data_callback_t)(const sensor_data_t *data);
  */
 int sensor_manager_init(void);
 
+/* Last ASC-pause verification: stage 0=not attempted, 1=stop, 2=pause,
+ * 3=single shot, 4=read/status, 5=verified, 6=ambient. Error is negative errno.
+ * Status is the CRC-checked sensor word when available; otherwise zero. */
+typedef struct { uint8_t stage; int16_t error; uint16_t status; } sensor_asc_diagnostic_t;
+void sensor_manager_get_asc_diagnostic(sensor_asc_diagnostic_t *diagnostic);
+
 /**
  * @brief Start periodic measurements
  *

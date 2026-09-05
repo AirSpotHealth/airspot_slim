@@ -8,7 +8,7 @@ class CalibrationProtocolTests(unittest.TestCase):
     def test_software_toggle_and_reset_ack(self):
         source=(ROOT/'application/src/services/protocol.c').read_text()
         def case(start,end): return source[source.index('  case '+start+':'):source.index('  case '+end+':')]
-        cases=(case('CMD_SET_SELF_CALIB','CMD_GET_ASC_COUNT')+
+        cases=(case('CMD_GET_ASC_DIAGNOSTIC','CMD_GET_SENSOR_DETAILS')+case('CMD_SET_SELF_CALIB','CMD_GET_ASC_COUNT')+
                case('CMD_RESET_SENSOR','CMD_FIND_MY_AIRSPOT')+
                case('CMD_SET_ASC_CHECK_DURATION','CMD_GET_SENSOR_VARIANT'))
         harness=r'''
@@ -17,13 +17,15 @@ class CalibrationProtocolTests(unittest.TestCase):
 #include <stdint.h>
 #include <string.h>
 #include <services/protocol.h>
+#include <services/sensor_manager.h>
 #define LOG_INF(...)
 #define LOG_WRN(...)
 static int save_error, reset_error, measure_error, enabled, mode_commands, state_reads, duration;
 static uint8_t reply[16];static uint16_t reply_len;
+void sensor_manager_get_asc_diagnostic(sensor_asc_diagnostic_t *d) {*d=(sensor_asc_diagnostic_t){4,-13,0x0080};}
 static int software_asc_set_enabled(uint8_t e) {if(!save_error)enabled=e;return save_error;}
-static int sensor_manager_reset_co2_sensor(void) {return reset_error;}
-static int sensor_manager_measure_now(void) {return measure_error;}
+int sensor_manager_reset_co2_sensor(void) {return reset_error;}
+int sensor_manager_measure_now(void) {return measure_error;}
 static void protocol_send_device_state(void) {state_reads++;}
 static void software_asc_set_check_duration(uint16_t s) {duration=s;}
 static uint8_t software_asc_get_day_count(void) {return 4;}
@@ -35,6 +37,10 @@ static void handle(const uint8_t *frame,uint16_t len) {switch(frame[2]) {
 }}
 int main(void) {
   uint8_t f[7]={255,170,CMD_SET_SELF_CALIB,1,1,0,0};
+  f[2]=CMD_GET_ASC_DIAGNOSTIC;handle(f,6);
+  assert(reply_len==11 && reply[3]==6 && reply[4]==1 && reply[5]==4);
+  assert(reply[6]==255 && reply[7]==243 && reply[8]==0 && reply[9]==0x80);
+  f[2]=CMD_SET_SELF_CALIB;
   handle(f,6);assert(enabled==1 && reply[4]==2 && reply_len==6 && state_reads==1);
   save_error=-1;f[4]=0;handle(f,6);assert(enabled==1 && reply[4]==255 && state_reads==2);
   save_error=0;handle(f,6);assert(enabled==0 && reply[4]==2);

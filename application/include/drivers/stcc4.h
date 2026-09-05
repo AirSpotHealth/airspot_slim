@@ -21,7 +21,7 @@
 extern "C" {
 #endif
 
-#define STCC4_STATUS_TESTING_MODE 0x0040u
+#define STCC4_STATUS_TESTING_MODE 0x0004u
 
 /* Measurement mode */
 typedef enum {

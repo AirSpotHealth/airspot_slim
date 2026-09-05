@@ -280,7 +280,9 @@ int stcc4_read(stcc4_data_t *data) {
   data->temperature = -45.0f + 175.0f * ((float)temp_raw / 65535.0f);
   data->humidity = -6.0f + 125.0f * ((float)rh_raw / 65535.0f);
   data->status = status_raw;
-  /* Datasheet 3.4.13: byte 10 bit 6 (status bit 6) means ASC paused.
+  /* Sensirion's current STCC4 driver (model 3.5.1) documents byte 10 value 4
+   * for testing mode. This supersedes the June 2025 PDF's bit-6 wording.
+   * Check only the testing flag; other status bits can coexist (e.g. 0x0084).
    * Never expose a sample taken with the sensor's own ASC active. */
   data->valid = (status_raw & STCC4_STATUS_TESTING_MODE) != 0;
   if (!data->valid) {
