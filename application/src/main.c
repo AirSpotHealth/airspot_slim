@@ -980,7 +980,7 @@ int main(void) {
 
     /* Soft power-off requested by the button gesture (5 s hold on charger):
      * runs in the main thread, does not return until the power-on reboot. */
-    if (soft_off_requested) {
+    if (soft_off_requested || power_manager_take_off_request()) {
       soft_off_requested = false;
       enter_soft_off();
     }

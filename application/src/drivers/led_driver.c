@@ -13,7 +13,7 @@
 #include <airspot/board.h>
 #include <drivers/led_driver.h>
 
-LOG_MODULE_REGISTER(led_driver, LOG_LEVEL_DBG);
+LOG_MODULE_REGISTER(led_driver, CONFIG_AIRSPOT_LOG_LEVEL);
 
 /* For gpio-leds, the device is the parent leds node, not individual led nodes
  */

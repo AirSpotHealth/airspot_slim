@@ -14,7 +14,7 @@
 #include <drivers/i2c_bus.h>
 #include <drivers/sht40.h>
 
-LOG_MODULE_REGISTER(sht40, LOG_LEVEL_DBG);
+LOG_MODULE_REGISTER(sht40, CONFIG_AIRSPOT_LOG_LEVEL);
 
 /* I2C Commands (from datasheet) */
 #define SHT40_CMD_MEASURE_HIGH 0xFD   /* High precision, no heater */

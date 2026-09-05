@@ -44,115 +44,67 @@ static bool initialized = false;
 static volatile uint32_t time_base = 0;
 static bool time_set = false;
 
-/* Settings handler - called when loading from NVS */
+/* Reject truncated records before touching live settings. */
 static int settings_set(const char *name, size_t len, settings_read_cb read_cb,
                         void *cb_arg)
 {
-  const char *next;
-  int rc;
+  user_settings_t candidate = settings;
+  void *destination = NULL;
+  size_t expected = 0;
+  uint8_t dnd[5];
 
-  if (settings_name_steq(name, "name", &next) && !next)
-  {
-    if (len > USER_SETTINGS_NAME_MAX_LEN)
-    {
-      len = USER_SETTINGS_NAME_MAX_LEN;
-    }
-    rc = read_cb(cb_arg, settings.device_name, len);
-    settings.device_name[len] = '\0';
-    return (rc >= 0) ? 0 : rc;
+#define FIELD(key, member) \
+  if (strcmp(name, key) == 0) { destination = &candidate.member; expected = sizeof(candidate.member); }
+  FIELD("power", power_mode)
+  else FIELD("flight", flight_mode)
+  else FIELD("buzzer", buzzer_enabled)
+  else FIELD("vibrator", vibrator_enabled)
+  else FIELD("co2_cc", co2_correction)
+  else FIELD("calib_target", calib_target)
+  else FIELD("auto_calib", auto_calibrate)
+  else FIELD("asc_day", asc_day_count)
+  else FIELD("co2_yellow", co2_yellow_start)
+  else FIELD("co2_red", co2_red_start)
+  else FIELD("paired", paired)
+  else if (strcmp(name, "name") == 0) {
+    if (len > USER_SETTINGS_NAME_MAX_LEN) { return -EINVAL; }
+    destination = candidate.device_name;
+    expected = len;
+    candidate.device_name[len] = '\0';
+  } else if (strcmp(name, "dnd") == 0) {
+    destination = dnd;
+    expected = sizeof(dnd);
+  } else {
+    return -ENOENT;
   }
-
-  if (settings_name_steq(name, "power", &next) && !next)
-  {
-    rc = read_cb(cb_arg, &settings.power_mode, sizeof(settings.power_mode));
-    return (rc >= 0) ? 0 : rc;
+#undef FIELD
+  if (len != expected) { return -EINVAL; }
+  int rc = read_cb(cb_arg, destination, expected);
+  if (rc < 0) { return rc; }
+  if ((size_t)rc != expected) { return -EIO; }
+  if (destination == dnd) {
+    candidate.dnd_enabled = dnd[0];
+    candidate.dnd_start_hour = dnd[1];
+    candidate.dnd_start_minute = dnd[2];
+    candidate.dnd_end_hour = dnd[3];
+    candidate.dnd_end_minute = dnd[4];
   }
+  if (candidate.power_mode > 3 || candidate.flight_mode > 1 ||
+      candidate.buzzer_enabled > 1 || candidate.vibrator_enabled > 1 ||
+      candidate.auto_calibrate > 1 || candidate.paired > 1 ||
+      candidate.dnd_enabled > 1 || candidate.dnd_start_hour > 23 ||
+      candidate.dnd_end_hour > 23 || candidate.dnd_start_minute > 59 ||
+      candidate.dnd_end_minute > 59) { return -EINVAL; }
+  settings = candidate;
+  return 0;
+}
 
-  if (settings_name_steq(name, "flight", &next) && !next)
-  {
-    rc = read_cb(cb_arg, &settings.flight_mode, sizeof(settings.flight_mode));
-    return (rc >= 0) ? 0 : rc;
-  }
-
-  if (settings_name_steq(name, "dnd", &next) && !next)
-  {
-    /* DND settings packed: enabled, start_h, start_m, end_h, end_m */
-    uint8_t dnd_data[5];
-    rc = read_cb(cb_arg, dnd_data, sizeof(dnd_data));
-    if (rc >= 0)
-    {
-      settings.dnd_enabled = dnd_data[0];
-      settings.dnd_start_hour = dnd_data[1];
-      settings.dnd_start_minute = dnd_data[2];
-      settings.dnd_end_hour = dnd_data[3];
-      settings.dnd_end_minute = dnd_data[4];
-    }
-    return (rc >= 0) ? 0 : rc;
-  }
-
-  if (settings_name_steq(name, "buzzer", &next) && !next)
-  {
-    rc = read_cb(cb_arg, &settings.buzzer_enabled,
-                 sizeof(settings.buzzer_enabled));
-    return (rc >= 0) ? 0 : rc;
-  }
-
-  if (settings_name_steq(name, "vibrator", &next) && !next)
-  {
-    rc = read_cb(cb_arg, &settings.vibrator_enabled,
-                 sizeof(settings.vibrator_enabled));
-    return (rc >= 0) ? 0 : rc;
-  }
-
-  if (settings_name_steq(name, "co2_cc", &next) && !next)
-  {
-    rc = read_cb(cb_arg, &settings.co2_correction,
-                 sizeof(settings.co2_correction));
-    return (rc >= 0) ? 0 : rc;
-  }
-
-  if (settings_name_steq(name, "calib_target", &next) && !next)
-  {
-    rc = read_cb(cb_arg, &settings.calib_target,
-                 sizeof(settings.calib_target));
-    return (rc >= 0) ? 0 : rc;
-  }
-
-  if (settings_name_steq(name, "auto_calib", &next) && !next)
-  {
-    rc = read_cb(cb_arg, &settings.auto_calibrate,
-                 sizeof(settings.auto_calibrate));
-    return (rc >= 0) ? 0 : rc;
-  }
-
-  if (settings_name_steq(name, "asc_day", &next) && !next)
-  {
-    rc = read_cb(cb_arg, &settings.asc_day_count,
-                 sizeof(settings.asc_day_count));
-    return (rc >= 0) ? 0 : rc;
-  }
-
-  if (settings_name_steq(name, "co2_yellow", &next) && !next)
-  {
-    rc = read_cb(cb_arg, &settings.co2_yellow_start,
-                 sizeof(settings.co2_yellow_start));
-    return (rc >= 0) ? 0 : rc;
-  }
-
-  if (settings_name_steq(name, "co2_red", &next) && !next)
-  {
-    rc = read_cb(cb_arg, &settings.co2_red_start,
-                 sizeof(settings.co2_red_start));
-    return (rc >= 0) ? 0 : rc;
-  }
-
-  if (settings_name_steq(name, "paired", &next) && !next)
-  {
-    rc = read_cb(cb_arg, &settings.paired, sizeof(settings.paired));
-    return (rc >= 0) ? 0 : rc;
-  }
-
-  return -ENOENT;
+/* Publish a scalar setting only after NVS accepts it. */
+static int save_value(const char *key, void *destination, const void *value, size_t size)
+{
+  int rc = settings_save_one(key, value, size);
+  if (rc == 0) { memcpy(destination, value, size); }
+  return rc;
 }
 
 SETTINGS_STATIC_HANDLER_DEFINE(airspot, SETTINGS_KEY, NULL, settings_set, NULL,
@@ -175,7 +127,8 @@ int user_settings_init(void)
   rc = settings_load();
   if (rc)
   {
-    LOG_WRN("Settings load failed: %d (using defaults)", rc);
+    LOG_ERR("Settings load failed: %d", rc);
+    return rc;
   }
 
   initialized = true;
@@ -195,15 +148,10 @@ int user_settings_set_device_name(const char *name)
     return -EINVAL;
   }
 
-  strncpy(settings.device_name, name, USER_SETTINGS_NAME_MAX_LEN);
-  settings.device_name[USER_SETTINGS_NAME_MAX_LEN] = '\0';
-
-  int rc = settings_save_one(SETTINGS_KEY "/name", settings.device_name,
-                             strlen(settings.device_name));
-  if (rc)
-  {
-    LOG_ERR("Failed to save device name: %d", rc);
-  }
+  char value[USER_SETTINGS_NAME_MAX_LEN + 1] = {0};
+  strncpy(value, name, USER_SETTINGS_NAME_MAX_LEN);
+  int rc = settings_save_one(SETTINGS_KEY "/name", value, strlen(value));
+  if (rc == 0) { memcpy(settings.device_name, value, sizeof(value)); }
   return rc;
 }
 
@@ -211,18 +159,17 @@ uint8_t user_settings_get_power_mode(void) { return settings.power_mode; }
 
 int user_settings_set_power_mode(uint8_t mode)
 {
-  settings.power_mode = mode;
-  return settings_save_one(SETTINGS_KEY "/power", &settings.power_mode,
-                           sizeof(settings.power_mode));
+  if (mode > 3) { return -EINVAL; }
+  uint8_t value = mode;
+  return save_value(SETTINGS_KEY "/power", &settings.power_mode, &value, sizeof(value));
 }
 
 uint8_t user_settings_get_flight_mode(void) { return settings.flight_mode; }
 
 int user_settings_set_flight_mode(uint8_t enabled)
 {
-  settings.flight_mode = enabled ? 1 : 0;
-  return settings_save_one(SETTINGS_KEY "/flight", &settings.flight_mode,
-                           sizeof(settings.flight_mode));
+  uint8_t value = enabled ? 1 : 0;
+  return save_value(SETTINGS_KEY "/flight", &settings.flight_mode, &value, sizeof(value));
 }
 
 bool user_settings_is_dnd_active(void)
@@ -266,35 +213,33 @@ int user_settings_set_dnd(uint8_t enabled, uint8_t start_hour,
                           uint8_t start_minute, uint8_t end_hour,
                           uint8_t end_minute)
 {
+  if (enabled > 1 || start_hour > 23 || end_hour > 23 ||
+      start_minute > 59 || end_minute > 59) { return -EINVAL; }
+  uint8_t dnd_data[5] = {enabled, start_hour, start_minute, end_hour, end_minute};
+  int rc = settings_save_one(SETTINGS_KEY "/dnd", dnd_data, sizeof(dnd_data));
+  if (rc) { return rc; }
   settings.dnd_enabled = enabled;
   settings.dnd_start_hour = start_hour;
   settings.dnd_start_minute = start_minute;
   settings.dnd_end_hour = end_hour;
   settings.dnd_end_minute = end_minute;
-
-  uint8_t dnd_data[5] = {enabled, start_hour, start_minute, end_hour,
-                         end_minute};
-  return settings_save_one(SETTINGS_KEY "/dnd", dnd_data, sizeof(dnd_data));
+  return 0;
 }
 
 uint8_t user_settings_get_buzzer(void) { return settings.buzzer_enabled; }
 
 int user_settings_set_buzzer(uint8_t enabled)
 {
-  settings.buzzer_enabled = enabled ? 1 : 0;
-  LOG_INF("Buzzer set to %d (stub - no hardware)", settings.buzzer_enabled);
-  return settings_save_one(SETTINGS_KEY "/buzzer", &settings.buzzer_enabled,
-                           sizeof(settings.buzzer_enabled));
+  uint8_t value = enabled ? 1 : 0;
+  return save_value(SETTINGS_KEY "/buzzer", &settings.buzzer_enabled, &value, sizeof(value));
 }
 
 uint8_t user_settings_get_vibrator(void) { return settings.vibrator_enabled; }
 
 int user_settings_set_vibrator(uint8_t enabled)
 {
-  settings.vibrator_enabled = enabled ? 1 : 0;
-  LOG_INF("Vibrator set to %d (stub - no hardware)", settings.vibrator_enabled);
-  return settings_save_one(SETTINGS_KEY "/vibrator", &settings.vibrator_enabled,
-                           sizeof(settings.vibrator_enabled));
+  uint8_t value = enabled ? 1 : 0;
+  return save_value(SETTINGS_KEY "/vibrator", &settings.vibrator_enabled, &value, sizeof(value));
 }
 
 int16_t user_settings_get_co2_correction(void)
@@ -304,18 +249,16 @@ int16_t user_settings_get_co2_correction(void)
 
 int user_settings_set_co2_correction(int16_t correction)
 {
-  settings.co2_correction = correction;
-  return settings_save_one(SETTINGS_KEY "/co2_cc", &settings.co2_correction,
-                           sizeof(settings.co2_correction));
+  int16_t value = correction;
+  return save_value(SETTINGS_KEY "/co2_cc", &settings.co2_correction, &value, sizeof(value));
 }
 
 uint16_t user_settings_get_calib_target(void) { return settings.calib_target; }
 
 int user_settings_set_calib_target(uint16_t target)
 {
-  settings.calib_target = target;
-  return settings_save_one(SETTINGS_KEY "/calib_target", &settings.calib_target,
-                           sizeof(settings.calib_target));
+  uint16_t value = target;
+  return save_value(SETTINGS_KEY "/calib_target", &settings.calib_target, &value, sizeof(value));
 }
 
 uint16_t user_settings_get_co2_yellow_start(void)
@@ -354,9 +297,8 @@ uint8_t user_settings_get_auto_calibrate(void)
 
 int user_settings_set_auto_calibrate(uint8_t enabled)
 {
-  settings.auto_calibrate = enabled ? 1 : 0;
-  return settings_save_one(SETTINGS_KEY "/auto_calib", &settings.auto_calibrate,
-                           sizeof(settings.auto_calibrate));
+  uint8_t value = enabled ? 1 : 0;
+  return save_value(SETTINGS_KEY "/auto_calib", &settings.auto_calibrate, &value, sizeof(value));
 }
 
 uint8_t user_settings_get_asc_day_count(void)
@@ -366,9 +308,8 @@ uint8_t user_settings_get_asc_day_count(void)
 
 int user_settings_set_asc_day_count(uint8_t day_count)
 {
-  settings.asc_day_count = day_count;
-  return settings_save_one(SETTINGS_KEY "/asc_day", &settings.asc_day_count,
-                           sizeof(settings.asc_day_count));
+  uint8_t value = day_count;
+  return save_value(SETTINGS_KEY "/asc_day", &settings.asc_day_count, &value, sizeof(value));
 }
 
 bool user_settings_is_paired(void) { return settings.paired != 0; }
@@ -381,10 +322,7 @@ int user_settings_set_paired(bool paired)
     return 0; /* avoid an NVS write on every connection */
   }
 
-  settings.paired = value;
-  LOG_INF("Paired flag set to %u", value);
-  return settings_save_one(SETTINGS_KEY "/paired", &settings.paired,
-                           sizeof(settings.paired));
+  return save_value(SETTINGS_KEY "/paired", &settings.paired, &value, sizeof(value));
 }
 
 uint16_t user_settings_apply_co2_correction(uint16_t raw_ppm)

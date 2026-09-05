@@ -247,11 +247,15 @@ static void do_measurement(void)
   /* Note: This is critical for STCC4 accuracy */
   if (!isnan(data.temperature_c) && !isnan(data.humidity_rh))
   {
-    stcc4_set_ambient(data.temperature_c, data.humidity_rh);
+    if (stcc4_set_ambient(data.temperature_c, data.humidity_rh) != 0) {
+      all_ok = false;
+    }
   }
   if (data.pressure_hpa > 0)
   {
-    stcc4_set_pressure((uint16_t)data.pressure_hpa);
+    if (stcc4_set_pressure((uint16_t)data.pressure_hpa) != 0) {
+      all_ok = false;
+    }
   }
 
   /* 4. Read STCC4 CO2 */

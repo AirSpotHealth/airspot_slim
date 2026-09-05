@@ -16,7 +16,7 @@
 #include <drivers/i2c_bus.h>
 #include <drivers/lps22hh.h>
 
-LOG_MODULE_REGISTER(lps22hh, LOG_LEVEL_DBG);
+LOG_MODULE_REGISTER(lps22hh, CONFIG_AIRSPOT_LOG_LEVEL);
 
 /* LPS22HH Register addresses */
 #define LPS22HH_REG_INTERRUPT_CFG 0x0B

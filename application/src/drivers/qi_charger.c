@@ -14,7 +14,7 @@
 
 #include <drivers/qi_charger.h>
 
-LOG_MODULE_REGISTER(qi_charger, LOG_LEVEL_INF);
+LOG_MODULE_REGISTER(qi_charger, CONFIG_AIRSPOT_LOG_LEVEL);
 
 #define QI_DEBOUNCE_SAMPLES 3
 #define QI_DEBOUNCE_INTERVAL_US 30000

@@ -19,7 +19,7 @@
 
 #include <drivers/battery.h>
 
-LOG_MODULE_REGISTER(battery, LOG_LEVEL_INF);
+LOG_MODULE_REGISTER(battery, CONFIG_AIRSPOT_LOG_LEVEL);
 
 /* ============================================================================
  * Hardware Configuration from Schematic

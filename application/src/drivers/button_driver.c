@@ -18,7 +18,7 @@
 
 #include <drivers/button_driver.h>
 
-LOG_MODULE_REGISTER(button_driver, LOG_LEVEL_INF);
+LOG_MODULE_REGISTER(button_driver, CONFIG_AIRSPOT_LOG_LEVEL);
 
 #define BUTTON_NODE DT_ALIAS(sw0)
 #ifndef CONFIG_AIRSPOT_BUTTON_LONG_PRESS_TIMEOUT_MS

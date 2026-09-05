@@ -18,7 +18,7 @@
 #include <drivers/sht40.h>
 #include <drivers/stcc4.h>
 
-LOG_MODULE_REGISTER(stcc4, LOG_LEVEL_DBG);
+LOG_MODULE_REGISTER(stcc4, CONFIG_AIRSPOT_LOG_LEVEL);
 
 /* STCC4 I2C Commands (from Sensirion STCC4 datasheet and working minimal uart
  * code) */
