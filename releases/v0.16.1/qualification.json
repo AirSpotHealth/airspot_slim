@@ -1,0 +1,27 @@
+{
+  "date": "2026-09-05",
+  "firmware_source_commit": "1aea655",
+  "image_hash": "38b6814ed07975f91cf70745716f091b1a2d66dd29dd1be0a84cae66f4365df3",
+  "device": "AirSpot-C58CC9",
+  "guard_ms": 180000,
+  "firmware_tests_passed": 29,
+  "flutter_tests_passed": 51,
+  "physical_checks": {
+    "startup_on": "passed; readings 246\u2013337 ppm, correction zero",
+    "saved_on_reboot": "passed; readings 62\u2013342 ppm, correction zero",
+    "reset_on": "passed; preference retained, correction zero",
+    "reconnect_off": "passed; original off/zero restored",
+    "hardware_asc_status": "0x0084, stage 5, errno 0"
+  },
+  "manual_during_guard": "production C harness passed; not performed on physical device",
+  "accuracy": "unresolved; see v0.16.0 qualification",
+  "final_ble_frames": {
+    "0x13": "ffaa1306302e31362e31e6",
+    "0x8": "ffaa0844000003032003e80000001600070001aa0007d001900000000000000000000000000000000000000000000000000000000000000000000000000000000000003f80000000f5",
+    "0x25": "ffaa2501000000cf",
+    "0x2a": "ffaa2a0100d4",
+    "0x33": "ffaa33060105000000846c",
+    "0xfe": "ffaafe046a9c669fb6",
+    "0x1": "ffaa010a6a9c669f00f50a13116f51"
+  }
+}

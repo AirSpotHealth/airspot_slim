@@ -164,6 +164,13 @@ int main(void) {
   assert(correction==-474 && finished==1 && failed==2);
   storage_error=0; power=0; storage_error=-EIO;
   assert(calibration_service_start(426)==-EIO && !software_asc_manual_active());
+  fresh(); uptime=0; enabled=1; software_asc_init();
+  finished=failed=0; calibration_service_init(&cb);
+  assert(calibration_service_start(426)==0);
+  calibration_service_process_measurement(800);
+  while(calib_active) calibration_tick_work_handler(NULL);
+  assert(correction==-374 && finished==1 && failed==0);
+  feed(400,300); assert(correction==-374 && asc.records==0);
   return 0;
 }
 ''')
