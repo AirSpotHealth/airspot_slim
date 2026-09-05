@@ -539,13 +539,19 @@ void sensor_manager_set_power_mode(uint8_t power_mode)
     break;
   }
 
+  /* Serialize mode commands with periodic/manual measurements. */
+  k_mutex_lock(&meas_mutex, K_FOREVER);
   /* Switch STCC4 mode if needed */
   if (want_single_shot != use_single_shot_mode)
   {
     if (want_single_shot)
     {
       /* Switch to single-shot mode */
-      stcc4_stop();
+      if (stcc4_stop() != 0) {
+        LOG_ERR("Failed to stop STCC4; keeping existing measurement mode");
+        k_mutex_unlock(&meas_mutex);
+        return;
+      }
       use_single_shot_mode = true;
       LOG_INF("STCC4: Switched to single-shot mode (power saving)");
     }
@@ -590,6 +596,7 @@ void sensor_manager_set_power_mode(uint8_t power_mode)
       k_work_schedule(&sensor_work, K_MSEC(measurement_interval_ms));
     }
   }
+  k_mutex_unlock(&meas_mutex);
 }
 
 /**

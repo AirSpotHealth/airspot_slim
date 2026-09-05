@@ -171,6 +171,7 @@ static void enter_low_battery_lockout(bool teardown) {
       protocol_send_low_battery_lockout();
       k_msleep(50); /* let the notification flush before we tear down BLE */
     }
+    ble_service_set_advertising_suppressed(true);
     sensor_manager_stop();
     k_timer_stop(&data_log_timer);
     k_timer_stop(&time_timer);
@@ -471,12 +472,26 @@ static void sensor_data_callback(const sensor_data_t *data) {
 
   ota_service_observe_sample(data);
 
-  /* Feed calibration accumulator with raw value */
-  calibration_service_process_measurement(data->co2_ppm);
+  /* Low-battery lockout: once the pack drops below the lockout threshold
+   * (battery_low == <BATTERY_LOCKOUT_MV) while NOT on the charger, request the
+   * lockout. The main loop performs the teardown + blocking lockout loop so it
+   * runs in the main thread rather than blocking this workqueue callback. */
+  if (data->battery_low && !data->is_charging) {
+    LOG_WRN("Battery below lockout threshold — requesting low-power lockout");
+    low_battery_lockout_requested = true;
+  } else if (data->battery_critical && !data->is_charging &&
+             !led_indicator_is_active()) {
+    /* Belt-and-suspenders: if we somehow get here still draining, flag it. */
+    LOG_WRN("BATTERY CRITICAL!");
+    low_battery_lockout_requested = true;
+  }
 
   if (!data->valid) {
     return;
   }
+
+  /* Calibration must never accumulate a cached failed sensor reading. */
+  calibration_service_process_measurement(data->co2_ppm);
 
   uint16_t corrected_co2 = user_settings_apply_co2_correction(data->co2_ppm);
 
@@ -494,19 +509,7 @@ static void sensor_data_callback(const sensor_data_t *data) {
   /* Update battery service */
   /* Note: BAS is automatically updated via CONFIG_BT_BAS */
 
-  /* Low-battery lockout: once the pack drops below the lockout threshold
-   * (battery_low == <BATTERY_LOCKOUT_MV) while NOT on the charger, request the
-   * lockout. The main loop performs the teardown + blocking lockout loop so it
-   * runs in the main thread rather than blocking this workqueue callback. */
-  if (data->battery_low && !data->is_charging) {
-    LOG_WRN("Battery below lockout threshold — requesting low-power lockout");
-    low_battery_lockout_requested = true;
-  } else if (data->battery_critical && !data->is_charging &&
-             !led_indicator_is_active()) {
-    /* Belt-and-suspenders: if we somehow get here still draining, flag it. */
-    LOG_WRN("BATTERY CRITICAL!");
-    low_battery_lockout_requested = true;
-  }
+
 }
 
 /**
