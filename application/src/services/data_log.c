@@ -469,10 +469,12 @@ static int data_log_recover_full_scan(void) {
       }
     }
 
-    /* Yield occasionally during long scan */
-    if (sector % 64 == 0) {
-      k_yield();
-    }
+    /* A blank/new board has no metadata and scans the entire 2 MiB flash.
+     * Keep the watchdog alive only as each bounded sector scan progresses,
+     * and let lower-priority initialization work run between sectors.
+     */
+    watchdog_feed();
+    k_msleep(1);
   }
 
   /* Handle results */

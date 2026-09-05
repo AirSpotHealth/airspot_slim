@@ -101,6 +101,10 @@ static void nus_rx_callback(const uint8_t *data, uint16_t len)
     if (rx_frame_idx >= 4)
     {
       uint16_t expected_len = 4 + rx_frame[3] + 1;
+      if (expected_len > RX_FRAME_MAX_LEN) {
+        rx_frame_idx = 0;
+        continue;
+      }
       if (rx_frame_idx == expected_len)
       {
         /* Hand the complete frame to the worker thread; never dispatch
@@ -275,7 +279,8 @@ static void protocol_calib_on_done(int16_t correction)
  */
 static void frame_received_handler(const uint8_t *frame, uint16_t len)
 {
-  if (!verify_frame_checksum(frame, len))
+  if (len < 5 || len != (uint16_t)(frame[3] + 5) ||
+      !verify_frame_checksum(frame, len))
   {
     LOG_WRN("Frame checksum failed");
     return;
@@ -498,8 +503,9 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len)
   case CMD_SET_POWER_MODE:
     if (len >= 6)
     {
-      user_settings_set_power_mode(frame[4]);
-      sensor_manager_set_power_mode(frame[4]);
+      if (user_settings_set_power_mode(frame[4]) == 0) {
+        sensor_manager_set_power_mode(frame[4]);
+      }
       LOG_INF("Power mode set: %d", frame[4]);
     }
     protocol_send_device_state();
@@ -615,7 +621,7 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len)
   case CMD_SET_DND:
     /* Set DND mode - just store settings for now */
     /* payload: [enabled(1), startH(1), startM(1), endH(1), endM(1)] */
-    if (len >= 9)
+    if (len >= 10)
     {
       uint8_t enabled = frame[4];
       uint8_t start_h = frame[5];
@@ -679,7 +685,7 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len)
     break;
 
   case CMD_SET_DEVICE_SLEEP:
-    /* Enter Power Off (shipping) mode */
+    /* Request soft-off; hardware System OFF remains unqualified. */
     LOG_INF("Device sleep (power off) command received");
     /* Send ACK first */
     {
@@ -694,7 +700,7 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len)
     }
     /* Small delay for ACK to send */
     k_msleep(100);
-    /* Enter power off - does not return */
+    /* Main performs the same soft-off transition as the button gesture. */
     power_manager_enter_off_state();
     break;
 

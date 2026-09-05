@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Battery Driver
- * nRF54L05 SAADC for battery voltage monitoring
+ * nRF54L15 SAADC for battery voltage monitoring
  *
  * Hardware Configuration:
  * - ADC Input: P1.05 (AIN1) - via 0.6x voltage divider

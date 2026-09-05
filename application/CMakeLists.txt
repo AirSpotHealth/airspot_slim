@@ -1,14 +1,16 @@
 cmake_minimum_required(VERSION 3.20.0)
 
-message(STATUS "Adding factory_test.c to sources from: ${CMAKE_CURRENT_LIST_FILE}")
-
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(airspot_slim)
+
+if(NOT CONFIG_SOC_NRF54L15_CPUAPP OR NOT CONFIG_BOOTLOADER_MCUBOOT)
+  message(FATAL_ERROR "Build with sysbuild: MCUboot is required for wireless updates")
+endif()
 
 # =============================================================================
 # Main Application
 # =============================================================================
-target_sources(app PRIVATE src/main.c)
+target_sources(app PRIVATE src/main.c src/services/ota_service.c)
 
 # =============================================================================
 # Drivers

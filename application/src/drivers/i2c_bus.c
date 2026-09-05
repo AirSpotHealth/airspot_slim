@@ -14,7 +14,7 @@
 
 #include <drivers/i2c_bus.h>
 
-LOG_MODULE_REGISTER(i2c_bus, LOG_LEVEL_DBG);
+LOG_MODULE_REGISTER(i2c_bus, CONFIG_AIRSPOT_LOG_LEVEL);
 
 /* I2C device - defined in device tree */
 #define I2C_NODE DT_NODELABEL(i2c30)

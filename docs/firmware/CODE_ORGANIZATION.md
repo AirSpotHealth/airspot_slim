@@ -12,7 +12,7 @@ airspot_slim/
 │   ├── prj.conf                    # Zephyr configuration
 │   ├── pm_static.yml               # Partition manager
 │   ├── build.sh                    # Build script
-│   ├── setup_env.sh                # Environment setup
+│   ├── ../scripts/airspot           # Production environment/build entrypoint
 │   │
 │   ├── boards/                     # Board-specific files
 │   │   └── arm/airspot_slim_nrf54l05_cpuapp/

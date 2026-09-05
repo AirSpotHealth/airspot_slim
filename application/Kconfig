@@ -57,11 +57,9 @@ config AIRSPOT_POWER_OFF_ENABLED
 	  When enabled, the button power-off gesture and the BLE
 	  "device sleep" command put the device into System OFF.
 
-	  DISABLED by default: on current hardware the button is on a GPIO
-	  port that does not support interrupt/SENSE wake (P2.10), so the
-	  device cannot wake from the button after entering System OFF and
-	  would be stranded until the Qi charger is re-toggled. Re-enable only
-	  once the wake-capable button pin (P0/P1) is in place.
+	  The production button is P0.02, which supports GPIO SENSE wake.
+	  Enable after qualification of release-before-off and charger/hold wake.
+	  Wake requires the existing five-second hold while on the Qi charger.
 
 endmenu
 

@@ -247,11 +247,15 @@ static void do_measurement(void)
   /* Note: This is critical for STCC4 accuracy */
   if (!isnan(data.temperature_c) && !isnan(data.humidity_rh))
   {
-    stcc4_set_ambient(data.temperature_c, data.humidity_rh);
+    if (stcc4_set_ambient(data.temperature_c, data.humidity_rh) != 0) {
+      all_ok = false;
+    }
   }
   if (data.pressure_hpa > 0)
   {
-    stcc4_set_pressure((uint16_t)data.pressure_hpa);
+    if (stcc4_set_pressure((uint16_t)data.pressure_hpa) != 0) {
+      all_ok = false;
+    }
   }
 
   /* 4. Read STCC4 CO2 */
@@ -273,6 +277,7 @@ static void do_measurement(void)
       else
       {
         /* Use last known value if read failed */
+        all_ok = false;
         data.co2_ppm = stcc4_get_co2();
         LOG_DBG("STCC4 single-shot read failed, using cached: %u ppm",
                 data.co2_ppm);
@@ -281,6 +286,7 @@ static void do_measurement(void)
     else
     {
       LOG_WRN("STCC4 single-shot trigger failed: %d", ret);
+      all_ok = false;
       data.co2_ppm = stcc4_get_co2();
     }
   }
@@ -296,6 +302,7 @@ static void do_measurement(void)
     else
     {
       /* First read after starting continuous might fail, use cached */
+      all_ok = false;
       data.co2_ppm = stcc4_get_co2();
       if (data.co2_ppm == 0)
       {
@@ -386,8 +393,14 @@ int sensor_manager_start(uint32_t interval_ms)
 void sensor_manager_stop(void)
 {
   running = false;
-  k_work_cancel_delayable(&sensor_work);
-  LOG_INF("Sensor measurements stopped");
+  /* Called by main for soft-off/lockout, never from the sensor work handler. */
+  struct k_work_sync sync;
+  k_work_cancel_delayable_sync(&sensor_work, &sync);
+  k_mutex_lock(&meas_mutex, K_FOREVER);
+  int rc = stcc4_enter_sleep_mode();
+  if (rc) { LOG_ERR("STCC4 sleep failed: %d", rc); }
+  k_mutex_unlock(&meas_mutex);
+  LOG_INF("Sensor measurements stopped; wake requires normal reboot");
 }
 
 /**
@@ -532,13 +545,19 @@ void sensor_manager_set_power_mode(uint8_t power_mode)
     break;
   }
 
+  /* Serialize mode commands with periodic/manual measurements. */
+  k_mutex_lock(&meas_mutex, K_FOREVER);
   /* Switch STCC4 mode if needed */
   if (want_single_shot != use_single_shot_mode)
   {
     if (want_single_shot)
     {
       /* Switch to single-shot mode */
-      stcc4_stop();
+      if (stcc4_stop() != 0) {
+        LOG_ERR("Failed to stop STCC4; keeping existing measurement mode");
+        k_mutex_unlock(&meas_mutex);
+        return;
+      }
       use_single_shot_mode = true;
       LOG_INF("STCC4: Switched to single-shot mode (power saving)");
     }
@@ -583,6 +602,7 @@ void sensor_manager_set_power_mode(uint8_t power_mode)
       k_work_schedule(&sensor_work, K_MSEC(measurement_interval_ms));
     }
   }
+  k_mutex_unlock(&meas_mutex);
 }
 
 /**

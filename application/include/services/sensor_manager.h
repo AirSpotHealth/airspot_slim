@@ -66,7 +66,8 @@ int sensor_manager_init(void);
 int sensor_manager_start(uint32_t interval_ms);
 
 /**
- * @brief Stop periodic measurements
+ * @brief Stop work synchronously and sleep STCC4 for shutdown.
+ * Call only from main; resume through normal reboot/initialization.
  */
 void sensor_manager_stop(void);
 

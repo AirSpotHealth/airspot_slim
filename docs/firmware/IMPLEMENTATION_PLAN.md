@@ -375,7 +375,7 @@ airspot_slim/
 
 ```bash
 cd application
-source setup_env.sh
+source ../scripts/airspot
 ./build.sh
 ```
 
