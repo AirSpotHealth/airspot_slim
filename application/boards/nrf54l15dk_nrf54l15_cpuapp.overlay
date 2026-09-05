@@ -10,7 +10,7 @@
 
 /* Remove DK-only devices and aliases before configuring the Slim. */
 / {
-    model = "AirSpot Slim Rev3A nRF54L15";
+    model = "AirSpot Slim";
     /delete-node/ pwmleds;
     aliases {
         /delete-property/ led3;
@@ -93,7 +93,7 @@
 	chosen {
 		zephyr,console = &uart20;
 		zephyr,shell-uart = &uart20;
-		nordic,pm-ext-flash = &at25xe161d;
+		/delete-property/ nordic,pm-ext-flash;
 	};
 };
 
@@ -228,29 +228,5 @@
 	};
 };
 
-/* Monolithic firmware only. Preserve the measured legacy NVS location.
- * The old pm_static_mono.yml was not consumed by non-sysbuild builds.
- * Leave remaining RRAM unallocated until an update layout is validated.
- */
-&cpuapp_rram {
-    /delete-node/ partitions;
-    partitions {
-        compatible = "fixed-partitions";
-        #address-cells = <1>;
-        #size-cells = <1>;
-        app_partition: partition@0 {
-            label = "application";
-            reg = <0x0 0x74000>;
-        };
-        storage_partition: partition@74000 {
-            label = "storage";
-            reg = <0x74000 0x9000>;
-        };
-    };
-};
-/ {
-    chosen {
-        zephyr,code-partition = &app_partition;
-        /delete-property/ nordic,pm-ext-flash;
-    };
-};
+
+/* Internal MCUboot slots and NVS use the Nordic nRF54L15 partition map. */

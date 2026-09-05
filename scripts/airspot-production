@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+set -euo pipefail
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$script_dir/airspot"
+python="$NCS_TOOLCHAIN_DIR/bin/python3"
+build="$AIRSPOT_BUILD_DIR"
+command="${1:-help}"
+[[ $# -eq 0 ]] || shift
+pristine=auto
+if [[ "$command" = logs ]]; then
+    [[ "${1:-rtt}" = rtt ]] || { echo "Diagnostics use RTT" >&2; exit 1; }
+    command=rtt
+    [[ $# -eq 0 ]] || shift
+fi
+for arg in "$@"; do
+    case "$arg" in
+        --clean|--pristine) pristine=always ;;
+        --rtt|--debug) ;; # Compatibility aliases for the single RTT configuration.
+        *) echo "Unsupported option: $arg" >&2; exit 1 ;;
+    esac
+done
+validator="$script_dir/firmware_artifact.py"
+case "$command" in
+    build)
+        key="${AIRSPOT_SIGNING_KEY:-$AIRSPOT_PROJECT_DIR/keys/airspot-signing-key-ecdsa.pem}"
+        [[ -f "$key" ]] || { echo "Set AIRSPOT_SIGNING_KEY to the product signing key" >&2; exit 1; }
+        mkdir -p "$build"
+        rm -f "$build/firmware-artifact.json"
+        west build -b "$AIRSPOT_BOARD" -d "$build" "$AIRSPOT_PROJECT_DIR" \
+            --sysbuild --pristine="$pristine" -- \
+            -DUSE_CCACHE=0 -Dapplication_USE_CCACHE=0 -Dmcuboot_USE_CCACHE=0 \
+            "-DSB_CONFIG_BOOT_SIGNATURE_KEY_FILE=\"$key\""
+        "$python" "$validator" record "$build"
+        ;;
+    check) "$python" "$validator" verify "$build" ;;
+    flash)
+        "$python" "$validator" verify "$build"
+        # Only provisioned devices may use the routine wired update path.
+        # Initial installation uses provision.py to migrate the existing NVS.
+        "$python" "$script_dir/provision.py" "$build" --update
+        ;;
+    provision)
+        "$python" "$validator" verify "$build"
+        "$python" "$script_dir/provision.py" "$build"
+        ;;
+    memory)
+        "$python" "$validator" verify "$build"
+        "$ZEPHYR_SDK_INSTALL_DIR/arm-zephyr-eabi/bin/arm-zephyr-eabi-size" \
+            "$build/application/zephyr/airspot_slim.elf" "$build/mcuboot/zephyr/zephyr.elf"
+        ;;
+    rtt)
+        "$python" "$validator" verify "$build"
+        address=$("$ZEPHYR_SDK_INSTALL_DIR/arm-zephyr-eabi/bin/arm-zephyr-eabi-nm" \
+            "$build/application/zephyr/airspot_slim.elf" | awk '$3 == "_SEGGER_RTT" {print $1}')
+        [[ -n "$address" ]] || { echo "RTT control block not found" >&2; exit 1; }
+        probe=()
+        [[ -z "${AIRSPOT_JLINK_SERIAL:-}" ]] || probe=(-SelectEmuBySN "$AIRSPOT_JLINK_SERIAL")
+        JLinkRTTLogger -Device "$AIRSPOT_JLINK_DEVICE" -If SWD -Speed 1000 \
+            -RTTAddress "0x$address" -RTTChannel 0 "${probe[@]}" "$build/rtt.log"
+        ;;
+    clean) rm -rf "$build" ;;
+    help|--help|-h)
+        echo "AirSpot Slim: airspot {build|check|provision|flash|memory|clean} [--clean]"
+        echo "Logs: airspot logs rtt. All builds include signed Bluetooth OTA and RTT."
+        echo "First wired install: provision (backs up and migrates settings)."
+        echo "OTA file: application/build_production/application/zephyr/airspot_slim.signed.bin"
+        ;;
+    *) echo "Unknown command: $command" >&2; exit 1 ;;
+esac

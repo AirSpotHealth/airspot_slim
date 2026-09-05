@@ -11,6 +11,7 @@
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/hwinfo.h>
 #include <zephyr/drivers/watchdog.h>
+#include <services/ota_service.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/printk.h>
@@ -183,6 +184,7 @@ static void enter_low_battery_lockout(bool teardown) {
   bool led_first = true;
 
   while (1) {
+    ota_service_poll();
     bool charging = qi_charger_is_charging();
     int32_t mv = battery_read_voltage_mv();
 
@@ -255,8 +257,7 @@ static void show_device_status(void) {
                             ble_service_is_connected());
 }
 
-/* Soft power-off state. System OFF cannot be used on current hardware (the
- * button on P2.10 has no SENSE wake, so the device would be stranded), so
+/* Soft power-off state. System OFF wake is pending physical qualification.
  * "off" means: BLE, sensors and timers torn down, LED dark, only the button
  * poll and Qi detection alive. Entered/left via a 5 s button hold while on
  * the Qi charger; leaving is a cold reboot for a clean full start. */
@@ -468,6 +469,8 @@ static void sensor_data_callback(const sensor_data_t *data) {
     return;
   }
 
+  ota_service_observe_sample(data);
+
   /* Feed calibration accumulator with raw value */
   calibration_service_process_measurement(data->co2_ppm);
 
@@ -560,6 +563,7 @@ static void enter_soft_off(void) {
    * hold, so we power on. Releasing (or leaving the charger) mid-fade aborts it
    * and requires a fresh press — same 5 s commitment as before, now visible. */
   while (!soft_on_requested) {
+    ota_service_poll();
     watchdog_feed();
 
     if (soft_on_holding && qi_charger_is_charging()) {
@@ -657,38 +661,11 @@ static void boot_wait_for_console(void) {
 
 int main(void) {
   int ret;
+  bool startup_healthy = true;
+  ota_service_init();
 
   boot_early_led_pulse();
   boot_wait_for_console();
-
-  /*
-   * ========================================
-   * Power-on Validation (must be first!)
-   * ========================================
-   *
-   * If device woke from System OFF, validate the wake-up gesture
-   * (tap + tap-hold 3s). Invalid gesture → return to Power OFF.
-   *
-   * NOTE: Currently DISABLED because button is on P2.10 which doesn't
-   * support GPIO SENSE/interrupt for System OFF wake. Once hardware
-   * moves button to P0 or P1, uncomment this validation.
-   */
-#if 0 /* TODO: Enable once button is on P0/P1 */
-  if (power_manager_is_wakeup_from_off()) {
-    LOG_INF("Woke from Power Off - validating gesture...");
-
-    /* Need LED driver for feedback */
-    led_driver_init();
-
-    if (!power_manager_validate_wakeup_gesture()) {
-      LOG_INF("Invalid wake gesture - returning to Power Off");
-      power_manager_enter_off_state();
-      /* Does not return */
-    }
-
-    LOG_INF("Wake gesture valid - continuing boot");
-  }
-#endif
 
   /* Boot banner */
   printk("\n\n");
@@ -703,7 +680,6 @@ int main(void) {
 
   LOG_INF("========================================");
   LOG_INF("AirSpot Slim Firmware v%s", AIRSPOT_FIRMWARE_VERSION_STRING);
-  LOG_INF("Phase 10: Power Off Mode (Shipping)");
   LOG_INF("========================================");
 
   /* Log why we just booted. A BROWNOUT here points at a power-rail sag (e.g.
@@ -732,6 +708,7 @@ int main(void) {
 
   /* Initialize LED driver */
   ret = led_driver_init();
+  startup_healthy &= (ret == 0);
   if (ret) {
     LOG_ERR("LED driver init failed: %d", ret);
   } else {
@@ -745,6 +722,7 @@ int main(void) {
 
   /* Initialize button driver */
   ret = button_driver_init();
+  startup_healthy &= (ret == 0);
   if (ret) {
     LOG_ERR("Button driver init failed: %d", ret);
   } else {
@@ -754,6 +732,7 @@ int main(void) {
 
   /* Initialize Battery driver */
   ret = battery_init();
+  startup_healthy &= (ret == 0);
   if (ret) {
     LOG_ERR("Battery init failed: %d", ret);
   } else {
@@ -762,6 +741,7 @@ int main(void) {
 
   /* Initialize Qi Charger driver */
   ret = qi_charger_init();
+  startup_healthy &= (ret == 0);
   if (ret) {
     LOG_ERR("Qi charger init failed: %d", ret);
   } else {
@@ -770,6 +750,7 @@ int main(void) {
 
   /* Initialize LED indicator service */
   ret = led_indicator_init();
+  startup_healthy &= (ret == 0);
   if (ret) {
     LOG_ERR("LED indicator init failed: %d", ret);
   } else {
@@ -814,6 +795,7 @@ int main(void) {
 
   /* 1. User settings (loads from NVS) */
   ret = user_settings_init();
+  startup_healthy &= (ret == 0);
   if (ret) {
     LOG_WRN("User settings init failed: %d (using defaults)", ret);
   } else {
@@ -827,6 +809,7 @@ int main(void) {
 
   /* Initialize Power Manager */
   ret = power_manager_init();
+  startup_healthy &= (ret == 0);
   if (ret) {
     LOG_WRN("Power manager init failed: %d", ret);
   } else {
@@ -835,6 +818,7 @@ int main(void) {
 
   /* 2. BLE service (enables Bluetooth stack) */
   ret = ble_service_init();
+  startup_healthy &= (ret == 0);
   if (ret) {
     LOG_ERR("BLE service init failed: %d", ret);
   } else {
@@ -843,6 +827,7 @@ int main(void) {
 
   /* 3. Protocol handler (initializes NUS) */
   ret = protocol_init();
+  startup_healthy &= (ret == 0);
   if (ret) {
     LOG_ERR("Protocol init failed: %d", ret);
   } else {
@@ -855,12 +840,14 @@ int main(void) {
    * soft reset (by design) would otherwise fire during the next boot's
    * conditioning — the cause of the double-boot + CO2=0 we were chasing. */
   ret = watchdog_init();
+  startup_healthy &= (ret == 0);
   if (ret < 0) {
     LOG_WRN("Watchdog init failed: %d (continuing without WDT)", ret);
   }
 
   /* 4. Sensor manager (initializes all sensors) */
   ret = sensor_manager_init();
+  startup_healthy &= (ret == 0);
   if (ret) {
     LOG_ERR("Sensor manager init failed: %d", ret);
   } else {
@@ -873,6 +860,7 @@ int main(void) {
 
   /* 5. Data log (requires SPI flash) */
   ret = data_log_init();
+  startup_healthy &= (ret == 0);
   if (ret) {
     LOG_WRN("Data log init failed: %d (history disabled)", ret);
   } else {
@@ -881,6 +869,7 @@ int main(void) {
 
   /* 6. BLE mode service (starts advertising) */
   ret = ble_mode_init();
+  startup_healthy &= (ret == 0);
   if (ret) {
     LOG_ERR("BLE mode init failed: %d", ret);
     /* Try starting advertising directly */
@@ -942,9 +931,11 @@ int main(void) {
   if (interval_ms == 0) {
     LOG_INF("Sensor mode: ON DEMAND (manual measurements only)");
     /* Do one initial measurement */
-    sensor_manager_measure_now();
+    ret = sensor_manager_measure_now();
+    startup_healthy &= (ret == 0);
   } else {
     ret = sensor_manager_start(interval_ms);
+    startup_healthy &= (ret == 0);
     if (ret) {
       LOG_ERR("Failed to start sensor measurements: %d", ret);
     } else {
@@ -959,7 +950,7 @@ int main(void) {
    */
 
   LOG_INF("========================================");
-  LOG_INF("System initialized successfully");
+  LOG_INF("System initialized %s", startup_healthy ? "successfully" : "with errors");
   LOG_INF("BLE advertising as: %s", ble_service_get_device_name());
   LOG_INF("Watchdog: %s", (wdt_channel_id >= 0) ? "ENABLED (5s)" : "DISABLED");
   LOG_INF("Button: 1x status, 2x CO2 readout; on charger: hold 5s power "
@@ -973,7 +964,10 @@ int main(void) {
    * ========================================
    */
 
+  ota_service_startup_complete(startup_healthy);
+
   while (1) {
+    ota_service_poll();
     /* Feed watchdog first - must happen at least every WDT_TIMEOUT_MS (5s) */
     watchdog_feed();
 

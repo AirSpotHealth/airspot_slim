@@ -46,8 +46,7 @@ static void restart_advertising_work_handler(struct k_work *work) {
 /* Dynamic advertising data */
 static struct bt_data ad[2];
 
-/* SMP UUID in scan response only (MCUmgr disabled) — lets the mobile app
- * detect AirSpot Slim without exposing an OTA/DFU GATT service. */
+/* Advertise the MCUmgr SMP service used by the mobile updater. */
 #define SMP_SERVICE_UUID \
     BT_UUID_128_ENCODE(0x8D53DC1D, 0x1DB7, 0x4CD3, 0x868B, 0x8A527460AA84)
 

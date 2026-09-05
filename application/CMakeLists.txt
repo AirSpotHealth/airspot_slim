@@ -1,21 +1,16 @@
 cmake_minimum_required(VERSION 3.20.0)
 
-if(BOARD STREQUAL "nrf54l15dk/nrf54l15/cpuapp")
-  list(APPEND EXTRA_CONF_FILE "${CMAKE_CURRENT_SOURCE_DIR}/prj_rev3a.conf")
-endif()
-
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(airspot_slim)
 
-if(CONFIG_SOC_NRF54L15_CPUAPP AND
-   (CONFIG_BOOTLOADER_MCUBOOT OR NOT CONFIG_USE_DT_CODE_PARTITION))
-  message(FATAL_ERROR "Rev3A requires the monolithic devicetree partition layout; MCUboot is not validated")
+if(NOT CONFIG_SOC_NRF54L15_CPUAPP OR NOT CONFIG_BOOTLOADER_MCUBOOT)
+  message(FATAL_ERROR "Build with sysbuild: MCUboot is required for wireless updates")
 endif()
 
 # =============================================================================
 # Main Application
 # =============================================================================
-target_sources(app PRIVATE src/main.c)
+target_sources(app PRIVATE src/main.c src/services/ota_service.c)
 
 # =============================================================================
 # Drivers
