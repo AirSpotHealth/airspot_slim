@@ -23,4 +23,10 @@ Removed files below are absent from the production CMake/sysbuild graph, CLI, ed
 - `application/prj_verbose.conf`
 - `application/src/main.c.backup`
 
-Retained legacy protocol fields and factory commands for mobile compatibility. Mesh and power-manager paths remain until their callers are safely reconciled; disabled does not by itself mean safe to delete.
+Retained legacy protocol fields and factory commands for mobile compatibility. Mesh paths remain pending a compatibility decision. The unused power-manager tap/hold/System-OFF implementation was subsequently replaced by an atomic soft-off request consumed by main; only main initialization and the protocol sleep command referenced it. Existing button gestures remain in main.
+
+Removed two additional unused setup helpers after reference inspection:
+- `application/setup_env.sh`: superseded by scripts/airspot; auto-installed global Python dependencies. Updated historical documentation references.
+- `application/scripts/ensure_mcuboot_key_link.sh`: superseded by the absolute signing-key path passed by scripts/airspot; no production caller. Actual signing keys and existing SDK paths are untouched.
+
+Replaced obsolete nRF54L05 memory guidance with generated nRF54L15 baseline/candidate figures.

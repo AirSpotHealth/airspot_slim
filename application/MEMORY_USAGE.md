@@ -1,60 +1,22 @@
-# Memory Usage Tracking
+# Production memory usage
 
-Track firmware memory usage across builds to monitor growth and ensure we stay within limits.
+The target is nRF54L15: 1,524 KiB NVM and 256 KiB RAM. The pinned SDK reserves
+96 KiB NVM and 68 KiB RAM for auxiliary-core use, leaving 1,428 KiB NVM and
+188 KiB RAM in the application domain.
 
-## Current Limits
+MCUboot uses 64 KiB NVM. Two 664 KiB slots support signed test updates/rollback;
+36 KiB holds settings. Image headers/trailers reduce the payload budget inside
+each slot. See ../docs/OTA.md for exact addresses.
 
-| Region                   | Chip     | Available | Notes                  |
-| ------------------------ | -------- | --------- | ---------------------- |
-| **Flash (Primary Slot)** | nRF54L05 | 280KB     | MCUboot primary slot   |
-| **RAM**                  | nRF54L05 | 96KB      | Total SRAM             |
-| **Flash (Full)**         | nRF54L10 | ~900KB    | For future mesh builds |
+| Build | Application program bytes | Application RAM bytes |
+|---|---:|---:|
+| 0.14.1 baseline (e3d0c44) | 263,708 | 86,024 |
+| 0.14.3 audit candidate (d69f516) | 262,892 | 85,976 |
 
-## Build History
+MCUboot uses 32,124 program bytes and 19,872 RAM bytes. Its RAM is reused by the
+application after handoff; do not add the two RAM figures together. These are
+linker allocations, not stack high-water or heap-fragmentation measurements.
 
-| Date       | Version | Phase   | Flash Used         | RAM Used          | Notes                           |
-| ---------- | ------- | ------- | ------------------ | ----------------- | ------------------------------- |
-| 2026-01-21 | 0.9.0   | 9 - DFU | 268,220 B (93.72%) | 70,688 B (71.91%) | MCUboot + MCUmgr + UART logging |
-
-## Breakdown by Feature (Approximate)
-
-| Feature                         | Flash Impact | RAM Impact | Notes                 |
-| ------------------------------- | ------------ | ---------- | --------------------- |
-| Base (Zephyr + BLE)             | ~120KB       | ~40KB      | Core system           |
-| Sensors (SHT40, LPS22HH, STCC4) | ~15KB        | ~2KB       | I2C drivers           |
-| SPI Flash + Data Log            | ~12KB        | ~4KB       | External flash driver |
-| BLE NUS + Protocol              | ~25KB        | ~8KB       | App protocol handler  |
-| MCUmgr (DFU)                    | ~30KB        | ~6KB       | OTA update support    |
-| UART Logging                    | ~40KB        | ~8KB       | Debug output          |
-| User Settings (NVS)             | ~8KB         | ~2KB       | Persistent storage    |
-
-## Size Optimization Tips
-
-When approaching limits:
-
-1. **Disable UART logging** (`CONFIG_LOG=n`) - Saves ~40KB flash
-2. **Reduce log level** (`CONFIG_LOG_DEFAULT_LEVEL=1`) - Saves ~10-20KB
-3. **Disable unused BLE features** - Check `CONFIG_BT_*` options
-4. **Use LTO** (`CONFIG_LTO=y`) - Can save 5-15%
-5. **Optimize for size** (`CONFIG_SIZE_OPTIMIZATIONS=y`)
-
-## Commands
-
-Check current build size:
-
-```bash
-# After building
-cat build/application/zephyr/zephyr.map | grep "^Memory region"
-# Or
-arm-none-eabi-size build/application/zephyr/zephyr.elf
-```
-
-Detailed size breakdown:
-
-```bash
-# By section
-arm-none-eabi-size -A build/application/zephyr/zephyr.elf
-
-# By symbol (largest first)
-arm-none-eabi-nm --size-sort -r build/application/zephyr/zephyr.elf | head -50
-```
+Run `bash scripts/airspot memory` from the repository root after a build for the
+current artifact report. RTT remains enabled. Do not enable bootloader LTO:
+the qualified GRTC handoff wrapper requires its current linking configuration.
