@@ -117,6 +117,19 @@ the wider production audit remain unqualified. A history-position reply alone
 does not qualify full history integrity. The user's final LED description was
 a green indication; exact visual fade shape has not been instrumented.
 
+## Final production package
+
+Production 0.14.6 was uploaded and activated over Bluetooth. SMP reports it
+active and confirmed, with hash
+`6631263b902886fd7f79a756b1c6ba7e76f25375a7765afd5a6fa4c03254214f`.
+Its generated application configuration differs from the physically tested
+0.14.5 configuration only in the signing version. All 24 host tests and artifact
+signature checks pass. Code/configuration commit: `565eb8c`; final package and
+manifest are `production-final-dfu.zip` and `production-final-artifact.json`
+under `local_backups/button-qualification/`. The previous qualified 0.14.5 image
+remains in the secondary slot. No debugger reset or wired overwrite was used to
+activate the final image.
+
 The routine wired updater rejected this candidate before writing because its
 rebuilt MCUboot bytes differ from the installed bootloader. A complete device
 backup was captured and the unchanged device resumed. Application-only signed
