@@ -53,6 +53,7 @@ extern "C" {
 #define CMD_GET_SENSOR_VARIANT 0x2B  /* Get CO2 sensor type */
 #define CMD_GET_ASC_DIAGNOSTIC 0x33 /* Read-only pause verification diagnostics */
 #define CMD_SENSOR_SELF_TEST 0x34 /* Non-calibrating STCC4 diagnostic */
+#define CMD_SUPPLY_DIAGNOSTIC 0x35 /* Temporary regulator PWM experiment */
 #define CMD_GET_SENSOR_DETAILS 0x30  /* Get sensor details */
 #define CMD_SET_CO2_SCALE_FACTOR 0x31 /* Set CO2 scale factor (stub) */
 #define CMD_SET_FLIGHT_MODE 0x32

@@ -16,6 +16,7 @@
 
 #include <drivers/led_driver.h>
 #include <drivers/stcc4.h>
+#include <drivers/supply_diagnostic.h>
 
 #include <airspot/version.h>
 #include <services/led_indicator.h>
@@ -400,6 +401,21 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len)
     uint8_t tx_frame[10] = {CMD_FIRST_BYTE, CMD_SECOND_BYTE,
       CMD_SENSOR_SELF_TEST, 5, 1, (uint8_t)(error >> 8), (uint8_t)error,
       (uint8_t)(result >> 8), (uint8_t)result, 0};
+    set_frame_checksum(tx_frame, sizeof(tx_frame));
+    send_frame(tx_frame, sizeof(tx_frame));
+    break;
+  }
+
+  case CMD_SUPPLY_DIAGNOSTIC:
+  {
+    supply_diagnostic_t state = {0};
+    /* A missing/malformed action becomes an invalid request, never an enable. */
+    uint8_t action = frame[3] == 1 ? frame[4] : UINT8_MAX;
+    uint16_t error = (uint16_t)supply_diagnostic_control(action, &state);
+    uint8_t tx_frame[11] = {CMD_FIRST_BYTE, CMD_SECOND_BYTE,
+      CMD_SUPPLY_DIAGNOSTIC, 6, 1, (uint8_t)(error >> 8), (uint8_t)error,
+      state.pwm_active, (uint8_t)(state.seconds_remaining >> 8),
+      (uint8_t)state.seconds_remaining, 0};
     set_frame_checksum(tx_frame, sizeof(tx_frame));
     send_frame(tx_frame, sizeof(tx_frame));
     break;

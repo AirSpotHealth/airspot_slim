@@ -22,6 +22,7 @@ target_sources(app PRIVATE src/drivers/sht40.c)
 target_sources(app PRIVATE src/drivers/lps22hh.c)
 target_sources(app PRIVATE src/drivers/stcc4.c)
 target_sources(app PRIVATE src/drivers/battery.c)
+target_sources(app PRIVATE src/drivers/supply_diagnostic.c)
 target_sources(app PRIVATE src/drivers/qi_charger.c)
 target_sources(app PRIVATE src/drivers/spi_flash.c)
 

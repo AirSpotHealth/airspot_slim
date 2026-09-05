@@ -198,6 +198,8 @@
 	};
 
 	zephyr,user {
+		/* Rev3A sheet 5: nPM1100 MODE, high = PWM. Diagnostic only. */
+		pmic-mode-gpios = <&gpio1 9 GPIO_ACTIVE_HIGH>;
 		io-channels = <&adc 1>;
 	};
 };

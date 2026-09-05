@@ -115,3 +115,72 @@ single test environment alone.
 
 Evidence: `box-settled.jsonl` and `box-settled-summary.json` in the investigation
 backup directory.
+
+## Temporary supply-mode diagnostic (0.16.3)
+
+Rev3A sheet 5 connects nRF P1.09 to nPM1100 MODE (NRF_NPM_Mode), with an external
+pull-down. Existing firmware leaves that pin disconnected. Nordic specifies
+maximum output ripple of 80 mVpp in hysteretic operation versus 10 mVpp in PWM;
+STCC4 specifies maximum unloaded supply ripple of 30 mV. This is a specification
+compatibility concern, not a measurement proving ripple on either assembled board.
+Sources: [Nordic BUCK specification](https://docs.nordicsemi.com/r/bundle/ps_npm1100/page/chapters/core_components/buck/doc/frontpage.html)
+and [STCC4 datasheet](https://sensirion.com/resource/datasheet/STCC4).
+
+BLE command 0x35 accepts one action byte: 0 restores the disconnected GPIO and
+schematic default; 1 requests forced PWM for 300 seconds; 2 queries. Response
+payload is six bytes: schema 1, signed big-endian 16-bit errno, active byte,
+big-endian 16-bit remaining seconds. Missing or malformed actions fail without
+enabling PWM. Enabling reads back the pin; errors are returned. Repeated enable
+renews the lease. A delayed work item restores the default independently of BLE,
+retrying failed restoration each second. Query reports restoration errors. No
+voltage-selection pins, calibration commands or persistent settings are touched.
+Reboot restores the default; production startup does not enable PWM.
+
+Nordic allows changing MODE during operation. The diagnostic waits 100 us after
+asserting MODE, exceeding the specified 55 us transition. Revision-1 PMIC erratum
+[5](https://docs.nordicsemi.com/r/bundle/errata_npm1100_rev1/page/err/npm1100/rev1/latest/anomaly_100_5.html)
+describes a possible 200 mV transient with a >30 mA load increase in the first
+55 us; the assembled PMIC revision is not identified. No supply voltage setting
+changes are made by the diagnostic.
+
+Signed production build and all 31 firmware runtime tests pass. Tests cover
+lease expiry/renewal, GPIO configuration/readback failure, restoration retry,
+malformed requests and BLE encoding. Physical observations are recorded below.
+
+### Continuous / single-shot / continuous comparison on 0.16.2
+
+Both devices were observed in mode 3, then on-demand mode 0 with one immediate
+measurement every approximately 11 seconds (including command duration), then
+returned to mode 3. Excluding the first three samples of each phase:
+
+| Phase | Older Slim mean (range) | New Slim mean (range) |
+| --- | --- | --- |
+| Continuous before | 119.8 (91–139) ppm | 2011.5 (1975–2040) ppm |
+| Single shot | 153.5 (98–180) ppm | 1946.5 (1850–2036) ppm |
+| Continuous after | 41.9 (13–161) ppm | 1918.1 (1901–1941) ppm |
+
+The large separation persisted in both modes. Mode transitions changed readings,
+particularly on the older sensor, so these brief phases do not establish long-term
+accuracy or prove complete thermal equilibrium. Both original settings packets
+and zero corrections were verified unchanged after restoration. No calibration
+commands were issued. Evidence: `mode-comparison.jsonl` and summary JSON.
+
+### 0.16.3 installation status — physical PWM test not yet run
+
+Both signed uploads completed and their staged image hashes matched the manifest.
+The first attempts timed out on the initial upload request; retries with a longer
+initial-request timeout completed. C58CC9 accepted a test-boot request and reset,
+but subsequent scans and a direct-address connection could not find it. Its
+running version/startup confirmation therefore remains unverified. 81A9DC accepted
+the test request (0.16.3 pending, 0.16.2 still active); no reset was requested for
+that device while the first device was unavailable. The user was asked to check
+whether the phone had reconnected. No 0x35 enable command has been sent, so there
+are no physical PWM results yet. Do not describe the regulator hypothesis as
+verified. Resume by verifying the first device's startup before rebooting the
+second, then run `pwm_compare.py` with before/during/automatic-expiry observations.
+
+The user asked whether to erase everything. No erase was performed. MCU flash
+and sensor-internal calibration history are separate reset domains; the existing
+matched settings and zero offsets make an indiscriminate MCU erase a poor first
+experiment. Preserve backups and a comparison device before any future reset of
+persistent state. Sensor factory reset/FRC remains outside the authorized tests.
