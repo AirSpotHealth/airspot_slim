@@ -42,6 +42,12 @@ installed. The board still runs the interrupt-only 0.14.4 candidate above.
 RTT observed two physical press/release pairs; LED response and double-tap
 qualification still require user confirmation.
 
+Subsequent RTT evidence confirms a physical double-tap at uptime 3:35, followed
+by a manual measurement and `Double tap: new reading CO2 2466 ppm` at 3:37.052.
+This verifies interrupt delivery through gesture recognition and sensor readout;
+the visible LED response has not yet been confirmed. The six-second charger-hold
+test has been requested and remains pending.
+
 The routine wired updater rejected this candidate before writing because its
 rebuilt MCUboot bytes differ from the installed bootloader. A complete device
 backup was captured and the unchanged device resumed. Application-only signed
