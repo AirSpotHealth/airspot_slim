@@ -393,8 +393,14 @@ int sensor_manager_start(uint32_t interval_ms)
 void sensor_manager_stop(void)
 {
   running = false;
-  k_work_cancel_delayable(&sensor_work);
-  LOG_INF("Sensor measurements stopped");
+  /* Called by main for soft-off/lockout, never from the sensor work handler. */
+  struct k_work_sync sync;
+  k_work_cancel_delayable_sync(&sensor_work, &sync);
+  k_mutex_lock(&meas_mutex, K_FOREVER);
+  int rc = stcc4_enter_sleep_mode();
+  if (rc) { LOG_ERR("STCC4 sleep failed: %d", rc); }
+  k_mutex_unlock(&meas_mutex);
+  LOG_INF("Sensor measurements stopped; wake requires normal reboot");
 }
 
 /**
