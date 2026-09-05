@@ -48,6 +48,18 @@ This verifies interrupt delivery through gesture recognition and sensor readout;
 the visible LED response has not yet been confirmed. The six-second charger-hold
 test has been requested and remains pending.
 
+The user reported no charging LED after the charger-hold attempt. RTT recorded
+a 7.51-second hold without charger detection or a power-off event. Read-only
+J-Link inspection found P0.IN = 0x19 (P0.00 high, inactive Qi status). P1.12 and
+P1.13 PIN_CNF both read 0x02: inputs, disconnected input buffers, no MCU pulls.
+The schematic specifies internal receiver pull-downs and EN1/EN2 = 0/0 for
+enabled handshake. The MCU therefore is not driving these pins to disable Qi.
+This does not prove receiver power transfer or exclude a status-line hardware
+fault. Pad power/alignment and receiver operation need physical confirmation
+before the charger-gated wake gesture can be qualified. Register-read logs are
+preserved in the qualification backup directory. System OFF remains disabled on
+the installed image.
+
 The routine wired updater rejected this candidate before writing because its
 rebuilt MCUboot bytes differ from the installed bootloader. A complete device
 backup was captured and the unchanged device resumed. Application-only signed
