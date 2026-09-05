@@ -76,6 +76,14 @@ debugger disconnection has been requested before activating the qualification
 image. Its artifact manifest and package are preserved with `system-off-` names
 in the qualification backup directory.
 
+Both debug adapter serials disappeared from the Mac USB tree before the OTA
+test/reset commands. Bluetooth SMP subsequently reported 0.14.5 active and
+confirmed with the qualification hash above. The System OFF image is now
+installed on the test board; this is not a completed wake qualification or a
+change to the default production configuration. The physical shutdown hold,
+short-press rejection, sustained charger-hold wake, and low-power reset-cause
+verification remain pending.
+
 The routine wired updater rejected this candidate before writing because its
 rebuilt MCUboot bytes differ from the installed bootloader. A complete device
 backup was captured and the unchanged device resumed. Application-only signed
