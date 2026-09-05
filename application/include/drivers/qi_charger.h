@@ -15,6 +15,7 @@
 #define QI_CHARGER_H
 
 #include <stdbool.h>
+#include <zephyr/kernel.h>
 
 #ifdef __cplusplus
 extern "C"
@@ -36,6 +37,9 @@ extern "C"
      * @return 0 on success, negative errno on failure
      */
     int qi_charger_init(void);
+
+    /** Wait for the initial debounced status; zero on success, negative on timeout/error. */
+    int qi_charger_wait_ready(k_timeout_t timeout);
 
     /**
      * @brief Check if device is currently charging

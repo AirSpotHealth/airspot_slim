@@ -582,6 +582,11 @@ static void validate_system_off_wake(uint32_t hold_start)
 {
   soft_off_active = true;
   LOG_INF("GPIO wake: validating charger and five-second button hold");
+  /* Qi starts with a false cached value until its asynchronous debounce runs. */
+  if (qi_charger_wait_ready(K_SECONDS(1)) != 0) {
+    LOG_ERR("GPIO wake: charger initial read unavailable");
+    enter_system_off(false);
+  }
   while (power_on_hold_active()) {
     uint32_t elapsed = k_uptime_get_32() - hold_start;
     if (elapsed >= POWER_ON_FADE_DELAY_MS) {

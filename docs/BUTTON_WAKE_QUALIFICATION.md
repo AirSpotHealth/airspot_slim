@@ -32,6 +32,16 @@ Artifacts and update logs are in `local_backups/button-qualification/`.
 Physical gesture results are pending. Neither current consumption nor battery
 runtime has been measured for this change.
 
+Follow-up review found that the wake gate ran before Qi's initial asynchronous
+debounce, so the initially false cache could reject a valid charger hold. The gate
+now waits up to one second for that first reading. A native test of the actual
+wake-gate function covers delayed readiness, timeout, release, off-charger holds,
+and release during the LED ramp. All 24 host tests pass. A separate build with
+`CONFIG_AIRSPOT_POWER_OFF_ENABLED=y` links and signs successfully; it has not been
+installed. The board still runs the interrupt-only 0.14.4 candidate above.
+RTT observed two physical press/release pairs; LED response and double-tap
+qualification still require user confirmation.
+
 The routine wired updater rejected this candidate before writing because its
 rebuilt MCUboot bytes differ from the installed bootloader. A complete device
 backup was captured and the unchanged device resumed. Application-only signed

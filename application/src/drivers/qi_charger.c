@@ -41,6 +41,7 @@ static struct k_work_delayable debounce_work;
 static qi_charger_callback_t user_callback = NULL;
 static bool initialized = false;
 static bool stable_charging;
+K_SEM_DEFINE(initial_read_done, 0, 1);
 
 static bool read_gpio_charging(void)
 {
@@ -92,6 +93,7 @@ static void debounce_work_handler(struct k_work *work)
 {
   ARG_UNUSED(work);
   run_debounce();
+  k_sem_give(&initial_read_done);
 }
 
 static void qi_charger_gpio_handler(const struct device *dev,
@@ -113,6 +115,8 @@ int qi_charger_init(void)
   }
 
   LOG_INF("Initializing Qi charger detection...");
+  /* An edge can submit work as soon as its callback is registered. */
+  k_work_init_delayable(&debounce_work, debounce_work_handler);
 
 #if HAS_QI_CHG_GPIO
   if (!gpio_is_ready_dt(&qi_chg_gpio)) {
@@ -162,7 +166,6 @@ int qi_charger_init(void)
   }
 #endif
 
-  k_work_init_delayable(&debounce_work, debounce_work_handler);
   stable_charging = false;
   initialized = true;
 
@@ -179,6 +182,14 @@ bool qi_charger_is_charging(void)
   }
 
   return stable_charging;
+}
+
+int qi_charger_wait_ready(k_timeout_t timeout)
+{
+  if (!initialized) { return -ENODEV; }
+  int rc = k_sem_take(&initial_read_done, timeout);
+  if (!rc) { k_sem_give(&initial_read_done); }
+  return rc;
 }
 
 void qi_charger_register_callback(qi_charger_callback_t callback)
