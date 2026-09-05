@@ -60,6 +60,22 @@ before the charger-gated wake gesture can be qualified. Register-read logs are
 preserved in the qualification backup directory. System OFF remains disabled on
 the installed image.
 
+Qi later asserted CHARGING at uptime 11:09.730. The following physical hold
+generated `Power OFF gesture` at 11:43.081, sensor sleep at 11:45.322, and stopped
+BLE advertising. The next charger hold caused the software power-on reboot at
+12:19.188; BLE, valid sensing, and charger detection resumed. These qualify the
+existing software-off gestures with interrupt-driven input, not System OFF.
+The earlier inactive Qi observation therefore is not evidence of a permanent
+receiver failure; its cause has not been established.
+
+System OFF candidate 0.14.5 includes the initial charger-read fix. Its signed
+image hash is `09f6195333c31597d5430a70fbf7eb3dfffb2bd1e0ddf78c11d0512cf78ac66e`.
+The separate qualification build has System OFF enabled; the default production
+configuration remains disabled. Both builds and all 24 host tests pass. Physical
+debugger disconnection has been requested before activating the qualification
+image. Its artifact manifest and package are preserved with `system-off-` names
+in the qualification backup directory.
+
 The routine wired updater rejected this candidate before writing because its
 rebuilt MCUboot bytes differ from the installed bootloader. A complete device
 backup was captured and the unchanged device resumed. Application-only signed
