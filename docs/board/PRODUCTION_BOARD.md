@@ -12,7 +12,7 @@ Source: AH-013-0001-SCH Rev3A, approved 25-Jun-2026. MCU is nRF54L15-QFAA.
 
 | Function | Connection | Firmware handling |
 | --- | --- | --- |
-| Button | P0.02, Q3 inverter | Active high, external bias; existing debounce/polling retained |
+| Button | P0.02, Q3 inverter | Active high, external bias; GPIO SENSE interrupts with 20 ms debounce |
 | Pressure interrupt | P2.10 | Existing pressure driver polls; no interrupt enabled |
 | Flash HOLD / WP | P1.06 / P1.07 | GPIO hogs hold high before application startup |
 | RGB | R=P2.08, G=P2.06, B=P2.09 | Existing service indices 1/2/0 already correct |
@@ -107,8 +107,8 @@ below as each test completes.
    for the high-impedance divider. ADC error-path changes are compiled and normal
    readings work; dedicated fault injection remains pending.
 5. Test charger attachment/removal, low battery recovery and power transitions.
-   System OFF remains disabled until button/charger wake is verified. Do not
-   mistake soft-off for shipping current.
+   System OFF GPIO wake is physically verified; see BUTTON_WAKE_QUALIFICATION.md.
+   Current consumption and shipping-current qualification remain unmeasured.
 6. Run flash interruption, sensor failure and watchdog tests, then a long soak.
    Wrong-part detection is implemented; verify its fault behavior on a test setup.
 

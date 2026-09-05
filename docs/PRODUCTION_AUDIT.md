@@ -53,9 +53,10 @@ These require follow-up; they are not waived by the successful build or OTA test
   required a debugger restart; root cause remains unknown.
 - **Medium — timing/power:** periodic work schedules after measurement completion,
   so observed spacing includes measurement duration. Main wakes at 100 ms,
-  button at 50 ms, and soft-off remains polling. No measured current savings or
-  runtime claims are justified yet. System OFF/wake and crystal loading remain
-  unqualified.
+  with no measured current savings or runtime claims justified yet. The button
+  now uses GPIO SENSE interrupts; System OFF wake is verified on the test board
+  and enabled from 0.14.6 (see BUTTON_WAKE_QUALIFICATION.md). Current measurements
+  and crystal loading remain unqualified.
 - **Medium — history:** metadata has CRC and data-log operations use a mutex, but
   interrupted erase/program, metadata wrap, full capacity and fault recovery
   have not been comprehensively injected on hardware.

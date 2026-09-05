@@ -1,5 +1,9 @@
 # Button and System OFF qualification
 
+Current result: physical System OFF wake is verified on the single test board.
+Production configuration enables it starting with 0.14.6. The chronological
+notes below describe earlier candidates and disabled defaults at those stages.
+
 The production button is active-high P0.02. Candidate 0.14.4 replaces periodic
 button polling with GPIO SENSE edge interrupts and 20 ms debounce on a dedicated
 workqueue. Native tests compile the driver with GPIO/kernel stubs and sanitizers;
@@ -83,6 +87,35 @@ installed on the test board; this is not a completed wake qualification or a
 change to the default production configuration. The physical shutdown hold,
 short-press rejection, sustained charger-hold wake, and low-power reset-cause
 verification remain pending.
+
+## Physical System OFF result
+
+With debug adapters removed before activation, the user performed the shutdown
+hold and reported the board stayed dark. A short tap on the charger stayed dark;
+a six-second hold off the charger also stayed dark. A 30-second BLE observation
+during rejected-wake testing received no device advertisements. These checks do
+not measure current or independently prove every rejected transition.
+
+The subsequent charger hold brought the board back. The user held for a further
+six seconds after the light cue. Bluetooth confirmed the same active image; NUS
+returned persisted mode 1, a valid battery response, history-position response,
+and fresh CO2 of 2535 ppm. After reconnecting J-Link, buffered RTT showed:
+
+- `Reset cause: 0x00000080 LOWPOWER_WAKE` at 3:34.056.
+- `GPIO wake gesture accepted` at 3:39.070.
+- Valid CO2 at 3:39.860 and button release at 3:46.062, without another shutdown.
+
+This is evidence of actual GPIO wake from System OFF and suppression of a held
+wake button until release. The debugger was reattached only after Bluetooth
+operation resumed. The clock timestamp persists across this reset; relative
+hold timing is used, not an assumption that uptime starts at zero.
+
+Evidence: `system-off-wake-rtt.log`, `airspot-deep-wake-status.log`,
+`airspot-deep-wake-smoke.log`, and rejected-wake scan logs in the qualification
+backup directory. Current consumption, long endurance, low-battery cutoff and
+the wider production audit remain unqualified. A history-position reply alone
+does not qualify full history integrity. The user's final LED description was
+a green indication; exact visual fade shape has not been instrumented.
 
 The routine wired updater rejected this candidate before writing because its
 rebuilt MCUboot bytes differ from the installed bootloader. A complete device
