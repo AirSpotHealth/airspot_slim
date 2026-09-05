@@ -1,9 +1,16 @@
 cmake_minimum_required(VERSION 3.20.0)
 
-message(STATUS "Adding factory_test.c to sources from: ${CMAKE_CURRENT_LIST_FILE}")
+if(BOARD STREQUAL "nrf54l15dk/nrf54l15/cpuapp")
+  list(APPEND EXTRA_CONF_FILE "${CMAKE_CURRENT_SOURCE_DIR}/prj_rev3a.conf")
+endif()
 
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(airspot_slim)
+
+if(CONFIG_SOC_NRF54L15_CPUAPP AND
+   (CONFIG_BOOTLOADER_MCUBOOT OR NOT CONFIG_USE_DT_CODE_PARTITION))
+  message(FATAL_ERROR "Rev3A requires the monolithic devicetree partition layout; MCUboot is not validated")
+endif()
 
 # =============================================================================
 # Main Application

@@ -40,10 +40,14 @@
 
 LOG_MODULE_REGISTER(main, CONFIG_AIRSPOT_LOG_LEVEL);
 
-/* Flash control pins - must be configured before SPI NOR driver init */
-#define FLASH_WP_PIN                                                           \
-  13 /* P1.13 - Write Protect (active low, HIGH = not protected) */
-#define FLASH_HOLD_PIN 11 /* P1.11 - Hold (active low, HIGH = not held) */
+/* Board GPIO hogs initialize flash control pins before application startup.
+ * Do not duplicate these pins here: P1.13 is Qi EN2 on Rev3A.
+ */
+BUILD_ASSERT(IS_ENABLED(CONFIG_GPIO_HOGS), "Flash WP/HOLD require GPIO hogs");
+BUILD_ASSERT(DT_NODE_HAS_PROP(DT_NODELABEL(flash_wp), output_high),
+             "Flash WP must be high before SPI access");
+BUILD_ASSERT(DT_NODE_HAS_PROP(DT_NODELABEL(flash_hold), output_high),
+             "Flash HOLD must be high before SPI access");
 
 /* Measurement interval (milliseconds) */
 #define MEASUREMENT_INTERVAL_MS 5000
@@ -212,22 +216,6 @@ static void enter_low_battery_lockout(bool teardown) {
     k_msleep(1000);
   }
 }
-
-/* Early initialization - runs before device drivers (PRE_KERNEL_1) */
-static int flash_pins_early_init(void) {
-  const struct device *gpio1 = DEVICE_DT_GET(DT_NODELABEL(gpio1));
-  if (!device_is_ready(gpio1)) {
-    return 0;
-  }
-
-  /* Configure WP and HOLD pins HIGH */
-  gpio_pin_configure(gpio1, FLASH_WP_PIN, GPIO_OUTPUT_HIGH);
-  gpio_pin_configure(gpio1, FLASH_HOLD_PIN, GPIO_OUTPUT_HIGH);
-
-  return 0;
-}
-
-SYS_INIT(flash_pins_early_init, PRE_KERNEL_1, 0);
 
 /* Timer callbacks */
 static void time_timer_handler(struct k_timer *timer) {
@@ -655,6 +643,7 @@ static void boot_early_led_pulse(void) {
 }
 
 static void boot_wait_for_console(void) {
+#if defined(CONFIG_UART_CONSOLE)
   const struct device *console = DEVICE_DT_GET(DT_CHOSEN(zephyr_console));
 
   for (int i = 0; i < 100; i++) {
@@ -663,6 +652,7 @@ static void boot_wait_for_console(void) {
     }
     k_msleep(10);
   }
+#endif
 }
 
 int main(void) {
@@ -704,7 +694,11 @@ int main(void) {
   printk("\n\n");
   printk("========================================\n");
   printk("AirSpot Slim Firmware v%s\n", AIRSPOT_FIRMWARE_VERSION_STRING);
+#if defined(CONFIG_UART_CONSOLE)
   printk("Logs: UART P1.02 TX @ 115200 (airspot logs uart)\n");
+#elif defined(CONFIG_RTT_CONSOLE)
+  printk("Logs: SEGGER RTT over SWD\n");
+#endif
   printk("========================================\n");
 
   LOG_INF("========================================");
@@ -728,13 +722,6 @@ int main(void) {
               (reset_cause & RESET_LOW_POWER_WAKE) ? " LOWPOWER_WAKE" : "");
       hwinfo_clear_reset_cause();
     }
-  }
-
-  /* Ensure flash control pins are HIGH */
-  const struct device *gpio1 = DEVICE_DT_GET(DT_NODELABEL(gpio1));
-  if (device_is_ready(gpio1)) {
-    gpio_pin_configure(gpio1, FLASH_WP_PIN, GPIO_OUTPUT_HIGH);
-    gpio_pin_configure(gpio1, FLASH_HOLD_PIN, GPIO_OUTPUT_HIGH);
   }
 
   /*

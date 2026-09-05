@@ -5,12 +5,9 @@
  *
  * Button driver (polling only).
  *
- * The button is on P2.10. On the nRF54L05/15 that pin is in gpio2, which has no
- * GPIOTE instance (only gpio0->gpiote30 and gpio1->gpiote20 are wired), so GPIO
- * edge interrupts are physically unavailable on this pin; P2.10 is also shared
- * with nRESET. The driver therefore polls at 20 Hz with firmware debounce. A
- * future board revision is expected to move the button to an interrupt-capable
- * P0/P1 pin, at which point an interrupt path can be reintroduced.
+ * Legacy hardware uses P2.10 without GPIOTE; Rev3A uses P0.02. Retain 20 Hz
+ * polling and the existing debounce/gesture behavior for both boards during
+ * bring-up. Interrupt-driven input and System OFF wake need hardware validation.
  */
 
 #include <errno.h>
@@ -190,7 +187,8 @@ int button_driver_init(void) {
 
   initialized = true;
   /* Polling starts once the callback is registered (see register_callback). */
-  LOG_INF("Button driver initialized (polling on P2.10)");
+  LOG_INF("Button driver initialized (polling %s pin %u)",
+          button.port->name, button.pin);
   return 0;
 }
 
