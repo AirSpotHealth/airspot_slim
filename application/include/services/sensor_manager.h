@@ -63,6 +63,12 @@ int sensor_manager_init(void);
 typedef struct { uint8_t stage; int16_t error; uint16_t status; } sensor_asc_diagnostic_t;
 void sensor_manager_get_asc_diagnostic(sensor_asc_diagnostic_t *diagnostic);
 
+/* Run the sensor's non-calibrating self-test, restoring its measurement mode.
+ * Zero return means command and restoration succeeded; inspect result for faults.
+ * 0x0000 and 0x0010 are passes (external SHT40 is on the host bus).
+ * No settings or sensor calibration history are written. */
+int sensor_manager_self_test(uint16_t *result);
+
 /**
  * @brief Start periodic measurements
  *

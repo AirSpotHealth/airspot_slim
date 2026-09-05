@@ -391,6 +391,20 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len)
     break;
   }
 
+  case CMD_SENSOR_SELF_TEST:
+  {
+    /* Schema 1: command errno (i16 BE), self-test flags (u16 BE).
+     * Flags are meaningful only when errno is zero; FFFF means no result. */
+    uint16_t result = UINT16_MAX;
+    uint16_t error = (uint16_t)sensor_manager_self_test(&result);
+    uint8_t tx_frame[10] = {CMD_FIRST_BYTE, CMD_SECOND_BYTE,
+      CMD_SENSOR_SELF_TEST, 5, 1, (uint8_t)(error >> 8), (uint8_t)error,
+      (uint8_t)(result >> 8), (uint8_t)result, 0};
+    set_frame_checksum(tx_frame, sizeof(tx_frame));
+    send_frame(tx_frame, sizeof(tx_frame));
+    break;
+  }
+
   case CMD_GET_SENSOR_DETAILS:
     /* Return sensor details - Slim uses STCC4, not SCD4x */
     {

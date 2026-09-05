@@ -579,6 +579,6 @@ int stcc4_perform_self_test(uint16_t *result) {
     *result = word;
   }
   LOG_INF("STCC4 self-test result: 0x%04x (%s)", word,
-          word == 0 ? "PASS" : "FAULT");
+          (word == 0 || word == 0x0010) ? "PASS" : "FAULT");
   return 0;
 }

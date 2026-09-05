@@ -80,6 +80,37 @@ void sensor_manager_get_asc_diagnostic(sensor_asc_diagnostic_t *diagnostic)
   *diagnostic = asc_diagnostic;
   k_mutex_unlock(&meas_mutex);
 }
+
+int sensor_manager_self_test(uint16_t *result)
+{
+  if (!result) return -EINVAL;
+  *result = UINT16_MAX;
+  int ret = software_asc_begin_manual();
+  if (ret) return ret;
+  k_mutex_lock(&meas_mutex, K_FOREVER);
+  if (!initialized) {
+    ret = -ENODEV;
+  } else {
+    bool continuous = !use_single_shot_mode;
+    ret = stcc4_stop();
+    if (!ret) {
+      ret = stcc4_perform_self_test(result);
+      /* Self-test neither resets the sensor nor changes its ASC policy. */
+      int restore = continuous ? stcc4_start_continuous() : 0;
+      if (restore) {
+        ret = restore;
+        /* Reject measurements until explicit sensor recovery succeeds. */
+        initialized = false;
+      }
+    }
+    k_mutex_lock(&data_mutex, K_FOREVER);
+    latest_data.valid = false;
+    k_mutex_unlock(&data_mutex);
+  }
+  k_mutex_unlock(&meas_mutex);
+  software_asc_end_manual();
+  return ret;
+}
 static int pause_stcc4_asc(void)
 {
   asc_diagnostic = (sensor_asc_diagnostic_t){.stage = 1};

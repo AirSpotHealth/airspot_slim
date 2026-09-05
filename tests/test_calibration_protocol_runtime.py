@@ -20,10 +20,12 @@ class CalibrationProtocolTests(unittest.TestCase):
 #include <services/sensor_manager.h>
 #define LOG_INF(...)
 #define LOG_WRN(...)
+static int self_test_error;static uint16_t self_test_word;
 static int save_error, reset_error, measure_error, enabled, mode_commands, state_reads, duration;
 static uint8_t reply[16];static uint16_t reply_len;
 void sensor_manager_get_asc_diagnostic(sensor_asc_diagnostic_t *d) {*d=(sensor_asc_diagnostic_t){4,-13,0x0080};}
 static int software_asc_set_enabled(uint8_t e) {if(!save_error)enabled=e;return save_error;}
+int sensor_manager_self_test(uint16_t *r) {*r=self_test_word;return self_test_error;}
 int sensor_manager_reset_co2_sensor(void) {return reset_error;}
 int sensor_manager_measure_now(void) {return measure_error;}
 static void protocol_send_device_state(void) {state_reads++;}
@@ -37,6 +39,11 @@ static void handle(const uint8_t *frame,uint16_t len) {switch(frame[2]) {
 }}
 int main(void) {
   uint8_t f[7]={255,170,CMD_SET_SELF_CALIB,1,1,0,0};
+  f[2]=CMD_SENSOR_SELF_TEST;self_test_word=0x10;handle(f,6);
+  assert(reply_len==10 && reply[3]==5 && reply[4]==1);
+  assert(reply[5]==0 && reply[6]==0 && reply[7]==0 && reply[8]==0x10);
+  self_test_error=-5;self_test_word=0xffff;handle(f,6);
+  assert(reply[5]==255 && reply[6]==251 && reply[7]==255 && reply[8]==255);
   f[2]=CMD_GET_ASC_DIAGNOSTIC;handle(f,6);
   assert(reply_len==11 && reply[3]==6 && reply[4]==1 && reply[5]==4);
   assert(reply[6]==255 && reply[7]==243 && reply[8]==0 && reply[9]==0x80);

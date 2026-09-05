@@ -34,7 +34,8 @@ struct k_work {int unused;};
 struct k_work_delayable {int unused;};
 struct k_work_sync {int unused;};
 static int pause_calls, resume_calls, reset_calls, restart_calls, pause_error, read_error, reset_error, save_error;
-static int ambient_error, sensor_restart_notifications;
+static int ambient_error, sensor_restart_notifications, self_test_error, start_error, stop_error;
+static uint16_t self_test_word;
 static int64_t now=1;
 static bool internal_paused, manual, callback_valid;
 static uint8_t auto_flag, power=2;
@@ -82,8 +83,10 @@ int stcc4_set_ambient(float t,float h) {return 0;}
 int stcc4_set_pressure(uint16_t p) {return 0;}
 uint16_t stcc4_get_co2(void) {return 777;}
 int stcc4_enter_sleep_mode(void) {return 0;}
-int stcc4_stop(void) {return 0;}
-int stcc4_start_continuous(void) {return 0;}
+int stcc4_stop(void) {return stop_error;}
+int stcc4_start_continuous(void) {return start_error;}
+extern int meas_mutex;
+int stcc4_perform_self_test(uint16_t *r) {assert(meas_mutex==1 && manual);*r=self_test_word;return self_test_error;}
 int stcc4_perform_forced_recalibration(uint16_t t,int16_t *a) {assert(false);return 0;}
 '''
         tests=r'''
@@ -125,6 +128,22 @@ int main(void) {
   pause_error=0;save_error=-EIO;
   assert(sensor_manager_reset_co2_sensor()==-EIO && correction==100 && !manual);
   save_error=0;assert(sensor_manager_reset_co2_sensor()==0 && correction==0);
+  uint16_t result;
+  correction=123;use_single_shot_mode=false;
+  for(self_test_word=0;self_test_word<=0x10;self_test_word+=0x10) {
+    assert(sensor_manager_self_test(&result)==0 && result==self_test_word);
+    assert(internal_paused && correction==123 && !manual && !use_single_shot_mode);
+  }
+  self_test_error=-EIO;assert(sensor_manager_self_test(&result)==-EIO && !manual);
+  self_test_error=0;stop_error=-EIO;
+  assert(sensor_manager_self_test(&result)==-EIO && result==UINT16_MAX && !manual);
+  stop_error=0;manual=true;assert(sensor_manager_self_test(&result)==-EBUSY);manual=false;
+  start_error=-EIO;use_single_shot_mode=true;
+  assert(sensor_manager_self_test(&result)==0 && initialized && use_single_shot_mode);
+  use_single_shot_mode=false;assert(sensor_manager_self_test(&result)==-EIO && !initialized);
+  assert(sensor_manager_measure_now()==-ENODEV && correction==123);
+  assert(sensor_manager_self_test(&result)==-ENODEV && result==UINT16_MAX && !manual);
+  assert(sensor_manager_self_test(NULL)==-EINVAL);
   assert(meas_mutex==0 && data_mutex==0 && resume_calls==0);
 }
 '''
