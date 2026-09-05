@@ -87,3 +87,31 @@ reported temperature rose to 28.14 C while the new Slim ended at 25.34 C.
 Do not label this a matched battery-only or thermally stable comparison. A
 follow-up requires both devices off chargers and untouched in matching enclosure
 conditions. No calibration or firmware settings changed during this follow-up.
+
+## Enclosed-box follow-up after user-reported >20 minutes
+
+Read-only BLE capture collected 13 readings per device over roughly one minute:
+
+| Device | Mean CO2 | CO2 range | Temperature | RH | Battery | Charging |
+| --- | --- | --- | --- | --- | --- | --- |
+| New Slim 81A9DC | 2096.9 ppm | 2087–2108 | 24.50–24.54 C | 48.00–48.07% | 66% | No |
+| Older Slim C58CC9 | 153.7 ppm | 150–160 | 24.48–24.52 C | 47.55–47.62% | 71% | No |
+| Screen AF94D2 | 645.7 ppm | 643–648 | Not read | Not read | 92% | No |
+
+Both Slims retained firmware 0.16.2, zero correction, software ASC off,
+Flight Mode off, high sampling mode and ASC-paused diagnostic status 0084.
+No measurement resets, settings writes, self-tests or calibration commands were
+issued during this capture. All BLE connections were closed afterward.
+
+The discrepancy persists with matching reported temperature, similar humidity,
+and both Slims off chargers. Battery percentage, programmer attachment and the
+earlier charging-temperature difference are not sufficient explanations.
+This does not measure sensor-rail ripple or the temperature gradient between
+SHT40 and STCC4, and does not distinguish sensor-internal baseline/calibration
+state from a physical sensor/board integration issue. Neither the prior self-test
+passes nor paused-ASC status establish accuracy. Screen is a comparison device,
+not a certified reference. No calibration adjustment is justified from this
+single test environment alone.
+
+Evidence: `box-settled.jsonl` and `box-settled-summary.json` in the investigation
+backup directory.
