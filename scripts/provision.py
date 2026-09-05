@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Install the checked bootloader/application, preserving the device's NVS.
 
-Only the known bring-up image, this bootloader, or blank devices are accepted.
+Known factory/bring-up images, this bootloader, and blank devices are accepted.
 Every write is preceded by a full RRAM snapshot and followed by readback.
 """
 import argparse
@@ -22,6 +22,10 @@ SETTINGS_SIZE = 0x9000
 # Exact image previously installed during the board bring-up, before MCUboot.
 BRINGUP_SIZE = 245172
 BRINGUP_SHA256 = "6a4423e55f30123c9ad8258429b2476dbf60cdbefec0f8282d26142f76cbd884"
+# Factory image captured before Rev3A migration, and matched on a new board.
+# Hash the entire main-processor region, including its erased settings space;
+# accepting this does not infer an NVS location from an arbitrary application.
+FACTORY_MAIN_SHA256 = "bce98bb80f25c7b5abaa70a1e31ddcf7c744f50d58070a8b26f33fc649e84bb8"
 
 
 def jlink(commands, serial, directory):
@@ -41,9 +45,10 @@ def prepare_image(before, boot, app, update):
     provisioned = before[:len(boot)] == boot
     blank = before[:APP_MEMORY_END] == b"\xff" * APP_MEMORY_END
     known_bringup = hashlib.sha256(before[:BRINGUP_SIZE]).hexdigest() == BRINGUP_SHA256
-    require(provisioned or (not update and (blank or known_bringup)),
+    known_factory = hashlib.sha256(before[:APP_MEMORY_END]).hexdigest() == FACTORY_MAIN_SHA256
+    require(provisioned or (not update and (blank or known_bringup or known_factory)),
             "Unknown installed firmware/layout; refusing to overwrite or guess settings location")
-    source = SETTINGS_START if provisioned or blank else 0x74000
+    source = SETTINGS_START if provisioned or blank or known_factory else 0x74000
     settings = before[source:source + SETTINGS_SIZE]
     # Explicitly clear old swap state and staged images. Preserve NVS and the
     # auxiliary processor's memory (outside the image written below).
@@ -101,4 +106,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except (ValueError, OSError, subprocess.TimeoutExpired) as error:
+        raise SystemExit(f"Flash stopped: {error}") from None

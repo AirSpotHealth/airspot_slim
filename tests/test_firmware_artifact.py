@@ -88,6 +88,19 @@ class FirmwareArtifactTests(unittest.TestCase):
 
 
 class ProvisionTests(unittest.TestCase):
+    def test_known_factory_image_and_modified_settings(self):
+        from unittest.mock import patch
+        before = bytearray(b'\xff' * provision.RRAM_SIZE)
+        before[:7] = b'factory'
+        digest = hashlib.sha256(before[:provision.APP_MEMORY_END]).hexdigest()
+        with patch.object(provision, 'FACTORY_MAIN_SHA256', digest):
+            image, source = provision.prepare_image(bytes(before), b'boot', b'app', False)
+            self.assertEqual(source, provision.SETTINGS_START)
+            self.assertEqual(image[provision.SETTINGS_START:], b'\xff' * provision.SETTINGS_SIZE)
+            before[provision.SETTINGS_START] = 0
+            with self.assertRaisesRegex(ValueError, 'Unknown installed'):
+                provision.prepare_image(bytes(before), b'boot', b'app', False)
+
     def test_preserve_settings_and_clear_pending_images(self):
         boot, app = b'bootloader', b'signed app'
         before = bytearray(b'\xff' * provision.RRAM_SIZE)

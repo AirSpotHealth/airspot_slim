@@ -21,11 +21,13 @@ has 1,428 KiB NVM and 188 KiB RAM. External SPI flash remains sensor history sto
 ## Initial wired installation
 
 1. Connect J-Link and set `AIRSPOT_JLINK_SERIAL` to its serial number.
-2. Run `airspot build`, then `airspot provision`.
+2. Run `airspot build`, then `airspot flash` (`airspot provision` is also accepted).
 3. Open `airspot logs rtt` and check startup, live readings and confirmation.
 
-Provisioning accepts a blank device, the exact known bring-up image, or the
-current production bootloader. It backs up all 1,524 KiB RRAM under the ignored
+Flashing accepts a blank device, the exact known bring-up image, the archived
+pre-Rev3A factory image with erased settings, or the current production bootloader.
+The factory image is identified by a hash of the entire main-processor region;
+changed or unknown legacy images are refused rather than guessing their settings. It backs up all 1,524 KiB RRAM under the ignored
 `local_backups/` directory and verifies the MCU identity. For the known bring-up
 image, it copies the 36 KiB settings region from `0x74000` to `0x15C000`. It writes
 the bootloader, signed primary image and preserved settings, clears stale update

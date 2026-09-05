@@ -35,9 +35,9 @@ case "$command" in
     check) "$python" "$validator" verify "$build" ;;
     flash)
         "$python" "$validator" verify "$build"
-        # Only provisioned devices may use the routine wired update path.
-        # Initial installation uses provision.py to migrate the existing NVS.
-        "$python" "$script_dir/provision.py" "$build" --update
+        # One command handles checked updates and recognized first installs.
+        # provision.py backs up the device and preserves/migrates known NVS.
+        "$python" "$script_dir/provision.py" "$build"
         ;;
     provision)
         "$python" "$validator" verify "$build"
@@ -62,7 +62,7 @@ case "$command" in
     help|--help|-h)
         echo "AirSpot Slim: airspot {build|check|provision|flash|memory|clean} [--clean]"
         echo "Logs: airspot logs rtt. All builds include signed Bluetooth OTA and RTT."
-        echo "First wired install: provision (backs up and migrates settings)."
+        echo "Wired install/update: flash (backs up and preserves known settings); provision is also accepted."
         echo "OTA file: application/build_production/application/zephyr/airspot_slim.signed.bin"
         ;;
     *) echo "Unknown command: $command" >&2; exit 1 ;;

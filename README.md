@@ -12,11 +12,11 @@ source scripts/airspot
 export AIRSPOT_JLINK_SERIAL=603003276  # Set to your board's probe.
 airspot build
 airspot check
-airspot provision    # First installation; backs up memory and migrates settings.
+airspot flash    # First installation; backs up memory and migrates settings.
 airspot logs rtt
 ```
 
-After provisioning, use `airspot flash` for a checked wired reinstall, or upload
+For subsequent wired updates, use `airspot flash` for a checked wired reinstall, or upload
 `application/build_production/airspot_slim_dfu.zip` through the mobile app's Slim
 updater. The raw OTA file is
 `application/build_production/application/zephyr/airspot_slim.signed.bin`.
