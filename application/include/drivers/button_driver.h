@@ -8,6 +8,7 @@
 #define BUTTON_DRIVER_H
 
 #include <zephyr/types.h>
+#include <zephyr/kernel.h>
 #include <stdbool.h>
 
 #ifdef __cplusplus
@@ -56,18 +57,14 @@ extern "C"
 	 */
 	int button_driver_get_state(bool *pressed);
 
-	/**
-	 * @brief Read the button level live, bypassing the polled/debounced cache.
-	 *
-	 * Performs a fresh GPIO read instead of returning the last polled state.
-	 * Use when the caller can't wait for the 20 Hz poll to refresh — e.g. a
-	 * blocking animation on a thread that outranks the button workqueue, which
-	 * would otherwise see a stale cached state.
-	 *
-	 * @param pressed Pointer to store state (true = pressed, false = released)
-	 * @return 0 on success, negative error code on failure
-	 */
+	/** Read the GPIO level directly, bypassing the debounced cached state. */
 	int button_driver_read_now(bool *pressed);
+
+	/** Sleep until an interrupt edge, or timeout (main-thread power transition). */
+	int button_driver_wait_for_change(k_timeout_t timeout);
+
+	/** Disable event delivery and drain work before arming System OFF wake. */
+	int button_driver_prepare_wakeup(void);
 
 #ifdef __cplusplus
 }

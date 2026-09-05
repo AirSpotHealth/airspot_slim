@@ -230,3 +230,9 @@
 
 
 /* Internal MCUboot slots and NVS use the Nordic nRF54L15 partition map. */
+
+/* Use low-power PORT/SENSE edge detection for the production button. */
+&gpio0 {
+    sense-edge-mask = <0x04>;
+};
+&gpiote30 { status = "okay"; };

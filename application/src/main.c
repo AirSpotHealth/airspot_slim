@@ -16,6 +16,8 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/printk.h>
 #include <zephyr/sys/reboot.h>
+#include <zephyr/sys/poweroff.h>
+#include <zephyr/dfu/mcuboot.h>
 
 /* AirSpot includes */
 #include <airspot/version.h>
@@ -258,10 +260,8 @@ static void show_device_status(void) {
                             ble_service_is_connected());
 }
 
-/* Soft power-off state. System OFF wake is pending physical qualification.
- * "off" means: BLE, sensors and timers torn down, LED dark, only the button
- * poll and Qi detection alive. Entered/left via a 5 s button hold while on
- * the Qi charger; leaving is a cold reboot for a clean full start. */
+/* Power-off gesture state. With System OFF enabled, teardown ends in GPIO
+ * wake; the fallback keeps interrupt-driven button/Qi input available. */
 static volatile bool soft_off_requested = false;
 static volatile bool soft_off_active = false;
 static volatile bool soft_on_requested = false;
@@ -389,7 +389,7 @@ static void button_event_handler(button_event_t event) {
     return;
   }
 
-  /* Soft-off: ignore everything except the power-on gesture (hold 5 s while on
+  /* Software fallback: ignore everything except the power-on gesture (hold 5 s while on
    * the Qi charger). Track the press/release so the soft-off loop can fade the
    * light in over the hold; the loop performs the actual reboot. LONG_PRESS is a
    * fallback that still honors a completed hold if the loop's fade didn't run
@@ -452,8 +452,7 @@ static void button_event_handler(button_event_t event) {
     tap_count = 0;
     /* Hold 5 s while on the Qi charger → soft power off (charger requirement
      * prevents accidental pocket activation). Off the charger it stays a
-     * no-op: System OFF is unavailable on this hardware (button on P2.10 has
-     * no SENSE wake) and the charger gate is what the UX spec asks for. */
+     * no-op: the charger gate is part of the existing gesture contract. */
     if (qi_charger_is_charging()) {
       LOG_INF("Power OFF gesture (5s hold on charger)");
       soft_off_requested = true;
@@ -536,6 +535,70 @@ static bool power_on_hold_active(void) {
   return pressed && qi_charger_is_charging();
 }
 
+/* Called only from main, after shutdown, or on a rejected System OFF wake. */
+static void enter_system_off(bool peripherals_started)
+{
+  const struct gpio_dt_spec wake_button = GPIO_DT_SPEC_GET(DT_ALIAS(sw0), gpios);
+  const struct gpio_dt_spec qi = GPIO_DT_SPEC_GET(DT_NODELABEL(qi_chg_status), gpios);
+  bool pressed = true;
+  LOG_INF("System OFF: waiting for button release before arming P0.02");
+  /* The off gesture ends while held. Sleeping immediately on an active SENSE
+   * would wake immediately; wait on edges and only wake periodically to feed WDT. */
+  for (;;) {
+    watchdog_feed();
+    int rc = button_driver_read_now(&pressed);
+    if (rc) { LOG_ERR("Cannot read wake pin: %d", rc); sys_reboot(SYS_REBOOT_COLD); }
+    if (!pressed) {
+      k_msleep(20); /* Require a released debounce window before arming. */
+      if (button_driver_read_now(&pressed) == 0 && !pressed) { break; }
+    }
+    button_driver_wait_for_change(K_SECONDS(1));
+  }
+  if (peripherals_started) {
+    int rc = spi_flash_power_down();
+    if (rc) { LOG_WRN("Flash sleep failed: %d", rc); }
+  }
+  led_driver_all_off();
+  int rc = gpio_pin_interrupt_configure_dt(&qi, GPIO_INT_DISABLE);
+  if (rc) { LOG_ERR("Cannot disable Qi interrupt: %d", rc); sys_reboot(SYS_REBOOT_COLD); }
+  rc = button_driver_prepare_wakeup();
+  if (rc) { LOG_ERR("Cannot prepare wake button: %d", rc); sys_reboot(SYS_REBOOT_COLD); }
+  LOG_INF("Entering System OFF; wake source=P0.02 active high");
+  /* No ISR may service/clear the asserted level between wake arming and OFF.
+   * A press in that final window must wake us, not be lost. */
+  unsigned int key = irq_lock();
+  rc = gpio_pin_interrupt_configure_dt(&wake_button, GPIO_INT_LEVEL_ACTIVE);
+  if (rc) {
+    irq_unlock(key);
+    LOG_ERR("Cannot arm System OFF wake: %d", rc);
+    sys_reboot(SYS_REBOOT_COLD);
+  }
+  sys_poweroff();
+}
+
+/* System OFF resumes through reset/MCUboot. Qualify the existing charger + hold
+ * gesture before starting BLE or sensors, so a tap cannot turn the product on. */
+static void validate_system_off_wake(uint32_t hold_start)
+{
+  soft_off_active = true;
+  LOG_INF("GPIO wake: validating charger and five-second button hold");
+  while (power_on_hold_active()) {
+    uint32_t elapsed = k_uptime_get_32() - hold_start;
+    if (elapsed >= POWER_ON_FADE_DELAY_MS) {
+      uint32_t remaining = elapsed < POWER_ON_HOLD_MS ? POWER_ON_HOLD_MS - elapsed : 0;
+      if (led_indicator_ramp(LED_COLOR_WHITE, 0, 100, remaining, power_on_hold_active)) {
+        LOG_INF("GPIO wake gesture accepted");
+        soft_off_active = false;
+        return;
+      }
+      break;
+    }
+    k_msleep(20); /* Only during an active wake gesture, never while off/idle. */
+  }
+  LOG_INF("GPIO wake gesture rejected; returning to System OFF");
+  enter_system_off(false);
+}
+
 static void enter_soft_off(void) {
   LOG_INF("Entering soft power-off");
   soft_off_active = true;
@@ -558,6 +621,10 @@ static void enter_soft_off(void) {
   ble_service_set_advertising_suppressed(true);
   if (ble_service_is_connected()) {
     ble_service_disconnect();
+  }
+
+  if (IS_ENABLED(CONFIG_AIRSPOT_POWER_OFF_ENABLED)) {
+    enter_system_off(true);
   }
 
   /* Park until the power-on gesture completes. While the button is held on the
@@ -666,8 +733,14 @@ int main(void) {
   int ret;
   bool startup_healthy = true;
   ota_service_init();
+  uint32_t wake_hold_start = k_uptime_get_32();
+  uint32_t initial_reset_cause = 0;
+  hwinfo_get_reset_cause(&initial_reset_cause);
+  bool waking_from_off = IS_ENABLED(CONFIG_AIRSPOT_POWER_OFF_ENABLED) &&
+                        (initial_reset_cause & RESET_LOW_POWER_WAKE) &&
+                        boot_is_img_confirmed();
 
-  boot_early_led_pulse();
+  if (!waking_from_off) { boot_early_led_pulse(); }
   boot_wait_for_console();
 
   /* Boot banner */
@@ -730,7 +803,7 @@ int main(void) {
     LOG_ERR("Button driver init failed: %d", ret);
   } else {
     LOG_INF("Button driver initialized");
-    button_driver_register_callback(button_event_handler);
+    /* Register gestures after the wake gate; a held wake button is baseline. */
   }
 
   /* Initialize Battery driver */
@@ -759,6 +832,11 @@ int main(void) {
   } else {
     LOG_INF("LED indicator service initialized");
   }
+
+  if (waking_from_off) {
+    validate_system_off_wake(wake_hold_start);
+  }
+  button_driver_register_callback(button_event_handler);
 
   /* Dedicated workqueue for the double-tap CO2 readout so its blocking ~600 ms
    * measurement never stalls the system workqueue (LED flash animation). */
@@ -983,7 +1061,8 @@ int main(void) {
 
     /* Soft power-off requested by the button gesture (5 s hold on charger):
      * runs in the main thread, does not return until the power-on reboot. */
-    if (soft_off_requested || power_manager_take_off_request()) {
+    if (boot_is_img_confirmed() &&
+        (soft_off_requested || power_manager_take_off_request())) {
       soft_off_requested = false;
       enter_soft_off();
     }
