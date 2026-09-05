@@ -184,3 +184,77 @@ and sensor-internal calibration history are separate reset domains; the existing
 matched settings and zero offsets make an indiscriminate MCU erase a poor first
 experiment. Preserve backups and a comparison device before any future reset of
 persistent state. Sensor factory reset/FRC remains outside the authorized tests.
+
+## User erase/reflash follow-up and Bluetooth recovery
+
+The user subsequently erased internal firmware/settings and reflashed both boards.
+The local provisioning record identifies a rebuild of 0.16.3 at git 0428bb50f036
+(image hash bfaae3e8020e7334c2aa178b0c42ca25daf8a73368292ded5d09bd2c8901a15f).
+This differs from the earlier packaged candidate's build hash; it is not evidence
+of a calibration change. Default mode 1 / 180-second sampling replaced the prior
+mode 3 setting after settings reset.
+
+Initially only Screen appeared in scans. Neither Slim was returned by macOS's
+connected-peripheral query for the NUS service. Direct connections using known
+CoreBluetooth peripheral objects timed out. The user confirmed phone disconnection,
+button-light responses and proximity to the Mac. J-Link RTT identified C58CC9,
+confirmed 0.16.3, successful sensor/ASC-pause startup and reported advertising.
+Fresh sensor logs continued. A live RAM snapshot showed advertising true,
+advertising suppression false, connection null, PWM inactive and CPU not halted.
+A non-erasing nrfutil reset restored observable advertisements and working BLE.
+The same non-erasing restart recovered BLE on 81A9DC. This is a recovery observation,
+not an established root cause for the advertising failure.
+
+Both devices subsequently returned identical settings packets, zero corrections,
+software ASC off, firmware 0.16.3 and ASC-paused status 0084. The user disconnected
+J-Link and returned both devices beside Screen, off chargers, for the comparison
+below. All diagnostic logger connections were stopped before that comparison.
+
+### Physical PWM experiment after erase/reflash
+
+Both devices ran their restored default single-shot mode (setting 1). The client
+requested fresh measurements approximately every 10.8 seconds without saving a
+mode change. It recorded 13 baseline samples, enabled PWM with one 300-second
+lease per device, recorded 31 samples across that lease and expiry, then recorded
+13 more samples. Screen was read approximately every 10 seconds throughout.
+No calibration, settings writes, sensor resets or self-tests occurred in this run.
+Both devices reported charging false throughout; battery readings were 70–71%
+for C58CC9 and 66–67% for 81A9DC. J-Link was disconnected by the user first.
+
+Values below are means of the final six readings in each phase. PWM uses only
+readings before 295 seconds into the lease, excluding samples after expiry.
+
+| Phase | Older Slim C58CC9 | New Slim 81A9DC | Screen | Slim-to-Slim gap |
+| --- | --- | --- | --- | --- |
+| Normal before | 469.7 ppm | 1876.5 ppm | 1000.5 ppm | 1406.8 ppm |
+| PWM, late in lease | 545.5 ppm | 1973.7 ppm | 1012.2 ppm | 1428.2 ppm |
+| Normal after expiry | 505.5 ppm | 1938.8 ppm | 1017.0 ppm | 1433.3 ppm |
+
+Final six-reading ranges were 501–510 ppm and 1935–1942 ppm, respectively.
+Final temperatures were 24.60–24.65 C and 24.58–24.65 C. PWM coincided with a small
+temperature rise and CO2 shifts on both devices, but did not close the large gap.
+This does not prove the supply meets the ripple specification: no oscilloscope
+measurement was taken. It does not establish that every power-related error is
+absent. It rejects this short regulator-mode intervention as a fix for the observed
+large separation under these conditions.
+
+Both devices acknowledged PWM with pin readback and a 300-second lease. Queries
+confirmed automatic expiry to inactive/zero remaining before any explicit off
+command. Final explicit off requests also succeeded. Full settings packets and
+correction packets matched the initial values; final ASC diagnostics were 0084
+with no error on both. No protocol/command errors occurred during the experiment.
+Thus MCU/settings erase and this supply-mode change did not resolve the disparity.
+
+Evidence: `pwm-post-erase.jsonl`, `pwm-post-erase-summary.json`, the paired
+`pwm_compare_post_erase.py` script, and the RTT/BLE recovery logs in
+`local_backups/slim-divergence-20260905/`.
+
+Remaining diagnostic: compare responses at a second CO2 level without changing
+calibration. A stable additive difference across levels would support a baseline
+error hypothesis, but would not by itself identify its physical origin. The
+[manufacturer testing guide](https://sensirion.com/media/documents/D0ABC18E/6A1D5183/CD_AN_STCC4_Testing-Guide_D1.pdf)
+requires initial operation/warm-up and reference calibration before formal sensor
+qualification; its FRC step was not performed because the authorized investigation
+preserves sensor calibration history. Screen remains a comparison device, not a
+certified reference in this experiment. Do not claim absolute accuracy or a
+confirmed manufacturing/calibration root cause from these observations alone.
