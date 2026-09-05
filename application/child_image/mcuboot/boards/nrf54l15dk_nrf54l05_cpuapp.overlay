@@ -1,4 +1,0 @@
-/*
- * MCUboot child image — no external SPI (OTA disabled).
- * External AT25XE161D is owned by the application only.
- */
