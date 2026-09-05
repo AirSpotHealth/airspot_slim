@@ -150,7 +150,12 @@ int main(void) {
   /* Continuous mode: 1 s compensation starts, one publication per 5 s.
    * I2C work costs 16 ms; scheduling must account for that execution time. */
   start_error=0;assert(sensor_manager_init()==0);
+  /* Exact boot order: start with the saved interval, then select hardware mode.
+   * The equal 5000 ms interval must not suppress 1 Hz scheduling. */
+  sensor_manager_start(5000);
+  assert(use_single_shot_mode && scheduled_delay==0);
   sensor_manager_set_power_mode(3);
+  assert(scheduled_delay==1000);
   assert(!use_single_shot_mode && measurement_interval_ms==5000);
   sensor_manager_start(5000);
   callbacks=ambient_writes=pressure_writes=0;

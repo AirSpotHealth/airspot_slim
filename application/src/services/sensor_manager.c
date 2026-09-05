@@ -631,7 +631,8 @@ void sensor_manager_set_power_mode(uint8_t power_mode)
   /* Serialize mode commands with periodic/manual measurements. */
   k_mutex_lock(&meas_mutex, K_FOREVER);
   /* Switch STCC4 mode if needed */
-  if (want_single_shot != use_single_shot_mode)
+  bool mode_changed = want_single_shot != use_single_shot_mode;
+  if (mode_changed)
   {
     if (want_single_shot)
     {
@@ -664,7 +665,7 @@ void sensor_manager_set_power_mode(uint8_t power_mode)
     }
   }
 
-  if (new_interval != measurement_interval_ms)
+  if (new_interval != measurement_interval_ms || mode_changed)
   {
     measurement_interval_ms = new_interval;
     next_report_ms = k_uptime_get() + new_interval;

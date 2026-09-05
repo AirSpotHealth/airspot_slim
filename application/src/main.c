@@ -1033,6 +1033,10 @@ int main(void) {
     }
   }
 
+  /* The interval alone does not select STCC4 continuous operation. Restore
+   * the saved hardware mode too, including when its interval is already 5 s. */
+  sensor_manager_set_power_mode(power_mode);
+
   /*
    * ========================================
    * Initialization Complete
