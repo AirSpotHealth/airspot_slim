@@ -1,301 +1,32 @@
-# AirSpot Slim Firmware
+# AirSpot Slim firmware
 
-**Rev3A migration:** the default `airspot` commands now target nRF54L15 Rev3A.
-See [Rev3A bring-up and validation](docs/board/REV3A_BRINGUP.md) for current
-build/flash instructions and outstanding hardware tests. The historical status
-claims and nRF54L05 instructions below do not qualify Rev3A for production.
+Production hardware: nRF54L15 AirSpot Slim, STCC4 CO₂, SHT40 temperature/humidity,
+LPS22HH pressure, AT25XE161D history storage and Qi charging.
+The hardware source of truth is the [board schematic](docs/datasheets/AH-013-0001-SCH%20CO2%20Monitor%20%28Standard%20Build%29%20PWA%20Schematics%20Rev3A.PDF).
 
-Firmware for the AirSpot Slim device based on nRF54L05 and STCC4 Slim hardware.
+Uses the pinned nRF Connect SDK workspace and one configuration: MCUboot,
+signed Bluetooth OTA, the existing AirSpot BLE protocol, and SEGGER RTT logs.
 
-## Overview
-
-This firmware is a migration from the nRF52832-based firmware to the new nRF54L05 platform using nRF Connect SDK with Zephyr RTOS.
-
-**Key Differences from Original Firmware:**
-
-- ✅ **MCU**: nRF54L05 (ARM Cortex-M33, dual-core)
-- ✅ **SDK**: nRF Connect SDK (Zephyr RTOS)
-- ✅ **Qi Charging**: Wireless charging support
-- ❌ **No Display**: LCD removed from hardware
-- ✅ **Same Features**: All other features maintained
-
-## Hardware
-
-- **MCU**: Nordic nRF54L05
-- **CO2 Sensor**: Sensirion SCD4x series
-- **Flash Memory**: ZB25D16 SPI flash
-- **Charging**: Qi wireless charging
-- **Debug**: JTAG via nRF54L15DK (0.5mm connector)
-
-## Software Requirements
-
-### Required Tools
-
-1. **nRF Connect SDK** v2.x or later
-   - Download from: [Nordic Developer Zone](https://www.nordicsemi.com/Software-and-tools/Software/nRF-Connect-SDK)
-   - Follow installation guide
-
-2. **VS Code** with Extensions
-   - nRF Connect for VS Code extension
-   - C/C++ extension
-   - CMake extension
-
-3. **West Tool**
-   - Included with nRF Connect SDK
-   - Used for building and managing the project
-
-4. **J-Link Software**
-   - Download from: [Segger J-Link](https://www.segger.com/downloads/jlink/)
-   - Required for programming and debugging
-
-### Optional Tools
-
-- **nRF Connect for Desktop** - For BLE debugging
-- **J-Link RTT Viewer** - For real-time logging
-
-## Project Structure
-
-```
-application/
-├── README.md                   # This file
-├── CMakeLists.txt              # Build configuration
-├── Kconfig                     # Kconfig options
-├── prj.conf                    # Zephyr configuration
-├── build.sh                    # Build script
-├── setup_env.sh                # Environment setup script
-│
-├── boards/                     # Board-specific files
-│   └── nrf54l15dk_nrf54l05_cpuapp.overlay
-│
-├── docs/                       # All documentation
-│   ├── README.md              # Documentation index
-│   ├── board/                 # Hardware documentation
-│   │   ├── PIN_ASSIGNMENTS.md
-│   │   ├── PIN_CONFIGURATION.md
-│   │   ├── SCHEMATIC_ANALYSIS.md
-│   │   └── SCHEMATIC_FINDINGS.md
-│   ├── firmware/              # Firmware documentation
-│   │   ├── BUILD_INSTRUCTIONS.md
-│   │   ├── CODE_ORGANIZATION.md
-│   │   ├── IMPLEMENTATION_PLAN.md
-│   │   └── QUICK_START.md
-│   └── datasheets/            # Schematics and datasheets
-│
-├── include/                    # Public headers
-│   ├── airspot/               # AirSpot-specific
-│   │   ├── board.h
-│   │   └── version.h
-│   ├── drivers/               # Driver interfaces
-│   │   ├── button_driver.h
-│   │   └── led_driver.h
-│   └── services/              # Service interfaces
-│       └── ble_service.h
-│
-└── src/                        # Source files
-    ├── main.c                  # Application entry
-    ├── drivers/                # Driver implementations
-    │   ├── button_driver.c
-    │   └── led_driver.c
-    └── services/               # Service implementations
-        └── ble_service.c
+```sh
+source scripts/airspot
+export AIRSPOT_JLINK_SERIAL=603003276  # Set to your board's probe.
+airspot build
+airspot check
+airspot provision    # First installation; backs up memory and migrates settings.
+airspot logs rtt
 ```
 
-### Code Organization
+After provisioning, use `airspot flash` for a checked wired reinstall, or upload
+`application/build_production/airspot_slim_dfu.zip` through the mobile app's Slim
+updater. The raw OTA file is
+`application/build_production/application/zephyr/airspot_slim.signed.bin`.
+Keep the same product signing key for subsequent builds; set `AIRSPOT_SIGNING_KEY`
+if it is stored outside the ignored `application/keys/` directory.
 
-**`include/` - Public Headers**
+- [Wireless updates, recovery and signing](docs/OTA.md)
+- [Board wiring and qualification](docs/board/PRODUCTION_BOARD.md)
 
-- `airspot/`: AirSpot-specific definitions (version, board)
-- `drivers/`: Driver interfaces (LED, button, etc.)
-- `services/`: Service interfaces (BLE, power management, etc.)
-
-**`src/` - Source Files**
-
-- `main.c`: Application entry point
-- `drivers/`: Driver implementations
-- `services/`: Service implementations
-
-**`boards/` - Board Configuration**
-
-- Device tree overlays for hardware configuration
-
-**`docs/` - Documentation**
-
-- `board/`: Hardware documentation (pin assignments, schematics)
-- `firmware/`: Firmware documentation (build, architecture, implementation)
-- `datasheets/`: Schematics and component datasheets
-
-See [docs/firmware/CODE_ORGANIZATION.md](./docs/firmware/CODE_ORGANIZATION.md) for detailed architecture and best practices.
-
-## Documentation
-
-- [docs/firmware/QUICK_START.md](./docs/firmware/QUICK_START.md)
-- [docs/firmware/BUILD_INSTRUCTIONS.md](./docs/firmware/BUILD_INSTRUCTIONS.md)
-- [docs/firmware/DEVELOPER_GUIDE.md](./docs/firmware/DEVELOPER_GUIDE.md)
-- [docs/firmware/VALIDATION_PLAN.md](./docs/firmware/VALIDATION_PLAN.md)
-- [docs/firmware/CODE_ORGANIZATION.md](./docs/firmware/CODE_ORGANIZATION.md)
-- [docs/firmware/SERVICES.md](./docs/firmware/SERVICES.md)
-- [docs/firmware/SENSORS.md](./docs/firmware/SENSORS.md)
-- [docs/firmware/BLE_PROTOCOL.md](./docs/firmware/BLE_PROTOCOL.md)
-
-## Getting Started
-
-### 1. Install nRF Connect SDK
-
-Follow the official installation guide:
-https://developer.nordicsemi.com/nRF_Connect_SDK/doc/latest/nrf/getting_started.html
-
-**Recommended**: Use VS Code with "nRF Connect for VS Code" extension for easiest setup.
-
-### 2. Build the Project
-
-#### Using Build Script (Recommended)
-
-```bash
-cd application
-
-# Source environment (sets ZEPHYR_BASE)
-source setup_env.sh
-
-# Build
-./build.sh
-
-# Build and flash
-./build.sh --flash
-
-# Clean build
-./build.sh --clean --flash
-```
-
-#### Using VS Code Extension
-
-1. Open VS Code in the `airspot_slim/` directory (workspace root)
-2. Use the nRF Connect extension to build and flash
-3. The extension is configured automatically
-
-#### Using West (from workspace root)
-
-```bash
-cd airspot_slim
-west build -b nrf54l15dk/nrf54l05/cpuapp application
-west flash
-```
-
-### 3. Testing
-
-- **LEDs**: Should blink on startup
-- **Button**: Press button, check serial logs
-- **BLE**: Device advertises as "AirSpot-XXXXXX"
-- **Serial Logs**: Production builds disable UART logs to save flash. For logs, rebuild with debug config:
-
-```bash
-cd application
-./build.sh --debug --flash
-# UART20 @ 115200 on the Slim debug connector (see board overlay)
-```
-
-### 4. Firmware updates (current policy)
-
-**BLE OTA is disabled** in firmware (no MCUmgr) and in the mobile app for Slim. Updates use **J-Link + merged.hex** only until OTA is re-enabled.
-
-```bash
-cd application/scripts
-./flash_recovery.sh   # latest merged.hex, or pass a specific .hex path
-```
-
-### 5. Device won't boot / no logs after a past OTA
-
-A bad OTA (truncated signed image) can leave MCUboot unable to start the app. Recover with J-Link (step 4), not the phone app.
-
-**Recover with J-Link** (nRF54L15 DK + 0.5mm cable):
-
-1. Flash a known-good **merged** hex (bootloader + application), e.g.  
-   `releases/v0.11.0/airspot_slim_v0.11.0_*_merged.hex`
-2. In nRF Connect Programmer or `nrfjprog --program merged.hex --chiperase --verify --reset`
-
-After recovery, use a mobile app build that includes the fixed `SlimDfuService` (full signed image, not header+body only).
-
-**Power on:** Slim does not wake from shipping/off on a single press — use **tap, then tap-and-hold ~3s** (power gesture), or place on the Qi charger.
-
-See [docs/firmware/BUILD_INSTRUCTIONS.md](./docs/firmware/BUILD_INSTRUCTIONS.md) for detailed instructions.
-
-## Features (Current Status)
-
-### ✅ All Core Features Implemented
-
-| Feature            | Status     | Notes                              |
-| ------------------ | ---------- | ---------------------------------- |
-| **BLE**            | ✅ Working | Advertising, connection, bonding   |
-| **NUS Service**    | ✅ Working | Nordic UART Service for app comms  |
-| **App Protocol**   | ✅ Working | All commands implemented           |
-| **MCUboot DFU**    | ✅ Working | OTA updates via nRF Device Manager |
-| **Button**         | ✅ Working | Tap, long-press, power gesture     |
-| **LEDs**           | ✅ Working | RGB patterns, CO2 level colors     |
-| **UART Logging**   | ✅ On      | 115200 on UART20 (P1.02 TX); use `prj_release.conf` to disable |
-| **I2C Bus**        | ✅ Working | 400kHz, 3 sensors                  |
-| **SPI Flash**      | ✅ Working | AT25XE161D, history storage        |
-| **SHT40**          | ✅ Working | Temperature & Humidity             |
-| **LPS22HH**        | ✅ Working | Pressure sensor                    |
-| **STCC4**          | ✅ Working | CO2 sensor with compensation       |
-| **Battery ADC**    | ✅ Working | ~98% accuracy                      |
-| **Qi Charger**     | ✅ Working | Charge detection & LED feedback    |
-| **Sensor Manager** | ✅ Working | Periodic measurements              |
-| **Data Logging**   | ✅ Working | CO2 history to flash               |
-| **User Settings**  | ✅ Working | NVS-backed persistence             |
-| **Power Manager**  | ✅ Working | System OFF, power gestures         |
-| **Factory Test**   | ✅ Working | Automated hardware tests           |
-| **LED Indicator**  | ✅ Working | Non-blocking pattern engine        |
-
-### 🔄 Next Steps
-
-- Production testing and validation
-- Power consumption optimization
-- Documentation refinement
-
-### ❌ Removed from Original
-
-- LCD display (hardware removed)
-- Display-related protocol commands
-- USB charging (replaced with Qi)
-
-## Development Status
-
-**Current Phase**: Phase 10 - Documentation & Production Ready
-
-All core features have been implemented and tested. The firmware is ready for production use.
-
-See [docs/firmware/IMPLEMENTATION_PLAN.md](./docs/firmware/IMPLEMENTATION_PLAN.md) for detailed migration plan.
-See [docs/firmware/SENSORS.md](./docs/firmware/SENSORS.md) for sensor driver documentation.
-
-## Documentation
-
-All documentation is organized in the `docs/` directory:
-
-| Topic                   | Document                                                                       |
-| ----------------------- | ------------------------------------------------------------------------------ |
-| **Getting Started**     | [docs/firmware/QUICK_START.md](./docs/firmware/QUICK_START.md)                 |
-| **Build Instructions**  | [docs/firmware/BUILD_INSTRUCTIONS.md](./docs/firmware/BUILD_INSTRUCTIONS.md)   |
-| **Services**            | [docs/firmware/SERVICES.md](./docs/firmware/SERVICES.md)                       |
-| **BLE Protocol**        | [docs/firmware/BLE_PROTOCOL.md](./docs/firmware/BLE_PROTOCOL.md)               |
-| **Sensor Drivers**      | [docs/firmware/SENSORS.md](./docs/firmware/SENSORS.md)                         |
-| **Architecture**        | [docs/firmware/CODE_ORGANIZATION.md](./docs/firmware/CODE_ORGANIZATION.md)     |
-| **Implementation Plan** | [docs/firmware/IMPLEMENTATION_PLAN.md](./docs/firmware/IMPLEMENTATION_PLAN.md) |
-| **Pin Assignments**     | [docs/board/PIN_ASSIGNMENTS.md](./docs/board/PIN_ASSIGNMENTS.md)               |
-| **Schematic**           | [docs/datasheets/](./docs/datasheets/)                                         |
-
-See [docs/README.md](./docs/README.md) for complete documentation index.
-
-## References
-
-- [nRF Connect SDK Documentation](https://developer.nordicsemi.com/nRF_Connect_SDK/doc/latest/)
-- [Zephyr RTOS Documentation](https://docs.zephyrproject.org/)
-- [nRF54L05 Product Page](https://www.nordicsemi.com/Products/nRF54L05)
-- [Original Firmware](../nRF5_SDK_17.1.0_ddde560/examples/ble_peripheral/ble_app_uart_minico2/)
-
-## License
-
-[Specify license]
-
----
-
-**Version**: 1.0.0 (Production Ready)  
-**Last Updated**: 2026-01-24
+Build success is not hardware qualification. The qualification record distinguishes
+observed behavior from checks still needing a phone, charger or extended testing.
+Historical release packages and older design notes describe earlier hardware and
+must not be used to program this product.

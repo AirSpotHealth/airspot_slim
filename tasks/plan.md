@@ -92,3 +92,12 @@ Verification: run existing validation plan plus Rev3A-specific matrix; long-dura
 - Product acceptance thresholds for current consumption and measurement accuracy, using existing specifications where available.
 
 Initial port and tooling changes build successfully for Rev3A debug/release/RTT, with eleven artifact regression tests passing. Actual legacy NVS is at 0x74000, not the unused YAML address 0x52000. New monolithic devicetree enforces app [0, 0x74000) and storage [0x74000, 0x7d000). Production readiness remains unproven. User confirmed the probe and UART are connected to Rev3A. Existing RRAM was backed up, programming independently verified, and RTT logs confirmed live readings, flash metadata recovery and BLE advertising. Hardware-discovered watchdog-scan and STCC4 timing faults were corrected; UART diagnosis, complete app/gesture checks and production qualification remain.
+
+## Authorized continuation: production target and Bluetooth OTA
+User requested Bluetooth DFU, RTT diagnostics and one production hardware target.
+1. Use shared board wiring and internal MCUboot slots; build signed images with an untracked private key. Verify generated bootloader and app configurations.
+2. Enable MCUmgr BLE image/reset services, startup health confirmation and watchdog rollback. Verify accepted/rejected images and startup.
+3. Replace revision-specific build names with production commands and validate signed artifacts before programming. Preserve NVS on initial migration.
+4. Exercise wireless upload, test boot, confirmation and recovery on the connected board where host Bluetooth permits. Record remaining physical/mobile qualification.
+
+OTA hardware checkpoint: valid signed trial confirmed after sensor startup. Deliberately failing 0.14.1 test firmware timed out at 120 seconds and MCUboot reverted to working 0.14.0 with readings/advertising. Settings migration/readback passed. GRTC/LFCLK handoff needed a bootloader-only wrapper and LTO disabled. Wireless transfer remains blocked by host Bluetooth powered off; asynchronous user request is pending.

@@ -21,3 +21,11 @@ See `plan.md` for dependencies, acceptance criteria and verification.
 - [ ] Task 6: Verify charging, power transitions and wake.
 - [ ] Task 7: Run compatibility matrix, fault tests and hardware soak.
 - [ ] Record release evidence and unresolved limitations.
+
+## Production OTA
+- [x] Build MCUboot and signed RTT application using shared production wiring
+- [x] Implement startup health confirmation and update protections
+- [x] Validate artifacts and preserve settings during wired migration
+- [x] Verify valid trial update and failed-startup rollback on hardware (staged over J-Link)
+- [ ] Exercise wireless upload: host Bluetooth reports POWERED_OFF; user asked to enable it
+- [x] Update production commands/docs and record qualification limits
