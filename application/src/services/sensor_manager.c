@@ -688,9 +688,12 @@ void sensor_manager_set_power_mode(uint8_t power_mode)
               new_interval, power_mode);
 
       /* Reschedule if was running, or start if switching from on-demand */
-      k_work_cancel_delayable(&sensor_work);
       running = true;
-      k_work_schedule(&sensor_work, K_MSEC(use_single_shot_mode ? measurement_interval_ms : 1000));
+      /* A worker may already be running and waiting for meas_mutex. Cancel +
+       * schedule can leave it CANCELLING, causing schedule() to do nothing.
+       * Reschedule updates its deadline without cancelling that running work. */
+      k_work_reschedule(&sensor_work,
+          K_MSEC(use_single_shot_mode ? measurement_interval_ms : 1000));
     }
   }
   k_mutex_unlock(&meas_mutex);

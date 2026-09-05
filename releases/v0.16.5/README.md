@@ -1,5 +1,7 @@
 # AirSpot Slim 0.16.5 — restore high-mode compensation on boot
 
+> WITHDRAWN: physical boot testing produced no periodic sensor reports and both devices automatically rolled back. Use 0.16.6; do not install this candidate. Its startup mode change exposed a cancel/schedule worker race.
+
 Includes 0.16.4's one-second temperature/humidity/pressure compensation and
 five-second CO2 reporting in High mode. Startup now applies the saved hardware
 measurement mode as well as its interval. Switching from single-shot to continuous

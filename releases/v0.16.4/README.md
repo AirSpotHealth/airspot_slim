@@ -1,5 +1,7 @@
 # AirSpot Slim 0.16.4 — one-second compensation in high mode
 
+> Superseded by 0.16.6: saved High mode did not activate continuous operation at boot without a BLE mode command.
+
 High / 5-second mode now sends fresh SHT40 temperature/humidity and LPS22HH
 pressure compensation to STCC4 every second while publishing sensor readings
 approximately every five seconds. Compensation-only ticks do not publish CO2,

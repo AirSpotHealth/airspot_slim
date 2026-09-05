@@ -34,6 +34,7 @@ struct k_work {int unused;};
 struct k_work_delayable {int unused;};
 struct k_work_sync {int unused;};
 static int pause_calls, resume_calls, reset_calls, restart_calls, pause_error, read_error, reset_error, save_error;
+static bool work_executing, work_cancelling;
 static int pressure_error, ambient_write_error, pressure_write_error, ambient_writes, pressure_writes, callbacks, scheduled_delay;
 static int ambient_error, sensor_restart_notifications, self_test_error, start_error, stop_error;
 static uint16_t self_test_word;
@@ -47,8 +48,11 @@ static void k_msleep(int ms) {now+=ms;}
 static uint32_t k_uptime_get_32(void) {return now;}
 static int64_t k_uptime_get(void) {return now;}
 static void k_work_init_delayable(struct k_work_delayable *w,void (*f)(struct k_work *)) {}
-static void k_work_schedule(struct k_work_delayable *w,int t) {scheduled_delay=t;}
-static void k_work_cancel_delayable(struct k_work_delayable *w) {}
+/* Match Zephyr work.c: schedule ignores a CANCELLING item; reschedule
+ * replaces a delayed deadline without asynchronous cancellation. */
+static void k_work_schedule(struct k_work_delayable *w,int t) {if(!work_cancelling)scheduled_delay=t;}
+static void k_work_reschedule(struct k_work_delayable *w,int t) {assert(!work_cancelling);scheduled_delay=t;}
+static void k_work_cancel_delayable(struct k_work_delayable *w) {if(work_executing)work_cancelling=true;scheduled_delay=-1;}
 static void k_work_cancel_delayable_sync(struct k_work_delayable *w,struct k_work_sync *s) {}
 void watchdog_feed(void) {}
 static int i2c_bus_init(void) {return 0;}
@@ -154,7 +158,11 @@ int main(void) {
    * The equal 5000 ms interval must not suppress 1 Hz scheduling. */
   sensor_manager_start(5000);
   assert(use_single_shot_mode && scheduled_delay==0);
+  /* Work has entered while main holds meas_mutex during the mode command. */
+  work_executing=true;
   sensor_manager_set_power_mode(3);
+  assert(!work_cancelling);
+  work_executing=false;
   assert(scheduled_delay==1000);
   assert(!use_single_shot_mode && measurement_interval_ms==5000);
   sensor_manager_start(5000);
