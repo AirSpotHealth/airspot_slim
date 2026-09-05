@@ -90,3 +90,9 @@ Fourteen automated checks cover real build artifacts, signature tampering, MCU i
 bootloader offsets, rollback configuration, key mismatch, writes outside slots,
 and preservation of settings during provisioning. Physical test results are
 recorded in the board qualification document.
+
+The production 0.14.0 to 0.14.1 wireless path was verified on the board using a
+macOS MCUmgr client: upload, test request, BLE reset, startup sensor validation,
+automatic confirmation and reconnect. The mobile app itself still needs an
+end-to-end update test. Allow at least 30 seconds for sensor conditioning after
+reboot; the observed image confirmation occurred at 27.4 seconds.

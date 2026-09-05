@@ -1,4 +1,4 @@
-# Rev3A migration checklist
+# Production board migration checklist
 
 See `plan.md` for dependencies, acceptance criteria and verification.
 
@@ -12,7 +12,7 @@ See `plan.md` for dependencies, acceptance criteria and verification.
 - [x] Task 2: Review schematic and implement Rev3A overlay; hardware checks pending.
 - [x] Task 3: Add board-specific build profiles, J-Link target and artifact checks.
 - [x] Task 4 (build): Verify actual partitions, linker boundary and complete HEX/BIN images.
-- [ ] Task 4 (hardware): Verify wired programming and settings persistence.
+- [x] Task 4 (hardware): Verify wired programming and settings persistence.
 - [x] Checkpoint: Program/verify Rev3A, capture RTT startup, confirm sensors/flash and BLE advertising.
 - [x] Fix blank-flash watchdog reset and STCC4 command delays found on hardware.
 - [x] Verify subsequent metadata recovery and live CO2 sample.
@@ -27,5 +27,6 @@ See `plan.md` for dependencies, acceptance criteria and verification.
 - [x] Implement startup health confirmation and update protections
 - [x] Validate artifacts and preserve settings during wired migration
 - [x] Verify valid trial update and failed-startup rollback on hardware (staged over J-Link)
-- [ ] Exercise wireless upload: host Bluetooth reports POWERED_OFF; user asked to enable it
+- [x] Exercise wireless upload, trial boot and confirmation: 0.14.0 to 0.14.1 passed over BLE
+- [ ] Qualify mobile updater, initial discovery/reconnect reliability and interrupted transfers
 - [x] Update production commands/docs and record qualification limits

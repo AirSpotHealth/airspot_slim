@@ -87,8 +87,8 @@ Verification: run existing validation plan plus Rev3A-specific matrix; long-dura
 
 ## Open hardware inputs
 
-- Availability of an assembled Rev3A board, programmer and serial logs for bring-up.
-- Confirmation that the assembled BOM matches the supplied standard-build schematic and whether any wires/rework exist.
+- Confirmed: assembled production board, J-Link 603003276 and RTT access.
+- Confirmed by user: board matches the standard-build schematic without wiring changes.
 - Product acceptance thresholds for current consumption and measurement accuracy, using existing specifications where available.
 
 Initial port and tooling changes build successfully for Rev3A debug/release/RTT, with eleven artifact regression tests passing. Actual legacy NVS is at 0x74000, not the unused YAML address 0x52000. New monolithic devicetree enforces app [0, 0x74000) and storage [0x74000, 0x7d000). Production readiness remains unproven. User confirmed the probe and UART are connected to Rev3A. Existing RRAM was backed up, programming independently verified, and RTT logs confirmed live readings, flash metadata recovery and BLE advertising. Hardware-discovered watchdog-scan and STCC4 timing faults were corrected; UART diagnosis, complete app/gesture checks and production qualification remain.
@@ -100,4 +100,4 @@ User requested Bluetooth DFU, RTT diagnostics and one production hardware target
 3. Replace revision-specific build names with production commands and validate signed artifacts before programming. Preserve NVS on initial migration.
 4. Exercise wireless upload, test boot, confirmation and recovery on the connected board where host Bluetooth permits. Record remaining physical/mobile qualification.
 
-OTA hardware checkpoint: valid signed trial confirmed after sensor startup. Deliberately failing 0.14.1 test firmware timed out at 120 seconds and MCUboot reverted to working 0.14.0 with readings/advertising. Settings migration/readback passed. GRTC/LFCLK handoff needed a bootloader-only wrapper and LTO disabled. Wireless transfer remains blocked by host Bluetooth powered off; asynchronous user request is pending.
+OTA hardware checkpoint: valid signed trial confirmed after sensor startup. Deliberately failing 0.14.1 test firmware timed out at 120 seconds and MCUboot reverted to working 0.14.0 with readings/advertising. Settings migration/readback passed. GRTC/LFCLK handoff needed a bootloader-only wrapper and LTO disabled. Wireless upload passed: 263,859-byte signed production 0.14.1 transferred through BLE, inactive permanent confirmation was rejected, test boot/reset succeeded, sensor checks confirmed the image and BLE reported it active/confirmed. Evidence: `local_backups/wireless-ota-20260905/`. Initial discovery required one debugger restart; reconnect/soak and the actual mobile updater remain to be qualified.

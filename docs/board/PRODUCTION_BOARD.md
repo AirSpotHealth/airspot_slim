@@ -79,7 +79,21 @@ below as each test completes.
   rebooted. MCUboot automatically restored 0.14.0; live sensor readings and BLE
   advertising resumed. The test image is not a release artifact.
 - Final wired reinstall: readback verified, settings preserved and secondary slot cleared.
-- Wireless upload: pending; the Mac reports Bluetooth powered off.
+- Wireless update passed on 5 September 2026 using macOS Bleak/MCUmgr:
+  263,859 bytes uploaded over BLE from production 0.14.0 to signed 0.14.1.
+  The device rejected permanent confirmation of the inactive image (`rc=1`),
+  accepted a test request, and rebooted through the BLE management command.
+  RTT recorded a valid sample (2,464 ppm CO2, 26.7 C, 38% RH, 1,001 hPa,
+  battery 66%) followed by automatic confirmation at 27.4 seconds after boot.
+  A fresh BLE connection reported 0.14.1 active and confirmed, with 0.14.0 in
+  the secondary slot. Image hash:
+  `2f53fb3b2ada0e180bc20aa225d460de69159df55838e1b5bddbc1303a2ef7b4`.
+  Local evidence and the tested package: `local_backups/wireless-ota-20260905/`.
+- The initial Mac scan did not find the board despite its software advertising
+  flag being set and no active connection. One debugger restart restored
+  discovery; subsequent connections and the wireless reboot succeeded. The
+  initial discovery failure remains unexplained and needs reconnect/soak testing.
+  End-to-end testing through the Flutter/mobile updater remains pending.
 
 
 ## Hardware acceptance still required

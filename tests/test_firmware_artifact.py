@@ -39,7 +39,12 @@ class FirmwareArtifactTests(unittest.TestCase):
         path.write_text(text.replace(before, after))
 
     def test_valid_signed_build(self):
-        self.assertEqual(artifact.validate_build(self.build)['version'][:3], [0, 14, 0])
+        version = dict(line.split('=', 1) for line in
+                       (ROOT / 'application/VERSION').read_text().splitlines() if '=' in line)
+        version = {key.strip(): value.strip() for key, value in version.items()}
+        expected = [int(version[key]) for key in
+                    ('VERSION_MAJOR', 'VERSION_MINOR', 'PATCHLEVEL', 'VERSION_TWEAK')]
+        self.assertEqual(list(artifact.validate_build(self.build)['version']), expected)
 
     def test_reject_wrong_mcu(self):
         self.edit('application/zephyr/.config', 'CONFIG_SOC_NRF54L15_CPUAPP=y', '# CONFIG_SOC_NRF54L15_CPUAPP is not set')
