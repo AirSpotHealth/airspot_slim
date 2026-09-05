@@ -101,3 +101,7 @@ User requested Bluetooth DFU, RTT diagnostics and one production hardware target
 4. Exercise wireless upload, test boot, confirmation and recovery on the connected board where host Bluetooth permits. Record remaining physical/mobile qualification.
 
 OTA hardware checkpoint: valid signed trial confirmed after sensor startup. Deliberately failing 0.14.1 test firmware timed out at 120 seconds and MCUboot reverted to working 0.14.0 with readings/advertising. Settings migration/readback passed. GRTC/LFCLK handoff needed a bootloader-only wrapper and LTO disabled. Wireless upload passed: 263,859-byte signed production 0.14.1 transferred through BLE, inactive permanent confirmation was rejected, test boot/reset succeeded, sensor checks confirmed the image and BLE reported it active/confirmed. Evidence: `local_backups/wireless-ota-20260905/`. Initial discovery required one debugger restart; reconnect/soak and the actual mobile updater remain to be qualified.
+
+
+## Production audit and battery qualification (authorized implementation)
+Baseline e3d0c44 / 0.14.1 preserved with full hashed artifacts. Cleanup and behavioral fixes are separate commits. See `docs/PRODUCTION_AUDIT.md` for fixed and open findings, and `docs/BATTERY_QUALIFICATION.md` for the three always-connected runtime protocols. Profiler deferred by user; no measured runtime available. Current app/phone identification is pending.

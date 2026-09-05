@@ -30,3 +30,19 @@ See `plan.md` for dependencies, acceptance criteria and verification.
 - [x] Exercise wireless upload, trial boot and confirmation: 0.14.0 to 0.14.1 passed over BLE
 - [ ] Qualify mobile updater, initial discovery/reconnect reliability and interrupted transfers
 - [x] Update production commands/docs and record qualification limits
+
+## Production audit execution
+- [x] Preserve baseline signed image and configurations; baseline 14 checks pass
+- [x] Remove proven unused targets/profiles/backups; preserve old_firmware and inputs
+- [x] Fix short settings reads and scalar/name/DND persistence publication
+- [x] Harden NUS connection lifetime, command framing and DND bounds
+- [x] Preserve battery lockout on invalid samples and exclude them from calibration
+- [x] Serialize mode changes with reads and sleep STCC4 on shutdown
+- [x] Consolidate mobile soft-off with the existing button path
+- [x] Gate driver logging; retain RTT
+- [x] Add native fault tests and battery-event report tests (22 host checks pass)
+- [ ] Complete remaining high-severity findings in PRODUCTION_AUDIT.md
+- [ ] Final candidate hardware mode/reconnect/OTA qualification
+- [ ] Capture actual phone app workload and qualify its updater
+- [ ] Full charge-to-cutoff at 5 s, 60 s, 180 s sequentially
+- [ ] Later profiler measurements and before/after energy comparison
