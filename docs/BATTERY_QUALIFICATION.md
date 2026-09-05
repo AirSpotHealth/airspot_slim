@@ -90,3 +90,10 @@ app before continuing. The full sequence takes roughly nine minutes. It checks
 Mac interoperability; it does not reproduce the real app workload or measure
 battery life. History-position command 0x0B intentionally responds with 0x0C,
 and the legacy battery/history-position length quirks are preserved.
+
+## Functional cadence measured on 5 September 2026
+
+0.14.3, Mac BLE client, RTT attached: two valid samples per mode, observed
+spacing 5.070 s / 60.645 s / 180.619 s. All three passed; the original 3-minute
+setting was restored. No battery runtime or energy measurement was performed.
+Evidence: `local_backups/audit-final/ble_smoke.log`.

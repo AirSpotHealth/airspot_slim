@@ -114,3 +114,11 @@ below as each test completes.
 
 References: [Nordic SAADC reference](https://docs.nordicsemi.com/r/bundle/ps_nrf54l15/page/saadc.html-padc_reference),
 [Zephyr nRF54L15 DK](https://docs.zephyrproject.org/latest/boards/nordic/nrf54l15dk/doc/index.html).
+
+## Subsequent production audit
+
+The 0.14.3 candidate received additional settings, input-validation, NUS lifetime,
+calibration-input and battery-lockout fixes, plus sensor sleep on shutdown.
+See ../PRODUCTION_AUDIT.md for complete fixed/open findings and hardware evidence.
+Mac BLE upload/confirmation, two samples per mode and soft-off from continuous
+mode passed. These checks do not establish battery life or production readiness.

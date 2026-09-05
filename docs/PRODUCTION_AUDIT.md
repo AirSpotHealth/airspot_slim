@@ -18,7 +18,7 @@ in `local_backups/audit-baseline-e3d0c44/`. See CLEANUP_INVENTORY.md for deletio
 | Medium | Protocol accumulated impossible declared lengths until buffer overflow reset | Reject lengths exceeding the receive buffer immediately; validate complete frame length before dispatch. Native tests exercise real RX code across every split of a frame, concatenated frames, maximum size and oversized-header recovery |
 | Medium | STCC4 compensation failures did not invalidate samples; mode commands raced measurements | Propagate compensation failure into validity, serialize mode switches with measurement mutex |
 | Medium | Mobile sleep acknowledged success but called a disabled System OFF branch | Route it to main's existing soft-off path; preserve charger/button wake gesture; remove unreferenced old gesture implementation |
-| High | Stopping periodic work left STCC4 continuous mode running during soft-off/lockout | Cancel work synchronously and command sensor sleep; wake uses existing reboot path; physical shutdown verification pending |
+| High | Stopping periodic work left STCC4 continuous mode running during soft-off/lockout | Cancel work synchronously and command sensor sleep; wake uses existing reboot path; shutdown from continuous mode verified over NUS/RTT; current remains unmeasured |
 | Medium | Drivers forced DEBUG despite production INFO selection | Use CONFIG_AIRSPOT_LOG_LEVEL consistently; retain RTT |
 | Medium | NVS load errors were logged but startup reported success | Return failure so trial-image health confirmation does not accept failed settings startup |
 
@@ -96,3 +96,14 @@ and history-position replies remained compatible. The initial test runner
 expected history response 0x0B; source inspection confirmed legacy 0x0C, and the
 runner was corrected without changing firmware. Scheduled-mode results and
 shutdown evidence are appended after completion.
+
+The connected Mac smoke test passed all three modes with two valid scheduled
+notifications each: 5.070 s, 60.645 s and 180.619 s observed spacing. No
+disconnect/reset occurred during that sequence; mode 1 was restored. This is
+short functional evidence, not a soak or a phone-app endurance measurement.
+
+Shutdown check passed from mode 3: NUS sleep ACK, STCC4 stop/sleep messages,
+advertising suppression and BLE disconnect. A debugger reset was used to resume
+operation; this does not qualify the physical charger/button wake gesture.
+Battery runtime, interrupted-update faults and the actual mobile-app tests
+remain pending. No production-readiness declaration is made.

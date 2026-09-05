@@ -42,7 +42,8 @@ See `plan.md` for dependencies, acceptance criteria and verification.
 - [x] Gate driver logging; retain RTT
 - [x] Add native fault tests and battery-event report tests (22 host checks pass)
 - [ ] Complete remaining high-severity findings in PRODUCTION_AUDIT.md
-- [ ] Final candidate hardware mode/reconnect/OTA qualification
+- [x] Mac candidate OTA/confirmation, all three mode cadences, malformed commands, battery/history-position and continuous-mode shutdown
+- [ ] Extended reconnect/soak, interrupted OTA, full history and physical gesture/charging qualification
 - [ ] Capture actual phone app workload and qualify its updater
 - [ ] Full charge-to-cutoff at 5 s, 60 s, 180 s sequentially
 - [ ] Later profiler measurements and before/after energy comparison
