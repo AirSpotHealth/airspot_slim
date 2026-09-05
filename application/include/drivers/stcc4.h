@@ -21,6 +21,8 @@
 extern "C" {
 #endif
 
+#define STCC4_STATUS_TESTING_MODE 0x4000u
+
 /* Measurement mode */
 typedef enum {
   STCC4_MODE_CONTINUOUS, /* Continuous measurement */
@@ -181,15 +183,6 @@ int stcc4_perform_conditioning(void (*keepalive)(void));
  * @return 0 on success, negative errno on failure
  */
 int stcc4_enable_testing_mode(void);
-
-/**
- * @brief Disable testing mode (resumes ASC updates)
- *
- * This resumes the STCC4 ASC algorithm and re-enables auto-calibration.
- *
- * @return 0 on success, negative errno on failure
- */
-int stcc4_disable_testing_mode(void);
 
 /**
  * @brief Perform forced recalibration (FRC) to a known reference (0x362F).

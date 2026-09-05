@@ -11,6 +11,7 @@
  */
 
 #include <math.h>
+#include <string.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 
@@ -45,8 +46,6 @@ LOG_MODULE_REGISTER(stcc4, CONFIG_AIRSPOT_LOG_LEVEL);
 #define STCC4_CMD_CONDITIONING_LSB 0xBC /* Conditioning: 0x29BC */
 #define STCC4_CMD_ENABLE_TESTING_MSB 0x3F
 #define STCC4_CMD_ENABLE_TESTING_LSB 0xBC /* Enable testing mode: 0x3FBC */
-#define STCC4_CMD_DISABLE_TESTING_MSB 0x3F
-#define STCC4_CMD_DISABLE_TESTING_LSB 0x3D /* Disable testing mode: 0x3F3D */
 #define STCC4_CMD_FORCED_RECAL_MSB 0x36
 #define STCC4_CMD_FORCED_RECAL_LSB 0x2F /* perform_forced_recalibration: 0x362F */
 #define STCC4_CMD_SELF_TEST_MSB 0x27
@@ -131,8 +130,10 @@ int stcc4_reset(void) {
 
   /* enter_sleep_mode() stops any active measurement first, then sleeps; the
    * subsequent wake resets the sensor's measurement state machine. */
-  stcc4_enter_sleep_mode();
-  stcc4_exit_sleep_mode();
+  int ret = stcc4_enter_sleep_mode();
+  if (ret) return ret;
+  ret = stcc4_exit_sleep_mode();
+  if (ret) return ret;
 
   last_data.co2_ppm = 0;
   last_data.valid = false;
@@ -279,7 +280,14 @@ int stcc4_read(stcc4_data_t *data) {
   data->temperature = -45.0f + 175.0f * ((float)temp_raw / 65535.0f);
   data->humidity = -6.0f + 125.0f * ((float)rh_raw / 65535.0f);
   data->status = status_raw;
-  data->valid = true;
+  /* Datasheet 3.4.13: byte 10 bit 6 (status bit 14) means ASC paused.
+   * Never expose a sample taken with the sensor's own ASC active. */
+  data->valid = (status_raw & STCC4_STATUS_TESTING_MODE) != 0;
+  if (!data->valid) {
+    memset(&last_data, 0, sizeof(last_data));
+    LOG_ERR("STCC4 internal ASC active: status=0x%04x", status_raw);
+    return -EACCES;
+  }
 
   last_data = *data;
 
@@ -401,7 +409,8 @@ int stcc4_enter_sleep_mode(void) {
   }
 
   /* Stop any ongoing measurement first */
-  stcc4_stop();
+  int stop_ret = stcc4_stop();
+  if (stop_ret) return stop_ret;
 
   /* Send enter sleep command (0x3650) */
   int ret =
@@ -474,19 +483,6 @@ int stcc4_enable_testing_mode(void) {
                             STCC4_CMD_ENABLE_TESTING_LSB);
   if (ret == 0) {
     LOG_INF("STCC4 testing mode enabled (ASC paused)");
-  }
-  return ret;
-}
-
-int stcc4_disable_testing_mode(void) {
-  if (!initialized) {
-    return -ENODEV;
-  }
-
-  int ret = stcc4_write_cmd(STCC4_CMD_DISABLE_TESTING_MSB,
-                            STCC4_CMD_DISABLE_TESTING_LSB);
-  if (ret == 0) {
-    LOG_INF("STCC4 testing mode disabled (ASC active)");
   }
   return ret;
 }

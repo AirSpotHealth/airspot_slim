@@ -17,6 +17,7 @@
 #include <drivers/sht40.h>
 #include <drivers/stcc4.h>
 #include <services/user_settings.h>
+#include <services/software_asc.h>
 #include <services/ble_service.h>
 #include <services/led_indicator.h>
 #include <services/sensor_manager.h>
@@ -56,14 +57,14 @@ static bool use_single_shot_mode =
     false; /* Track if using single-shot for STCC4 */
 
 /* Latest sensor data (protected by data_mutex) */
-static struct k_mutex data_mutex;
+K_MUTEX_DEFINE(data_mutex);
 static sensor_data_t latest_data;
 
 /* Serializes the whole measurement sequence. do_measurement() can be invoked
  * both from the sensor work queue (periodic) and from the protocol thread
  * (manual refresh / reset). Without this, two measurement sequences would
  * interleave their multi-step I2C transactions on the shared sensor bus. */
-static struct k_mutex meas_mutex;
+K_MUTEX_DEFINE(meas_mutex);
 
 /* User callback */
 static sensor_data_callback_t user_callback = NULL;
@@ -71,30 +72,24 @@ static sensor_data_callback_t user_callback = NULL;
 /* Forward declaration */
 static void sensor_work_handler(struct k_work *work);
 
-static void apply_stcc4_asc_setting(void)
+/* Caller holds meas_mutex or is in startup before measurements are enabled. */
+static int pause_stcc4_asc(void)
 {
-  uint8_t asc_enabled = user_settings_get_auto_calibrate();
-  int ret;
-
-  if (asc_enabled)
-  {
-    ret = stcc4_disable_testing_mode();
-    if (ret)
-    {
-      LOG_WRN("STCC4 ASC enable failed: %d", ret);
-    }
+  int ret = stcc4_stop();
+  if (!ret) ret = stcc4_enable_testing_mode();
+  if (!ret) ret = stcc4_trigger_single_shot();
+  if (!ret) {
+    k_msleep(STCC4_SINGLE_SHOT_WAIT_MS);
+    stcc4_data_t verification;
+    ret = stcc4_read(&verification);
+    if (!ret && !(verification.status & STCC4_STATUS_TESTING_MODE)) ret = -EACCES;
   }
-  else
-  {
-    ret = stcc4_enable_testing_mode();
-    if (ret)
-    {
-      LOG_WRN("STCC4 ASC disable failed: %d", ret);
-    }
-  }
+  if (ret) LOG_ERR("STCC4 ASC pause/verification failed: %d", ret);
+  else LOG_INF("STCC4 internal ASC verified paused (status bit 14)");
+  return ret;
 }
 
-int sensor_manager_init(void)
+static int sensor_manager_init_locked(void)
 {
   int ret;
 
@@ -105,8 +100,6 @@ int sensor_manager_init(void)
 
   LOG_INF("Initializing sensor manager...");
 
-  k_mutex_init(&data_mutex);
-  k_mutex_init(&meas_mutex);
   k_work_init_delayable(&sensor_work, sensor_work_handler);
 
   /* 1. Initialize I2C bus first */
@@ -158,8 +151,9 @@ int sensor_manager_init(void)
   led_indicator_stop();
 #endif
 
-  /* Apply ASC setting on startup (ASC enabled by default in sensor) */
-  apply_stcc4_asc_setting();
+  /* Internal ASC is independent of the AirSpot software auto-calibration flag. */
+  ret = pause_stcc4_asc();
+  if (ret) return ret;
 
   /* Default to single-shot mode for power saving.
    * Power mode can be changed via sensor_manager_set_power_mode().
@@ -199,7 +193,15 @@ int sensor_manager_init(void)
   return 0;
 }
 
-static void do_measurement(void)
+int sensor_manager_init(void)
+{
+  k_mutex_lock(&meas_mutex, K_FOREVER);
+  int ret = sensor_manager_init_locked();
+  k_mutex_unlock(&meas_mutex);
+  return ret;
+}
+
+static int do_measurement(void)
 {
   sensor_data_t data = {0};
   sht40_data_t sht_data;
@@ -269,7 +271,8 @@ static void do_measurement(void)
       k_msleep(STCC4_SINGLE_SHOT_WAIT_MS);
 
       ret = stcc4_read(&stcc_data);
-      if (ret == 0 && stcc_data.co2_ppm > 0)
+      if (ret == 0 && stcc_data.valid &&
+          (stcc_data.status & STCC4_STATUS_TESTING_MODE) && stcc_data.co2_ppm > 0)
       {
         data.co2_ppm = stcc_data.co2_ppm;
         LOG_DBG("STCC4 (single-shot): %u ppm CO2", data.co2_ppm);
@@ -294,7 +297,8 @@ static void do_measurement(void)
   {
     /* Continuous mode: data is available immediately (1Hz updates) */
     ret = stcc4_read(&stcc_data);
-    if (ret == 0 && stcc_data.co2_ppm > 0)
+    if (ret == 0 && stcc_data.valid &&
+          (stcc_data.status & STCC4_STATUS_TESTING_MODE) && stcc_data.co2_ppm > 0)
     {
       data.co2_ppm = stcc_data.co2_ppm;
       LOG_DBG("STCC4 (continuous): %u ppm CO2", data.co2_ppm);
@@ -343,6 +347,7 @@ static void do_measurement(void)
           (double)data.pressure_hpa, data.battery_percent);
 
   k_mutex_unlock(&meas_mutex);
+  return all_ok ? 0 : -EIO;
 }
 
 static void sensor_work_handler(struct k_work *work)
@@ -416,8 +421,7 @@ int sensor_manager_measure_now(void)
   }
 
   LOG_INF("Manual measurement triggered");
-  do_measurement();
-  return 0;
+  return do_measurement();
 }
 
 int sensor_manager_perform_frc(uint16_t target_ppm, int16_t *applied_correction)
@@ -508,6 +512,7 @@ bool sensor_manager_is_ready(void) { return initialized; }
  */
 void sensor_manager_set_power_mode(uint8_t power_mode)
 {
+  if (!initialized) return;
   uint32_t new_interval;
   bool want_single_shot;
 
@@ -612,26 +617,25 @@ void sensor_manager_set_power_mode(uint8_t power_mode)
  */
 int sensor_manager_reset_co2_sensor(void)
 {
-  /* Reset STCC4 sensor by re-initializing it */
-  LOG_INF("Resetting CO2 sensor (STCC4)...");
-
-  int rc = user_settings_set_co2_correction(0);
-  if (rc == 0)
-  {
-    LOG_INF("CO2 calibration correction cleared");
+  int lease = software_asc_begin_manual();
+  if (lease) return lease;
+  /* Recovery remains available over BLE after a failed startup. */
+  if (!initialized) {
+    int rc = sensor_manager_init();
+    if (rc) { software_asc_end_manual(); return rc; }
   }
-  else
-  {
-    LOG_WRN("Failed to clear CO2 correction: %d", rc);
-  }
-
-  /* Perform a real sensor reset (sleep/wake) rather than stcc4_init(), which
-   * is a no-op once the driver is already initialized. */
+  k_mutex_lock(&meas_mutex, K_FOREVER);
+  k_mutex_lock(&data_mutex, K_FOREVER);
+  latest_data.valid = false;
+  k_mutex_unlock(&data_mutex);
   int ret = stcc4_reset();
-  if (ret == 0)
-  {
+  if (!ret) {
     use_single_shot_mode = true;
-    apply_stcc4_asc_setting();
+    ret = pause_stcc4_asc();
   }
+  if (!ret) ret = user_settings_set_co2_correction(0);
+  software_asc_end_manual();
+  k_mutex_unlock(&meas_mutex);
+  if (!ret) sensor_manager_set_power_mode(user_settings_get_power_mode());
   return ret;
 }

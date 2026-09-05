@@ -23,6 +23,7 @@
 #include <services/ble_mode_service.h>
 #include <services/ble_service.h>
 #include <services/calibration_service.h>
+#include <services/software_asc.h>
 #include <services/data_log.h>
 #include <services/factory_test.h>
 #include <services/power_manager.h>
@@ -68,6 +69,7 @@ static void protocol_calib_on_countdown(uint16_t seconds_remaining);
 static void protocol_calib_on_done(int16_t correction);
 
 /* Forward declarations */
+static void send_frame(const uint8_t *frame, uint16_t len);
 static void frame_received_handler(const uint8_t *frame, uint16_t len);
 static void set_frame_checksum(uint8_t *frame, uint16_t len);
 static uint8_t verify_frame_checksum(const uint8_t *frame, uint16_t len);
@@ -140,6 +142,16 @@ static void protocol_thread_fn(void *p1, void *p2, void *p3)
   }
 }
 
+static void send_calibration_failure(int error)
+{
+  LOG_ERR("Calibration failed: %d", error);
+  uint8_t response[6] = {CMD_FIRST_BYTE, CMD_SECOND_BYTE, CMD_CALIB_START,
+                         0x01, 0xff, 0};
+  set_frame_checksum(response, sizeof(response));
+  send_frame(response, sizeof(response));
+  led_indicator_show_calibration(false);
+}
+
 /**
  * @brief Initialize the protocol layer and bind to NUS RX.
  *
@@ -155,6 +167,7 @@ int protocol_init(void)
   }
 
   calibration_callbacks_t calib_cb = {
+      .on_error = send_calibration_failure,
       .on_start = protocol_calib_on_start,
       .on_countdown = protocol_calib_on_countdown,
       .on_done = protocol_calib_on_done,
@@ -542,34 +555,14 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len)
     break;
 
   case CMD_RESET_SENSOR:
-    /* Reset CO2 sensor (STCC4) */
-    LOG_INF("Reset sensor command received");
     {
       int ret = sensor_manager_reset_co2_sensor();
-      if (ret)
-      {
-        LOG_WRN("CO2 sensor reset failed: %d", ret);
-      }
-      else
-      {
-        /* Trigger a measurement to verify sensor is responding */
-        ret = sensor_manager_measure_now();
-        if (ret)
-        {
-          LOG_WRN("Post-reset measurement failed: %d", ret);
-        }
-      }
-    }
-    /* ACK with same command */
-    {
-      uint8_t tx_frame[8] = {0};
-      tx_frame[0] = CMD_FIRST_BYTE;
-      tx_frame[1] = CMD_SECOND_BYTE;
-      tx_frame[2] = CMD_RESET_SENSOR;
-      tx_frame[3] = 0x01;
-      tx_frame[4] = 0x01; /* Success */
-      set_frame_checksum(tx_frame, 6);
-      send_frame(tx_frame, 6);
+      if (!ret) ret = sensor_manager_measure_now();
+      uint8_t tx_frame[6] = {CMD_FIRST_BYTE, CMD_SECOND_BYTE,
+                            CMD_RESET_SENSOR, 0x01, ret ? 0xff : 0x01, 0};
+      set_frame_checksum(tx_frame, sizeof(tx_frame));
+      send_frame(tx_frame, sizeof(tx_frame));
+      protocol_send_device_state();
     }
     break;
 
@@ -738,7 +731,11 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len)
       if (payload_len >= 2 && len >= (uint16_t)(4 + payload_len + 1))
       {
         target = (uint16_t)((frame[4] << 8) | frame[5]);
-        user_settings_set_calib_target(target);
+        int rc = software_asc_set_target(target);
+        if (rc) {
+          send_calibration_failure(rc);
+          break;
+        }
         if (payload_len == 2)
         {
           LOG_INF("Calibration target set to %u ppm", target);
@@ -749,34 +746,26 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len)
       if (payload_len == 0)
       {
         LOG_INF("Calibration start - target=%u ppm", target);
-        (void)calibration_service_start(target);
+        int rc = calibration_service_start(target);
+        if (rc) send_calibration_failure(rc);
       }
     }
     break;
 
   case CMD_SET_SELF_CALIB:
-    /* Toggle ASC (mapped to STCC4 testing mode) */
-    if (len >= 5)
+    /* Toggle AirSpot software ASC only; never resume STCC4's internal ASC. */
+    if (len >= 6 && frame[3] == 1)
     {
-      uint8_t enabled = frame[4] ? 1 : 0;
-      if (enabled)
-      {
-        (void)stcc4_disable_testing_mode();
-      }
-      else
-      {
-        (void)stcc4_enable_testing_mode();
-      }
-      user_settings_set_auto_calibrate(enabled);
-
+      int ret = software_asc_set_enabled(frame[4] != 0);
       uint8_t tx_frame[8] = {0};
       tx_frame[0] = CMD_FIRST_BYTE;
       tx_frame[1] = CMD_SECOND_BYTE;
       tx_frame[2] = CMD_SET_SELF_CALIB;
       tx_frame[3] = 0x01;
-      tx_frame[4] = 0x02; /* success */
+      tx_frame[4] = ret ? 0xff : 0x02; /* success only after persistence */
       set_frame_checksum(tx_frame, 6);
       send_frame(tx_frame, 6);
+      protocol_send_device_state();
     }
     break;
 
@@ -800,8 +789,8 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len)
     break;
 
   case CMD_SET_ASC_CHECK_DURATION:
-    /* Not implemented for STCC4; ignore for compatibility */
-    LOG_INF("Set ASC check duration (ignored)");
+    if (len >= 7 && frame[3] == 2)
+      software_asc_set_check_duration((uint16_t)((frame[4] << 8) | frame[5]));
     break;
 
   case CMD_GET_ASC_DAY_COUNT:
@@ -811,7 +800,7 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len)
     tx_frame[1] = CMD_SECOND_BYTE;
     tx_frame[2] = CMD_GET_ASC_DAY_COUNT;
     tx_frame[3] = 0x01;
-    tx_frame[4] = user_settings_get_asc_day_count();
+    tx_frame[4] = software_asc_get_day_count();
     set_frame_checksum(tx_frame, 6);
     send_frame(tx_frame, 6);
   }

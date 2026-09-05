@@ -39,8 +39,8 @@ extern "C"
     /* Calibration settings (matches legacy behavior) */
     int16_t co2_correction; /* CC value (ppm) */
     uint16_t calib_target;  /* Calibration target (ppm) */
-    uint8_t auto_calibrate; /* ASC enabled (0/1) */
-    uint8_t asc_day_count;  /* ASC day count (0-255) */
+    uint8_t auto_calibrate; /* AirSpot software ASC enabled (0/1); never hardware ASC */
+    uint8_t asc_day_count;  /* Legacy stored field; current ASC progress is volatile */
     uint16_t co2_yellow_start; /* Green/amber LED boundary (ppm) */
     uint16_t co2_red_start;    /* Amber/red LED boundary (ppm) */
     uint8_t paired;            /* 1 = a phone has connected at least once */

@@ -22,6 +22,7 @@ typedef struct {
   void (*on_start)(void);
   void (*on_countdown)(uint16_t seconds_remaining);
   void (*on_done)(int16_t correction);
+  void (*on_error)(int error);
 } calibration_callbacks_t;
 
 /**

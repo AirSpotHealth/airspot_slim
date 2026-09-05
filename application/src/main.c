@@ -33,6 +33,7 @@
 #include <services/ble_mode_service.h>
 #include <services/ble_service.h>
 #include <services/calibration_service.h>
+#include <services/software_asc.h>
 #include <services/data_log.h>
 #include <services/factory_test.h>
 #include <services/led_indicator.h>
@@ -486,10 +487,12 @@ static void sensor_data_callback(const sensor_data_t *data) {
   }
 
   if (!data->valid) {
+    if (ble_service_is_connected()) protocol_send_realtime_co2();
     return;
   }
 
   /* Calibration must never accumulate a cached failed sensor reading. */
+  software_asc_process_measurement(data->co2_ppm);
   calibration_service_process_measurement(data->co2_ppm);
 
   uint16_t corrected_co2 = user_settings_apply_co2_correction(data->co2_ppm);
@@ -912,6 +915,7 @@ int main(void) {
   }
 
   /* 3. Protocol handler (initializes NUS) */
+  software_asc_init();
   ret = protocol_init();
   startup_healthy &= (ret == 0);
   if (ret) {
@@ -933,12 +937,12 @@ int main(void) {
 
   /* 4. Sensor manager (initializes all sensors) */
   ret = sensor_manager_init();
+  sensor_manager_register_callback(sensor_data_callback);
   startup_healthy &= (ret == 0);
   if (ret) {
     LOG_ERR("Sensor manager init failed: %d", ret);
   } else {
     LOG_INF("Sensor manager initialized");
-    sensor_manager_register_callback(sensor_data_callback);
   }
 
   /* Register Qi charger callback for LED feedback (debounced in qi_charger.c) */
@@ -1054,6 +1058,7 @@ int main(void) {
 
   while (1) {
     ota_service_poll();
+    software_asc_tick();
     /* Feed watchdog first - must happen at least every WDT_TIMEOUT_MS (5s) */
     watchdog_feed();
 

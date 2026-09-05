@@ -20,7 +20,8 @@ class SensorCallbackTests(unittest.TestCase):
 #define LOG_WRN(...)
 #define LOG_DBG(...)
 static bool low_battery_lockout_requested;
-static int calibrated, sent;
+static int calibrated, automatic, sent;
+static void software_asc_process_measurement(uint16_t co2) { automatic++; }
 static void ota_service_observe_sample(const sensor_data_t *s) {}
 static bool led_indicator_is_active(void) { return false; }
 static void calibration_service_process_measurement(uint16_t co2) { calibrated++; }
@@ -32,7 +33,7 @@ int main(void) {
   sensor_data_t sample = {.co2_ppm=999, .valid=false, .battery_low=true};
   sensor_data_callback(&sample);
   assert(low_battery_lockout_requested);
-  assert(calibrated == 0 && sent == 0);
+  assert(calibrated == 0 && automatic == 0 && sent == 1);
   low_battery_lockout_requested = false;
   sample.is_charging = true;
   sensor_data_callback(&sample);
@@ -40,7 +41,7 @@ int main(void) {
   assert(calibrated == 0);
   sample.valid = true;
   sensor_data_callback(&sample);
-  assert(calibrated == 1 && sent == 1);
+  assert(calibrated == 1 && automatic == 1 && sent == 3);
   sensor_data_callback(NULL);
   assert(calibrated == 1);
 }
