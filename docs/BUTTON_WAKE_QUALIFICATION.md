@@ -23,8 +23,14 @@ Qualification order:
 4. Check BLE, live sensing, stored mode/history, and continued held-button behavior
    after wake. Measure current separately when instrumentation is available.
 
-Physical results are pending. Neither current consumption nor battery runtime
-has been measured for this change.
+Candidate 0.14.4 was installed by signed Bluetooth upload/test/reset. RTT recorded
+successful P0.02 SENSE interrupt setup, a valid sensor sample, and automatic image
+confirmation at 27.676 seconds. SMP subsequently reported the candidate active
+and confirmed (image hash
+`f3b7b0ba95a386bd0f78e41e9d5c958b15fccabbf6f10314e53c988552b51f0c`).
+Artifacts and update logs are in `local_backups/button-qualification/`.
+Physical gesture results are pending. Neither current consumption nor battery
+runtime has been measured for this change.
 
 The routine wired updater rejected this candidate before writing because its
 rebuilt MCUboot bytes differ from the installed bootloader. A complete device
