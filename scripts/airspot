@@ -18,8 +18,20 @@ if [[ -n "${AIRSPOT_WORKSPACE}" && "${AIRSPOT_WORKSPACE}" != "${resolved_workspa
 fi
 export AIRSPOT_WORKSPACE="${resolved_workspace}"
 export AIRSPOT_PROJECT_DIR="$AIRSPOT_WORKSPACE/application"
-export AIRSPOT_BUILD_DIR="$AIRSPOT_PROJECT_DIR/build"
-export AIRSPOT_BOARD="nrf54l15dk/nrf54l05/cpuapp"
+export AIRSPOT_HARDWARE="${AIRSPOT_HARDWARE:-rev3a}"
+case "$AIRSPOT_HARDWARE" in
+    rev3a)
+        export AIRSPOT_BUILD_DIR="$AIRSPOT_PROJECT_DIR/build_rev3a_debug"
+        export AIRSPOT_BOARD="nrf54l15dk/nrf54l15/cpuapp"
+        export AIRSPOT_JLINK_DEVICE="nRF54L15_M33"
+        ;;
+    legacy)
+        export AIRSPOT_BUILD_DIR="$AIRSPOT_PROJECT_DIR/build"
+        export AIRSPOT_BOARD="nrf54l15dk/nrf54l05/cpuapp"
+        export AIRSPOT_JLINK_DEVICE="nRF54L05_M33"
+        ;;
+    *) echo "AIRSPOT_HARDWARE must be rev3a or legacy" >&2; return 1 ;;
+esac
 
 # NCS Toolchain Configuration
 NCS_TOOLCHAIN_DIR="/opt/nordic/ncs/toolchains/322ac893fe"
@@ -79,7 +91,11 @@ _get_firmware_version() {
 # Get kernel bin name based on version
 _get_bin_name() {
     local version="$(_get_firmware_version)"
-    echo "airspot_slim_v${version}"
+    if [ "$AIRSPOT_HARDWARE" = rev3a ]; then
+        echo "airspot_slim_rev3a_v${version}"
+    else
+        echo "airspot_slim_v${version}"
+    fi
 }
 
 _find_jlinkexe() {
@@ -104,6 +120,9 @@ airspot() {
     case "$cmd" in
         build)
             airspot_build "$@"
+            ;;
+        check)
+            bash "$AIRSPOT_WORKSPACE/scripts/airspot-rev3a" check "$@"
             ;;
         flash)
             airspot_flash "$@"
@@ -139,10 +158,10 @@ airspot() {
             airspot_menu
             ;;
         bf)
-            airspot_build && airspot_flash
+            airspot_build "$@" && airspot_flash "$@"
             ;;
         bfl)
-            airspot_build && airspot_flash && airspot_logs
+            airspot_build "$@" && airspot_flash "$@" && airspot_logs
             ;;
         help|--help|-h)
             airspot_help
@@ -220,6 +239,10 @@ _airspot_locate_signed_bin() {
 
 # Build command (default: sysbuild + merged.hex for J-Link)
 airspot_build() {
+    if [ "$AIRSPOT_HARDWARE" = rev3a ]; then
+        bash "$AIRSPOT_WORKSPACE/scripts/airspot-rev3a" build "$@"
+        return $?
+    fi
     local version="$(_get_firmware_version)"
     local bin_base_name="airspot_slim_v${version}"
     local timestamp=$(date +"%Y%m%d_%H%M%S")
@@ -512,6 +535,10 @@ EOF
 
 # Flash — full chip erase; mono uses .bin @ 0x0; merged.hex for MCUboot builds
 airspot_flash() {
+    if [ "$AIRSPOT_HARDWARE" = rev3a ]; then
+        bash "$AIRSPOT_WORKSPACE/scripts/airspot-rev3a" flash "$@"
+        return $?
+    fi
     local image_arg="${1:-}"
     local force_any=false
 
@@ -678,6 +705,10 @@ _airspot_logs_uart() {
 }
 
 _airspot_logs_rtt() {
+    if [ "$AIRSPOT_HARDWARE" = rev3a ]; then
+        bash "$AIRSPOT_WORKSPACE/scripts/airspot-rev3a" rtt "$@"
+        return $?
+    fi
     _print_info "RTT monitor (requires firmware built with prj_rtt.conf)"
     _print_info "Device: NRF54L05_XXAA | SWD via J-Link (same cable as flash)"
     _print_warning "Press Ctrl+C to exit"
@@ -689,7 +720,7 @@ _airspot_logs_rtt() {
         sleep 0.3
     fi
 
-    local rtt_args=(-Device NRF54L05_XXAA -If SWD -Speed 4000 -RTTChannel 0)
+    local rtt_args=(-Device "$AIRSPOT_JLINK_DEVICE" -If SWD -Speed 4000 -RTTChannel 0)
 
     if command -v JLinkRTTClient &> /dev/null; then
         _print_info "Starting JLinkRTTClient..."
@@ -703,7 +734,7 @@ _airspot_logs_rtt() {
         tail -f "$log_file"
     elif command -v JLinkExe &> /dev/null; then
         _print_info "Starting JLinkExe RTT viewer..."
-        JLinkExe -device NRF54L05_XXAA -if SWD -speed 4000 -RTTClient
+        JLinkExe -device "$AIRSPOT_JLINK_DEVICE" -if SWD -speed 4000 -RTTClient
     else
         _print_error "J-Link RTT tools not found (JLinkRTTClient / JLinkExe)."
         _print_info "Install SEGGER J-Link: https://www.segger.com/downloads/jlink/"
@@ -764,6 +795,10 @@ airspot_reset() {
 
 # Clean command
 airspot_clean() {
+    if [ "$AIRSPOT_HARDWARE" = rev3a ]; then
+        bash "$AIRSPOT_WORKSPACE/scripts/airspot-rev3a" clean "$@"
+        return $?
+    fi
     _print_info "Cleaning build directories..."
     cd "$AIRSPOT_PROJECT_DIR"
     rm -rf build build_*
@@ -802,6 +837,10 @@ airspot_info() {
 
 # Memory command
 airspot_memory() {
+    if [ "$AIRSPOT_HARDWARE" = rev3a ]; then
+        bash "$AIRSPOT_WORKSPACE/scripts/airspot-rev3a" memory "$@"
+        return $?
+    fi
     local bin_name="$(_get_bin_name)"
     local elf_file=""
     
@@ -898,6 +937,12 @@ airspot_menu() {
 
 # Help command
 airspot_help() {
+    if [ "$AIRSPOT_HARDWARE" = rev3a ]; then
+        bash "$AIRSPOT_WORKSPACE/scripts/airspot-rev3a" help
+        echo "UART logs: airspot logs uart; device information: airspot info"
+        echo "Legacy hardware: export AIRSPOT_HARDWARE=legacy; source scripts/airspot"
+        return 0
+    fi
     local version="$(_get_firmware_version)"
     cat << EOF
 
@@ -948,9 +993,9 @@ EOF
 }
 
 # Only show menu if script is executed directly (not sourced)
-if [[ -z "${AIRSPOT_NO_AUTO_MENU}" ]]; then
+if [[ -z "${AIRSPOT_NO_AUTO_MENU}" && -t 0 ]]; then
     if [[ -n "${ZSH_VERSION}" ]]; then
-        if [[ "${(%):-%x}" == "${0}" ]]; then
+        if [[ "$ZSH_EVAL_CONTEXT" = toplevel ]]; then
             airspot_menu
         fi
     elif [[ -n "${BASH_VERSION}" ]]; then

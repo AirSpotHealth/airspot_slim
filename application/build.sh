@@ -3,6 +3,26 @@
 
 set -e
 
+# Rev3A uses the same checked build/flash path as the interactive CLI.
+if [[ "${AIRSPOT_HARDWARE:-rev3a}" = rev3a ]]; then
+    rev3a_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    rev3a_args=()
+    rev3a_flash=false
+    for arg in "$@"; do
+        case "$arg" in
+            -f|--flash) rev3a_flash=true ;;
+            -c|--clean) rev3a_args+=(--clean) ;;
+            -d|--debug) rev3a_args+=(--debug) ;;
+            *) rev3a_args+=("$arg") ;;
+        esac
+    done
+    bash "$rev3a_root/scripts/airspot-rev3a" build "${rev3a_args[@]}"
+    if [[ "$rev3a_flash" = true ]]; then
+        bash "$rev3a_root/scripts/airspot-rev3a" flash "${rev3a_args[@]}"
+    fi
+    exit 0
+fi
+
 BOARD="nrf54l15dk/nrf54l05/cpuapp"
 
 echo "=========================================="
@@ -132,4 +152,3 @@ else
     echo "=========================================="
     exit 1
 fi
-

@@ -3,6 +3,11 @@
 # Requires: nRF Command Line Tools (nrfjprog) and J-Link to the Slim debug port.
 set -euo pipefail
 
+if [[ "${AIRSPOT_HARDWARE:-rev3a}" = rev3a ]]; then
+  echo "Rev3A MCUboot recovery is not enabled. Use airspot build, then airspot flash." >&2
+  exit 1
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 RELEASES_DIR="$(cd "$SCRIPT_DIR/../../releases" && pwd)"

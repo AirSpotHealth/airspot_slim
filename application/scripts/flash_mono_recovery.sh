@@ -3,6 +3,11 @@
 # IMPORTANT: Zephyr mono .hex only programs 64 KB — use .bin or AH01 full hex after chiperase.
 set -euo pipefail
 
+if [[ "${AIRSPOT_HARDWARE:-rev3a}" = rev3a ]]; then
+  rev3a_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+  exec bash "$rev3a_root/scripts/airspot-rev3a" flash "$@"
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 WS_DIR="$(cd "$APP_DIR/.." && pwd)"
