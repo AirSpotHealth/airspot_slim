@@ -1,5 +1,9 @@
 # AirSpot Slim Firmware
 
+**Rev3A:** use the [current bring-up guide](../docs/board/REV3A_BRINGUP.md).
+`build.sh` now defaults to the nRF54L15 Rev3A target. The historical nRF54L05
+instructions and production-readiness claims below do not apply to Rev3A.
+
 Firmware for the AirSpot Slim device based on nRF54L05 and STCC4 Slim hardware.
 
 ## Overview
