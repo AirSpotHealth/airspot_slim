@@ -72,9 +72,23 @@ static void feed(int n, uint16_t value) { while(n--) software_asc_process_measur
 static void day(int d) { clock_now=d*86400+86340; software_asc_tick(); }
 static void fresh(void) {
   enabled=flight=time_set=storage_error=correction=0; target=426; power=3;
-  clock_now=0; uptime=0; software_asc_init();
+  clock_now=0; uptime=0; software_asc_init(); uptime=180000;
 }
 int main(void) {
+  fresh(); uptime=0; enabled=1; software_asc_init();
+  software_asc_set_check_duration(1); feed(400,300);
+  uptime=179999; software_asc_tick(); feed(3,300);
+  assert(correction==0 && asc.records==0 && asc.count==0 && asc.days==0);
+  software_asc_set_enabled(1); software_asc_set_target(500);
+  feed(3,300); assert(correction==0); /* toggles/targets cannot bypass guard */
+  uptime=180000; feed(2,300); assert(correction==0);
+  feed(1,300); assert(correction==120 && asc.records==3);
+  correction=0; software_asc_sensor_restarted();
+  assert(asc.records==0 && asc.count==0 && asc.days==0);
+  uptime+=179999;feed(400,300);software_asc_tick();
+  assert(correction==0 && asc.records==0 && asc.days==0);
+  uptime++;feed(3,300);assert(correction==120);
+
   fresh(); feed(400, 300); assert(correction==0);
   assert(software_asc_set_enabled(1)==0);
   feed(2, 300); assert(correction==0);

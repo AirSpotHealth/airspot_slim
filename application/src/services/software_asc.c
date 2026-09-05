@@ -15,7 +15,7 @@ static struct {
   uint8_t count, days;
   uint32_t lowest, records;
   uint32_t last_calendar_day;
-  int64_t last_check_ms;
+  int64_t last_check_ms, sensor_started_ms;
   uint16_t check_seconds;
   bool manual;
 } asc;
@@ -43,7 +43,17 @@ void software_asc_init(void) {
   k_mutex_lock(&asc_mutex, K_FOREVER);
   memset(&asc, 0, sizeof(asc));
   restart_locked();
+  asc.sensor_started_ms = k_uptime_get();
   k_mutex_unlock(&asc_mutex);
+}
+void software_asc_sensor_restarted(void) {
+  k_mutex_lock(&asc_mutex, K_FOREVER);
+  restart_locked();
+  asc.sensor_started_ms = k_uptime_get();
+  k_mutex_unlock(&asc_mutex);
+}
+static bool sensor_settling(void) {
+  return k_uptime_get() - asc.sensor_started_ms < 180000;
 }
 int software_asc_set_enabled(uint8_t enabled) {
   k_mutex_lock(&asc_mutex, K_FOREVER);
@@ -87,7 +97,7 @@ uint8_t software_asc_get_day_count(void) {
 }
 void software_asc_process_measurement(uint16_t raw_ppm) {
   k_mutex_lock(&asc_mutex, K_FOREVER);
-  if (!user_settings_get_auto_calibrate() || asc.manual || raw_ppm == 0) goto done;
+  if (!user_settings_get_auto_calibrate() || asc.manual || sensor_settling() || raw_ppm == 0) goto done;
   int32_t corrected = (int32_t)raw_ppm + user_settings_get_co2_correction();
   uint16_t ppm = (uint16_t)CLAMP(corrected, 0, UINT16_MAX);
   if (asc.records < UINT32_MAX) asc.records++;
@@ -113,7 +123,7 @@ done:
 }
 void software_asc_tick(void) {
   k_mutex_lock(&asc_mutex, K_FOREVER);
-  if (!user_settings_get_auto_calibrate() || asc.manual) goto done;
+  if (!user_settings_get_auto_calibrate() || asc.manual || sensor_settling()) goto done;
   if (asc.check_seconds) {
     int64_t now = k_uptime_get();
     if (user_settings_get_power_mode() == 0 ||

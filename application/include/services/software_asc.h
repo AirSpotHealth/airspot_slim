@@ -4,6 +4,9 @@
 #include <stdbool.h>
 #include <stdint.h>
 void software_asc_init(void);
+/* Exclude the first 3 minutes after boot/reset from automatic observations.
+ * Live readings and explicitly requested manual calibration are unaffected. */
+void software_asc_sensor_restarted(void);
 int software_asc_set_enabled(uint8_t enabled);
 int software_asc_set_target(uint16_t target);
 void software_asc_set_check_duration(uint16_t seconds);

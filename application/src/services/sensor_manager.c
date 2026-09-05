@@ -101,7 +101,10 @@ static int pause_stcc4_asc(void)
     if (!ret && !(verification.status & STCC4_STATUS_TESTING_MODE)) ret = -EACCES;
   }
   asc_diagnostic.error = ret;
-  if (!ret) asc_diagnostic.stage = 5;
+  if (!ret) {
+    asc_diagnostic.stage = 5;
+    software_asc_sensor_restarted();
+  }
   if (ret) LOG_ERR("STCC4 ASC pause/verification failed: %d", ret);
   else LOG_INF("STCC4 internal ASC verified paused (status bit 2)");
   return ret;

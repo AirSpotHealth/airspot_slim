@@ -34,7 +34,7 @@ struct k_work {int unused;};
 struct k_work_delayable {int unused;};
 struct k_work_sync {int unused;};
 static int pause_calls, resume_calls, reset_calls, restart_calls, pause_error, read_error, reset_error, save_error;
-static int ambient_error;
+static int ambient_error, sensor_restart_notifications;
 static int64_t now=1;
 static bool internal_paused, manual, callback_valid;
 static uint8_t auto_flag, power=2;
@@ -66,6 +66,7 @@ static bool qi_charger_is_charging(void) {return false;}
 static void ble_service_update_battery_level(uint8_t p) {}
 static uint8_t user_settings_get_power_mode(void) {return power;}
 static int user_settings_set_co2_correction(int16_t v) {if(!save_error)correction=v;return save_error;}
+static void software_asc_sensor_restarted(void) {sensor_restart_notifications++;}
 static void software_asc_end_manual(void) {manual=false;restart_calls++;}
 static int software_asc_begin_manual(void) {if(manual)return -EBUSY;manual=true;return 0;}
 int stcc4_init(void) {return 0;}
@@ -104,7 +105,7 @@ int main(void) {
     assert(sensor_manager_reset_co2_sensor()==0 && internal_paused && correction==0);
     assert(sensor_manager_measure_now()==0 && callback_valid);
   }
-  assert(pause_calls==4 && resume_calls==0);
+  assert(pause_calls==4 && resume_calls==0 && sensor_restart_notifications==4);
   initialized=false;ambient_error=-EIO;assert(sensor_manager_init()==-EIO);
   ambient_error=0;
   initialized=false;pause_error=-EIO;internal_paused=false;
