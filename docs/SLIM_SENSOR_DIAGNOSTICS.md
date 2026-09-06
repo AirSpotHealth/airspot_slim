@@ -447,3 +447,24 @@ later boots (SWRESET stuck), and it does not produce measurements. Nothing in th
 flash timing experiment establishes the cause of the earlier CO2 disagreement.
 0.16.8/0.16.9 are diagnostic builds with logging disabled; they must not be
 represented as completed production releases or recovered measurement devices.
+
+### Non-erasing power-isolation option identified
+
+Rev 3A schematic sheet 7 connects U6 (LPS22HH) VDD/VDDIO directly to +3V0,
+with C25/C42 decoupling; there is no independent MCU-controlled sensor switch.
+A measurement at C25/C42 would check local supply delivery, which J-Link VTref
+cannot establish. The user was asked whether a meter is available.
+
+Further inspection of sheet 3 found nPM1100 SHPACT connected to NRF_NPM_SHPACT;
+sheet 5 maps that net to P2.03 / TP41. Sheet 8 connects the button to SHPHLD.
+Nordic's nPM1100 specification permits entering ship mode with SHPACT high for
+at least 200 ms while VBUS is absent and SHPHLD high, then exiting through a
+button press pulling SHPHLD low for at least 200 ms (or applying VBUS). This can
+isolate battery power electronically without unplugging the battery connector.
+It is different from MCU System OFF, which does not remove the sensor supply.
+
+Read-only J-Link preflight found P2.03 configured as input (PIN_CNF=2), output
+bit 3 low, and direction bit 3 clear. The diagnostic flash remains write-protected.
+No ship-mode GPIO write has been made yet: user coordination is pending so they
+can perform the physical wake step. J-Link may also need disconnecting briefly
+after power-off to eliminate possible back-power through debug signals.
