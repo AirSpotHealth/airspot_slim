@@ -395,3 +395,55 @@ then restart. No data erase is required. User has been asked whether the battery
 connector is accessible. Captures/scripts are saved under
 `local_backups/slim-overnight-20260906/`, including the original RAM inspection,
 0.16.6 restart log, 0.16.7 register trace and installation verification.
+
+### Raw history verification supersedes the earlier record-count inference
+
+The user declined battery disconnection and asked for persisted readings instead.
+Downloading half-pages 0–7 with 0.16.7 returned zero payloads despite the current
+half-page pointer being 6. The earlier statement that all 96 records were intact
+was explicitly corrected: only the metadata count had been verified.
+
+0.16.8 is a read-only forensic candidate. CONFIG_AIRSPOT_FORENSIC_HISTORY blocks
+external-flash program/erase commands in the driver's write-enable function;
+a runtime harness proves none of the mutation entry points reaches SPI. At boot
+it dumps 0x64000–0x65fff in 32-byte reads and compares 128-byte read prefixes.
+All 256 reads succeeded and all 64 prefix comparisons matched. Metadata contains
+four CRC-valid entries: counts 0, 32, 64, 96 and timestamps 0, 9626, 19227, 28827.
+These are uptime-scale values without a calendar date and cannot establish the
+exact overnight stop time or prove battery depletion. The entire first history
+sector (4096 bytes) is FF. No CO2 values were recovered from it.
+
+The flash datasheet (AT25XE161D Rev M sections 4.9, 6.34 and 7.5) identifies a
+wake timing mismatch: B9 selects UDPD when SR4.PDM=0. Resume is up to 200 us,
+and up to 1200 us after short sleeps. The previous 50-us caller delays were not
+sufficient. Candidate 0.16.9 moves a 2000-us wait into spi_flash_power_up itself,
+and retains the external-flash mutation block. Its read-only physical probe
+returned SR4=01 (PDM=0). Both 10-ms and 600-ms sleep experiments gave:
+
+| Delay after AB wake command | Metadata first four bytes |
+| --- | --- |
+| 50 us | 00000000 (incorrect) |
+| 200 us | 55aa55aa (correct) |
+| 1200 us | 55aa55aa (correct) |
+| 2000 us | 55aa55aa (correct) |
+
+This directly reproduces the history retrieval defect. The same early-access
+bug can also affect record programming; the old driver checks SPI transfer
+success without verifying write-enable acceptance or programmed bytes. That is
+a plausible explanation for advancing counters with blank history, but this
+read-only experiment does not prove the original write/erase chronology.
+No destructive write test was used to fill that evidence gap.
+
+After the wake fix, all BLE history pages correctly returned FF (with protocol
+reserved bytes normalized to zero), matching the blank raw sector. The 8192-byte
+metadata+history dump before/after the diagnostic update compares identical,
+SHA256 164ce06ffbacb86a07d4a5943c0cfff7c45f40190bedc0326b9fe1de602f7058.
+Settings readback remained identical. 0.16.9 was installed through J-Link with
+backup in local_backups/production-603003276-20260906T045240082187Z/.
+The production-wiring signed build and 50 tests passed.
+
+The pressure sensor still shows a separate startup fault: CTRL_REG2 read 14 on
+later boots (SWRESET stuck), and it does not produce measurements. Nothing in the
+flash timing experiment establishes the cause of the earlier CO2 disagreement.
+0.16.8/0.16.9 are diagnostic builds with logging disabled; they must not be
+represented as completed production releases or recovered measurement devices.

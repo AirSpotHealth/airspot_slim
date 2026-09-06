@@ -621,6 +621,7 @@ static void dump_history_readonly(void) {
     k_msleep(25); /* Allow RTT host to drain without dropping the capture. */
   }
   LOG_INF("FORENSIC: raw capture complete");
+  spi_flash_forensic_wake_probe();
 }
 #endif
 

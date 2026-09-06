@@ -1,0 +1,30 @@
+{
+  "soc": "nrf54l15",
+  "layout": "mcuboot-internal-v1",
+  "version": [
+    0,
+    16,
+    9,
+    0
+  ],
+  "public_key_sha256": "d0611f49c7136eb88621d6212b6f1ba445b0997895b472c2eec15fd5ca5a3b25",
+  "image_hash": "3f594cde46f53137f86acd1b88b3a71d79ca5974ef36fb3ded2a7fdd18848998",
+  "sha256": {
+    "application/zephyr/airspot_slim.bin": "8603c384fdbcb147d9db447d2fc993bac417f4df7556eb60cabc4140032944ff",
+    "application/zephyr/airspot_slim.hex": "c44a79d0c86468bd028681db5f1f0b4931c8b6a00e6f9fd6d5526a143bfd7b31",
+    "application/zephyr/airspot_slim.elf": "e473869407b2e7671c21d307eb1e82bca12eb5885594b43a56bdd13cd2d68693",
+    "application/zephyr/.config": "dd0e2846bd08a425c5082279077b1850a76011567f3ca0a19a872b17cf63492f",
+    "application/zephyr/zephyr.dts": "338c53cbf8918e715a8799c33e2831bb049e70021c5ae46a71170d9c3d283d99",
+    "application/zephyr/runners.yaml": "39e8cdf201435762247f03e8976bc20252790c45331eb052d7d1b036c9a2d1f8",
+    "mcuboot/zephyr/autogen-pubkey.c": "86eb1007396fb4ca000cc8ab389fdc8ccba4242d6285e75cb3901d17beb50fc0",
+    "mcuboot/zephyr/zephyr.bin": "c60d2a926e441db68d04f77d60be7d419069c851408efd5a8d40c7906136aead",
+    "mcuboot/zephyr/zephyr.hex": "aa55fbfd06a8c8bff6f7f71e407ab0209815f3a64d019ccdbe70bf60ade40f65",
+    "mcuboot/zephyr/zephyr.elf": "443eb5bd6c6b2b1ea8e378b6f25b594e64583559c510588362734ac7beca1e5e",
+    "mcuboot/zephyr/.config": "27a8cb6707d9c06c1a213fa6f8f93549bb4c40190bbee4468164545b4f399550",
+    "mcuboot/zephyr/zephyr.dts": "b5b9d52005bed05573090fda7a6b4df9e6eee82334c2ef2ad446615b707a2f91",
+    "mcuboot/zephyr/runners.yaml": "b7facd6b1ae4080b760bc4752527d4acd28e463f139cce50f16afd0a1674fd45",
+    "application/zephyr/airspot_slim.signed.bin": "933f2bbd2cae2353a58a78c2a7b273ed37f4c9bc0f43516d57dfe9a2851a8a2c",
+    "application/zephyr/airspot_slim.signed.hex": "62f85f18fcf0f8d9fc40ade4e9a9ce318539c841a32ff385a9e8129c45d8afb3",
+    "airspot_slim_dfu.zip": "086992b9344de0dd6b8061f0897a9b75f476c02f0a4f0bac2a91ba069d71d6ad"
+  }
+}
