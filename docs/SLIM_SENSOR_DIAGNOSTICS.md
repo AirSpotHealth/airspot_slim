@@ -339,3 +339,59 @@ Evidence is in `local_backups/slim-divergence-20260905/`:
 `high_mode_final_notifications.py`, `high-mode-final-one-second.jsonl`,
 `summarize_high_mode.py` and `high-mode-final-summary.json`. These local diagnostic
 captures are not included in the release archive.
+
+## 2026-09-06: overnight follow-up blocked by pressure startup failure
+
+Only Screen and subsequently 81A9DC were reachable. C58CC9 remained absent.
+Screen read 491 ppm in the first capture and 527–528 ppm later; no valid paired
+12-hour CO2 result was obtained. 81A9DC returned the 0xffff unavailable sentinel,
+not an actual high CO2 value. Its cached measurement battery packet was zero
+because no measurement had completed; direct battery-driver values were 3928 mV
+at the captured initial boot, 4048 mV later, and 4123 mV at a normal restart.
+The user confirmed removing it from the charger, explaining the later charging
+flag. This is not evidence that it ran out of battery overnight.
+
+J-Link read-only RAM inspection on 0.16.6 found diagnostic stage 6 / -ERANGE,
+one compensation failure, zero successes and no valid CO2 sample. SHT40 cached
+values were 27.73175 C / 28.34806% RH; LPS22HH cached pressure was zero and its
+internal temperature was 0.1 C. The earlier log recorded a debug-related reset
+(Zephyr RESET_DEBUG, 0x20), so uninterrupted overnight operation is unverified.
+A deliberately requested normal MCU system reset also reproduced the failure.
+No factory reset, settings reset, STCC4 reset or FRC command was sent.
+
+The pressure driver had concrete defects: ignored trigger/configuration errors,
+continued to read output after readiness timed out, and read pressure before
+temperature despite the LPS22HH BDU requirement that PRESS_OUT_H be last.
+Candidate 0.16.7 adds honest error propagation, the documented output read order,
+range checking, register snapshots, and one bounded first-sample recovery through
+pressure-sensor volatile reset/reconfiguration. Low-noise configuration is made
+in power-down mode. There is no change to STCC4 calibration or settings/history.
+The signed production build and 48 tests passed, including a register-level
+runtime harness for readiness failures, stale-output rejection, reset/configuration
+errors and bounded recovery. These tests establish driver behavior, not physical
+sensor health.
+
+OTA writes are rejected by the existing health gate when startup has failed.
+The connected 81A9DC was therefore installed through the existing J-Link
+preserve-settings path. Full RRAM backup and post-install readback are in
+`local_backups/production-603003276-20260906T043544754645Z/`. The settings region
+0x15c000–0x165000 compares byte-for-byte identical before/after. The separate
+external flash was not erased; both boots recovered the same 96 records and
+metadata sequence 4. Candidate 0.16.7 remains diagnostic: installation does not
+mean startup recovered or that MCUboot health checks passed.
+
+Physical 0.16.7 trace: WHO_AM_I reads B3 and all diagnostic register reads return
+success. Before configuration CTRL_REG1/CTRL_REG2 are 00/10; after requested
+02/12 writes they still read 00/10, and STATUS stays 00. The first measurement
+returns -ETIMEDOUT (Zephyr -116). The bounded volatile-reset attempt also times
+out. Thus the fault persists below the CO2 compensation algorithm: the pressure
+sensor/control interface does not reach a usable measurement state. A correct
+chip ID alone does not demonstrate a healthy sensor. These observations do not
+separate a stuck powered state, power integrity, bus behavior and permanent
+hardware damage, nor do they explain the previous CO2 disagreement.
+
+The next diagnostic is a physical power removal (battery, charger and J-Link),
+then restart. No data erase is required. User has been asked whether the battery
+connector is accessible. Captures/scripts are saved under
+`local_backups/slim-overnight-20260906/`, including the original RAM inspection,
+0.16.6 restart log, 0.16.7 register trace and installation verification.

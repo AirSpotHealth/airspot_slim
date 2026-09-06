@@ -1,0 +1,98 @@
+"""Compile the actual pressure driver against a register-level I2C fake."""
+from pathlib import Path
+import re
+import subprocess
+import tempfile
+import unittest
+
+ROOT = Path(__file__).resolve().parents[1]
+
+class PressureRuntimeTests(unittest.TestCase):
+    def test_readiness_recovery_and_coherent_reads(self):
+        source = (ROOT / 'application/src/drivers/lps22hh.c').read_text()
+        source = re.sub(r'^#include .*$', '', source, flags=re.M)
+        prelude = r'''
+#include <assert.h>
+#include <errno.h>
+#include <math.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <string.h>
+#include <drivers/lps22hh.h>
+#define LOG_MODULE_REGISTER(...)
+#define LOG_INF(...) ((void)0)
+#define LOG_WRN(...) ((void)0)
+#define LOG_ERR(...) ((void)0)
+#define LOG_DBG(...) ((void)0)
+#define I2C_ADDR_LPS22HH 0x5d
+static uint8_t regs[256];
+static bool stuck, recoverable, boot_stuck, reset_stuck;
+static int fail_write = -1, fail_read = -1, resets, output_reads, elapsed;
+static void k_msleep(int ms) {elapsed += ms;}
+static bool i2c_bus_is_ready(void) {return true;}
+static int i2c_bus_write(uint8_t addr, const uint8_t *b, size_t len) {
+ assert(addr == 0x5d && len == 2);
+ if (b[0] == fail_write) return -EIO;
+ regs[b[0]] = b[1];
+ if (b[0] == 0x11 && (b[1] & 4)) {
+  resets++;
+  if (!reset_stuck) {
+   memset(regs, 0, sizeof(regs)); regs[0x0f]=0xb3;
+   if(recoverable)stuck=false;
+  }
+ }
+ if (b[0] == 0x11 && (b[1] & 0x80) && !boot_stuck) regs[0x11] &= ~0x80;
+ if (b[0] == 0x11 && (b[1] & 1)) regs[0x27] = stuck ? 0 : 3;
+ return 0;
+}
+static int i2c_bus_write_read(uint8_t addr,const uint8_t *w,size_t wn,uint8_t *b,size_t n) {
+ assert(addr==0x5d && wn==1);
+ if (*w == fail_read) return -EIO;
+ if (*w == 0x2b) {assert(n==2);output_reads++;b[0]=0xc4;b[1]=9;return 0;}
+ if (*w == 0x28) {
+  assert(n==3 && (output_reads%2)==1); /* Temperature must precede pressure. */
+  output_reads++;b[0]=0;b[1]=0x50;b[2]=0x3f;return 0; /* 1013 hPa */
+ }
+ memcpy(b,regs+*w,n);return 0;
+}
+'''
+        main = r'''
+static void fresh(void) {
+ memset(regs,0,sizeof(regs));regs[0xf]=0xb3;
+ initialized=false;startup_recovery_attempted=false;has_valid_sample=false;
+ last_data=(lps22hh_data_t){.pressure=0,.temperature=NAN};
+ stuck=recoverable=boot_stuck=reset_stuck=false;
+ fail_write=fail_read=-1;resets=output_reads=elapsed=0;
+}
+int main(void) {
+ lps22hh_data_t d={.pressure=777,.temperature=22};
+ fresh();assert(lps22hh_init()==0);assert(lps22hh_read(&d)==0);
+ assert(d.pressure==1013 && d.temperature==25 && output_reads==2 && resets==0);
+ /* Failure after successful operation must not reset/retry or publish stale data. */
+ stuck=true;d.pressure=777;assert(lps22hh_read(&d)==-ETIMEDOUT);
+ assert(d.pressure==777 && lps22hh_get_pressure()==1013 && output_reads==2 && resets==0);
+ stuck=false;fail_write=0x11;assert(lps22hh_read(&d)==-EIO);assert(output_reads==2);
+ fail_write=-1;fail_read=0x27;assert(lps22hh_read(&d)==-EIO);assert(output_reads==2);
+ /* A first-sample timeout gets exactly one bounded volatile reset. */
+ fresh();stuck=recoverable=true;assert(lps22hh_init()==0);assert(lps22hh_read(&d)==0);
+ assert(resets==1 && d.pressure==1013 && elapsed<1500);
+ fresh();stuck=true;assert(lps22hh_init()==0);d.pressure=777;
+ assert(lps22hh_read(&d)==-ETIMEDOUT && resets==1 && output_reads==0 && d.pressure==777);
+ assert(lps22hh_read(&d)==-ETIMEDOUT && resets==1);
+ /* Configuration and reset failures cannot be reported as success. */
+ fresh();boot_stuck=true;assert(lps22hh_init()==-ETIMEDOUT && !initialized);
+ fresh();fail_write=0x10;assert(lps22hh_init()==-EIO && !initialized);
+ fresh();fail_write=0x11;assert(lps22hh_init()==-EIO && !initialized);
+ fresh();fail_read=0x11;assert(lps22hh_init()==-EIO && !initialized);
+ fresh();reset_stuck=true;assert(lps22hh_soft_reset()==-ETIMEDOUT);
+ return 0;
+}
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            c = Path(tmp) / 'pressure.c'
+            exe = Path(tmp) / 'pressure'
+            c.write_text(prelude + source + main)
+            subprocess.run(['cc', '-std=c11', '-Werror=implicit-function-declaration',
+                            '-I', str(ROOT/'application/include'), str(c), '-o', str(exe)], check=True)
+            subprocess.run([str(exe)], check=True)
