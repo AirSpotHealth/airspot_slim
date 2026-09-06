@@ -74,6 +74,9 @@ static int spi_flash_transact(const uint8_t *tx, size_t tx_len, uint8_t *rx,
 }
 
 static int spi_flash_write_enable(void) {
+#if defined(CONFIG_AIRSPOT_FORENSIC_HISTORY)
+  return -EROFS;
+#endif
   uint8_t cmd = CMD_WRITE_ENABLE;
   return spi_flash_transact(&cmd, 1, NULL, 0);
 }

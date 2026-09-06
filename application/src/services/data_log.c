@@ -594,6 +594,36 @@ static void set_store_area_from_half_page(store_area_t *area,
  * =============================================================================
  */
 
+#if defined(CONFIG_AIRSPOT_FORENSIC_HISTORY)
+static void dump_history_readonly(void) {
+  uint8_t small[32], large[128];
+  LOG_INF("FORENSIC: external flash writes/erases disabled");
+  for (uint32_t addr = FLASH_METADATA_OFFSET;
+       addr < FLASH_HISTORY_OFFSET + FLASH_SECTOR_SIZE; addr += sizeof(small)) {
+    memset(small, 0xa5, sizeof(small));
+    int ret = spi_flash_read(addr, small, sizeof(small));
+    char hex[65];
+    const char digits[] = "0123456789abcdef";
+    for (size_t i = 0; i < sizeof(small); i++) {
+      hex[i * 2] = digits[small[i] >> 4];
+      hex[i * 2 + 1] = digits[small[i] & 15];
+    }
+    hex[64] = 0;
+    LOG_INF("RAWFLASH %06x rc=%d %s", addr, ret, hex);
+    if (!(addr % 128)) {
+      memset(large, 0x5a, sizeof(large));
+      int rc = spi_flash_read(addr, large, sizeof(large));
+      LOG_INF("RAWCOMPARE %06x rc=%d same_prefix=%d first=%02x%02x%02x%02x",
+              addr, rc, !memcmp(small, large, sizeof(small)),
+              large[0], large[1], large[2], large[3]);
+    }
+    watchdog_feed();
+    k_msleep(25); /* Allow RTT host to drain without dropping the capture. */
+  }
+  LOG_INF("FORENSIC: raw capture complete");
+}
+#endif
+
 int data_log_init(void) {
   if (initialized) {
     return 0;
@@ -609,6 +639,10 @@ int data_log_init(void) {
   /* Wake flash from power-down if needed */
   spi_flash_power_up();
   k_msleep(1);
+
+#if defined(CONFIG_AIRSPOT_FORENSIC_HISTORY)
+  dump_history_readonly();
+#endif
 
   /* Recover existing data log */
   ret = data_log_recover();
