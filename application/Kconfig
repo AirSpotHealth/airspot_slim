@@ -61,12 +61,4 @@ config AIRSPOT_POWER_OFF_ENABLED
 	  Enable after qualification of release-before-off and charger/hold wake.
 	  Wake requires the existing five-second hold while on the Qi charger.
 
-config AIRSPOT_FORENSIC_HISTORY
-	bool "Read-only raw history capture over RTT"
-	default n
-	help
-	  Diagnostic only: reject all writes/erases through the external flash
-	  driver and dump metadata plus the first history sector at startup.
-
 endmenu
-

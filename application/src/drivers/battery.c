@@ -77,7 +77,11 @@ static const struct gpio_dt_spec adc_en_gpio =
 #warning "Battery ADC enable GPIO not defined in device tree"
 #endif
 
+K_MUTEX_DEFINE(battery_mutex);
 static bool initialized = false;
+static bool voltage_valid;
+static int64_t voltage_time;
+static uint16_t unfiltered_mv;
 static int32_t last_raw_adc = 0;
 static int32_t last_adc_mv = 0;
 
@@ -198,7 +202,8 @@ static int32_t adc_raw_to_mv(int32_t raw_adc) {
   return val_mv;
 }
 
-uint16_t battery_read_voltage_mv(void) {
+static uint16_t read_voltage_locked(void) {
+  voltage_valid = false;
   int32_t raw_sum = 0;
   int32_t raw_avg;
   int32_t adc_mv;
@@ -277,10 +282,38 @@ uint16_t battery_read_voltage_mv(void) {
                      EMA_ALPHA_DEN;
   }
 
+  unfiltered_mv = (uint16_t)battery_mv;
+  voltage_time = k_uptime_get();
+  voltage_valid = true;
+
   LOG_DBG("ADC: raw_avg=%d, adc_mv=%d, batt_mv=%d, ema_mv=%d (samples=%d)",
           raw_avg, adc_mv, battery_mv, ema_battery_mv, valid_samples);
 
   return (uint16_t)ema_battery_mv;
+}
+
+uint16_t battery_read_voltage_mv(void) {
+  k_mutex_lock(&battery_mutex, K_FOREVER);
+  uint16_t mv = read_voltage_locked();
+  k_mutex_unlock(&battery_mutex);
+  return mv;
+}
+
+int battery_get_ota_voltage(uint16_t *mv) {
+  if (!mv) return -EINVAL;
+  *mv = 0;
+  /* MCUmgr's worker may wait briefly for a sensor read, never indefinitely. */
+  if (k_mutex_lock(&battery_mutex, K_MSEC(100)) != 0) return -EBUSY;
+  if (!voltage_valid || k_uptime_get() - voltage_time >= 5000) {
+    (void)read_voltage_locked();
+  }
+  int rc = voltage_valid ? 0 : -EIO;
+  if (!rc) {
+    /* A falling supply must not be hidden by the display's EMA filter. */
+    *mv = MIN(unfiltered_mv, (uint16_t)ema_battery_mv);
+  }
+  k_mutex_unlock(&battery_mutex);
+  return rc;
 }
 
 uint8_t battery_get_percentage(void) {

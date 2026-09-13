@@ -74,9 +74,6 @@ static int spi_flash_transact(const uint8_t *tx, size_t tx_len, uint8_t *rx,
 }
 
 static int spi_flash_write_enable(void) {
-#if defined(CONFIG_AIRSPOT_FORENSIC_HISTORY)
-  return -EROFS;
-#endif
   uint8_t cmd = CMD_WRITE_ENABLE;
   return spi_flash_transact(&cmd, 1, NULL, 0);
 }
@@ -308,31 +305,3 @@ bool spi_flash_is_busy(void) {
   spi_flash_transact(&cmd, 1, &status, 1);
   return (status & STATUS_WIP) != 0;
 }
-
-#if defined(CONFIG_AIRSPOT_FORENSIC_HISTORY)
-void spi_flash_forensic_wake_probe(void) {
-  extern void watchdog_feed(void);
-  uint8_t tx[4] = {0x65, 0x04, 0, 0}, rx[4] = {0};
-  struct spi_buf tb = {.buf=tx, .len=4}, rb = {.buf=rx, .len=4};
-  struct spi_buf_set ts = {.buffers=&tb, .count=1}, rs = {.buffers=&rb, .count=1};
-  int ret = spi_transceive_dt(&spi_spec, &ts, &rs);
-  LOG_INF("WAKEPROBE SR4=0x%02x rc=%d", rx[3], ret);
-  const uint32_t delays[] = {50, 200, 1200, 2000};
-  for (int hold = 0; hold < 2; hold++) {
-    for (size_t i = 0; i < sizeof(delays)/sizeof(delays[0]); i++) {
-      uint8_t data[32] = {0};
-      spi_flash_power_up();
-      ret = spi_flash_power_down();
-      k_msleep(hold ? 600 : 10);
-      uint8_t cmd = CMD_RELEASE_PD;
-      if (!ret) ret = spi_flash_transact(&cmd, 1, NULL, 0);
-      k_usleep(delays[i]);
-      if (!ret) ret = spi_flash_read(0x64000, data, sizeof(data));
-      LOG_INF("WAKEPROBE hold_ms=%d delay_us=%u rc=%d magic=%02x%02x%02x%02x",
-              hold ? 600 : 10, delays[i], ret, data[0], data[1], data[2], data[3]);
-      watchdog_feed();
-    }
-  }
-  spi_flash_power_up();
-}
-#endif

@@ -81,6 +81,12 @@ int main(void) {
  assert(lps22hh_read(&d)==-ETIMEDOUT && resets==1 && output_reads==0 && d.pressure==777);
  assert(lps22hh_read(&d)==-ETIMEDOUT && resets==1);
  /* Configuration and reset failures cannot be reported as success. */
+ /* Power-restoration failure: unreadable identity must not initialize or reset
+  * the sensor, and a later successful identity read can retry initialization. */
+ fresh();fail_read=0x0f;assert(lps22hh_init()==-EIO && !initialized);
+ assert(resets==0 && output_reads==0);
+ fail_read=-1;assert(lps22hh_init()==0 && lps22hh_read(&d)==0);
+ assert(d.pressure==1013 && resets==0);
  fresh();boot_stuck=true;assert(lps22hh_init()==-ETIMEDOUT && !initialized);
  fresh();fail_write=0x10;assert(lps22hh_init()==-EIO && !initialized);
  fresh();fail_write=0x11;assert(lps22hh_init()==-EIO && !initialized);

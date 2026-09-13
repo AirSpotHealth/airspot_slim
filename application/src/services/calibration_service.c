@@ -72,9 +72,8 @@ static void calibration_complete(void) {
   /* Never acquire the sensor mutex while holding calib_mutex: measurements
    * acquire those locks in the opposite order when delivering a sample. */
   if (restore_mode) {
-    int mode_rc = user_settings_set_power_mode(previous_mode);
-    if (!mode_rc) sensor_manager_set_power_mode(previous_mode);
-    else if (!rc) rc = mode_rc;
+    int mode_rc = sensor_manager_change_power_mode(previous_mode);
+    if (!rc) rc = mode_rc;
   }
   k_mutex_lock(&calib_mutex, K_FOREVER);
   calib_active = false;
@@ -128,12 +127,6 @@ int calibration_service_start(uint16_t target_ppm) {
 
   if (power_mode == 0) {
     /* On-demand -> force mid mode for calibration sampling */
-    rc = user_settings_set_power_mode(2);
-    if (rc) {
-      software_asc_end_manual();
-      k_mutex_unlock(&calib_mutex);
-      return rc;
-    }
     power_mode = 2;
     calib_power_mode_changed = true;
   }
@@ -144,7 +137,18 @@ int calibration_service_start(uint16_t target_ppm) {
   bool change_mode = calib_power_mode_changed;
   uint16_t remaining = calib_remaining_sec;
   k_mutex_unlock(&calib_mutex);
-  if (change_mode) sensor_manager_set_power_mode(2);
+  if (change_mode) {
+    rc = sensor_manager_change_power_mode(2);
+    if (rc) {
+      (void)user_settings_set_power_mode(calib_prev_power_mode);
+      software_asc_end_manual();
+      k_mutex_lock(&calib_mutex, K_FOREVER);
+      calib_active = false;
+      calib_power_mode_changed = false;
+      k_mutex_unlock(&calib_mutex);
+      return rc;
+    }
+  }
 
   LOG_INF("Calibration started: target=%u duration=%us mode=%u", target_ppm,
           remaining, power_mode);

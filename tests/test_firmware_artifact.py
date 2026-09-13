@@ -38,6 +38,11 @@ class FirmwareArtifactTests(unittest.TestCase):
         self.assertIn(before, text)
         path.write_text(text.replace(before, after))
 
+    def test_reject_bulk_slot_preparation(self):
+        self.edit("application/zephyr/.config", "CONFIG_IMG_ERASE_PROGRESSIVELY=y", "# CONFIG_IMG_ERASE_PROGRESSIVELY is not set")
+        with self.assertRaisesRegex(ValueError, "bulk slot preparation"):
+            artifact.validate_build(self.build)
+
     def test_valid_signed_build(self):
         version = dict(line.split('=', 1) for line in
                        (ROOT / 'application/VERSION').read_text().splitlines() if '=' in line)
@@ -88,43 +93,88 @@ class FirmwareArtifactTests(unittest.TestCase):
 
 
 class ProvisionTests(unittest.TestCase):
-    def test_known_factory_image_and_modified_settings(self):
-        from unittest.mock import patch
-        before = bytearray(b'\xff' * provision.RRAM_SIZE)
-        before[:7] = b'factory'
-        digest = hashlib.sha256(before[:provision.APP_MEMORY_END]).hexdigest()
-        with patch.object(provision, 'FACTORY_MAIN_SHA256', digest):
-            image, source = provision.prepare_image(bytes(before), b'boot', b'app', False)
-            self.assertEqual(source, provision.SETTINGS_START)
-            self.assertEqual(image[provision.SETTINGS_START:], b'\xff' * provision.SETTINGS_SIZE)
-            before[provision.SETTINGS_START] = 0
-            with self.assertRaisesRegex(ValueError, 'Unknown installed'):
-                provision.prepare_image(bytes(before), b'boot', b'app', False)
-
-    def test_preserve_settings_and_clear_pending_images(self):
-        boot, app = b'bootloader', b'signed app'
-        before = bytearray(b'\xff' * provision.RRAM_SIZE)
-        before[:len(boot)] = boot
-        before[0xb6000:0xb6010] = b'old staged image'
+    def test_any_installed_firmware_preserves_current_settings(self):
         settings = bytes(range(256)) * (provision.SETTINGS_SIZE // 256)
-        before[provision.SETTINGS_START:provision.APP_MEMORY_END] = settings
-        image, source = provision.prepare_image(bytes(before), boot, app, True)
-        self.assertEqual(source, provision.SETTINGS_START)
+        for prefix in (b'old boot', b'unknown!', b'\x00' * 8, b'\xff' * 8):
+            before = bytearray(b'\xff' * provision.RRAM_SIZE)
+            before[:len(prefix)] = prefix
+            before[provision.SETTINGS_START:provision.APP_MEMORY_END] = settings
+            image, source = provision.prepare_image(bytes(before), b'new boot', b'app')
+            self.assertEqual(source, provision.SETTINGS_START)
+            self.assertEqual(image[:8], b'new boot')
+            self.assertEqual(image[0x10000:0x10003], b'app')
+            self.assertEqual(image[provision.SETTINGS_START:], settings)
+            self.assertEqual(image[0xb6000:0x15c000], b'\xff' * 0xa6000)
+
+    def test_explicit_legacy_migration(self):
+        before = bytearray(b'\xff' * provision.RRAM_SIZE)
+        settings = b'\x42' * provision.SETTINGS_SIZE
+        before[0x74000:0x74000 + provision.SETTINGS_SIZE] = settings
+        image, source = provision.prepare_image(bytes(before), b'boot', b'app', 0x74000)
+        self.assertEqual(source, 0x74000)
         self.assertEqual(image[provision.SETTINGS_START:], settings)
-        self.assertEqual(image[0xb6000:0x15c000], b'\xff' * 0xa6000)
 
-    def test_refuse_unknown_existing_firmware(self):
-        with self.assertRaisesRegex(ValueError, 'Unknown installed'):
-            provision.prepare_image(b'\x00' * provision.RRAM_SIZE, b'boot', b'app', False)
+    def test_reset_settings(self):
+        image, source = provision.prepare_image(b'\x42' * provision.RRAM_SIZE,
+                                                b'boot', b'app', reset_settings=True)
+        self.assertIsNone(source)
+        self.assertEqual(image[provision.SETTINGS_START:], b'\xff' * provision.SETTINGS_SIZE)
 
-    def test_blank_factory_device(self):
-        image, source = provision.prepare_image(b'\xff' * provision.RRAM_SIZE, b'boot', b'app', False)
+    def test_blank_device(self):
+        image, source = provision.prepare_image(b'\xff' * provision.RRAM_SIZE, b'boot', b'app')
         self.assertEqual(source, provision.SETTINGS_START)
         self.assertEqual(image[:4], b'boot')
 
-    def test_update_refuses_unprovisioned_device(self):
-        with self.assertRaisesRegex(ValueError, 'Unknown installed'):
-            provision.prepare_image(b'\xff' * provision.RRAM_SIZE, b'boot', b'app', True)
+    def test_incomplete_backup_and_invalid_ranges_rejected(self):
+        with self.assertRaisesRegex(ValueError, 'Incomplete'):
+            provision.prepare_image(b'bad', b'boot', b'app')
+        for source in (-1, provision.APP_MEMORY_END):
+            with self.assertRaisesRegex(ValueError, 'Settings source'):
+                provision.prepare_image(b'\xff' * provision.RRAM_SIZE, b'boot', b'app', source)
+        for boot, app in ((b'x' * 0x10001, b'app'), (b'boot', b'x' * 0xa6001)):
+            with self.assertRaisesRegex(ValueError, 'partition'):
+                provision.prepare_image(b'\xff' * provision.RRAM_SIZE, boot, app)
+
+    def test_full_install_unknown_firmware_without_history(self):
+        import os
+        import struct
+        from unittest.mock import patch
+        for reset in (False, True):
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                build = root / 'build'
+                for name, data in [('mcuboot/zephyr/zephyr.bin', b'new boot'),
+                                   ('application/zephyr/airspot_slim.signed.bin', b'app'),
+                                   ('firmware-artifact.json', b'{"sha256": {}}')]:
+                    path = build / name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(data)
+                before = b'\x42' * provision.RRAM_SIZE
+                calls = []
+                def device(commands, serial, backup):
+                    calls.append(commands)
+                    if any('ficr.bin' in command for command in commands):
+                        (backup / 'ficr.bin').write_bytes(struct.pack('<5I', 0x54b15, 0, 0, 256, 1524))
+                        (backup / 'before_rram.bin').write_bytes(before)
+                    if any('after_rram.bin' in command for command in commands):
+                        (backup / 'after_rram.bin').write_bytes(
+                            (backup / 'install.bin').read_bytes() + before[provision.APP_MEMORY_END:])
+                argv = ['provision.py', str(build)] + (['--reset-settings'] if reset else [])
+                with patch.object(provision, 'ROOT', root), \
+                     patch.object(provision, 'validate_build', return_value={'sha256': {}}), \
+                     patch.object(provision, 'jlink', side_effect=device), \
+                     patch.dict(os.environ, {'AIRSPOT_JLINK_SERIAL': '123'}), \
+                     patch.object(sys, 'argv', argv):
+                    provision.main()
+                backup = next((root / 'local_backups').glob('production-*'))
+                self.assertEqual((backup / 'before_rram.bin').read_bytes(), before)
+                self.assertEqual((backup / 'settings.bin').read_bytes(), b'\x42' * provision.SETTINGS_SIZE)
+                metadata = json.loads((backup / 'backup.json').read_text())
+                self.assertEqual(metadata['settings_reset'], reset)
+                image = (backup / 'install.bin').read_bytes()
+                self.assertEqual(image[provision.SETTINGS_START:],
+                                 (b'\xff' if reset else b'\x42') * provision.SETTINGS_SIZE)
+                self.assertEqual(calls[-1], ['r', 'g'])
 
 
 if __name__ == '__main__': unittest.main()

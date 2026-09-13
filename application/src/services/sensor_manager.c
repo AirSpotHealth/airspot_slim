@@ -21,6 +21,7 @@
 #include <services/ble_service.h>
 #include <services/led_indicator.h>
 #include <services/sensor_manager.h>
+#include <services/health_service.h>
 
 LOG_MODULE_REGISTER(sensor_mgr, CONFIG_AIRSPOT_LOG_LEVEL);
 
@@ -53,8 +54,6 @@ static struct k_work_delayable sensor_work;
 static uint32_t measurement_interval_ms = DEFAULT_INTERVAL_MS;
 static bool running = false;
 static int64_t next_report_ms;
-static sensor_timing_diagnostic_t timing;
-static int64_t last_compensation_ms;
 static bool compensation_failed_since_report;
 static bool initialized = false;
 static bool use_single_shot_mode =
@@ -115,14 +114,6 @@ int sensor_manager_self_test(uint16_t *result)
   software_asc_end_manual();
   return ret;
 }
-void sensor_manager_get_timing_diagnostic(sensor_timing_diagnostic_t *out)
-{
-  k_mutex_lock(&meas_mutex, K_FOREVER);
-  *out = timing;
-  out->continuous = initialized && !use_single_shot_mode;
-  out->report_interval_ms = measurement_interval_ms;
-  k_mutex_unlock(&meas_mutex);
-}
 
 /* Caller holds meas_mutex. Never send fabricated environmental values after a
  * failed read; the report is invalid until all compensation writes succeed. */
@@ -139,16 +130,8 @@ static int update_compensation(sensor_data_t *data)
   if (!ret) ret = stcc4_set_pressure((uint16_t)pressure.pressure);
   if (ret) {
     compensation_failed_since_report = true;
-    timing.failures++;
     return ret;
   }
-  int64_t now = k_uptime_get();
-  if (last_compensation_ms) {
-    timing.last_gap_ms = (uint32_t)(now - last_compensation_ms);
-    if (timing.last_gap_ms > timing.max_gap_ms) timing.max_gap_ms = timing.last_gap_ms;
-  }
-  last_compensation_ms = now;
-  timing.updates++;
   data->temperature_c = ambient.temperature;
   data->humidity_rh = ambient.humidity;
   data->pressure_hpa = pressure.pressure;
@@ -195,6 +178,12 @@ static int sensor_manager_init_locked(void)
     return 0;
   }
 
+  /* Only the initial boot attempt may wait out a pre-reset conditioning cycle.
+   * Runtime recovery shares meas_mutex with workers whose deadlines are 35s. */
+  static bool boot_attempt_available = true;
+  bool boot_attempt = boot_attempt_available;
+  boot_attempt_available = false;
+  ARG_UNUSED(boot_attempt);
   LOG_INF("Initializing sensor manager...");
 
   k_work_init_delayable(&sensor_work, sensor_work_handler);
@@ -237,8 +226,31 @@ static int sensor_manager_init_locked(void)
    * true white. */
   led_indicator_start_flash_pulse(LED_COLOR_WHITE, 1500, 400);
   ret = stcc4_perform_conditioning(conditioning_keepalive);
+  if (ret && boot_attempt) {
+    /* An MCU reset does not reset the powered sensor. If reset interrupted
+     * conditioning, it can NACK commands until that 22-second cycle finishes.
+     * Wait out one complete cycle plus settling, then retry once. */
+    LOG_WRN("STCC4 busy/unavailable after reset: %d; bounded startup retry", ret);
+    for (unsigned second = 0; second < 24; ++second) {
+      conditioning_keepalive();
+      k_msleep(1000);
+    }
+    conditioning_keepalive();
+    /* Recover to idle whether the powered sensor was asleep or measuring.
+     * Do not enter sleep: that extra transition can NACK after an MCU reset.
+     * The final conditioning ACK and later ASC/sample checks decide health. */
+    stcc4_exit_sleep_mode();
+    int stop_rc = stcc4_stop();
+    if (stop_rc) LOG_WRN("STCC4 recovery stop returned %d", stop_rc);
+    /* An I2C error does not prove the sensor rejected the stop command. */
+    k_msleep(stop_rc ? 1250 : 50); /* driver already waits 1200ms on ACK */
+    conditioning_keepalive();
+    ret = stcc4_perform_conditioning(conditioning_keepalive);
+  }
   if (ret) {
-    LOG_WRN("STCC4 conditioning failed: %d (continuing)", ret);
+    led_indicator_stop();
+    LOG_ERR("STCC4 conditioning retry failed: %d", ret);
+    return ret;
   } else {
     conditioning_keepalive();
     k_msleep(2000); /* recommended settling time after conditioning */
@@ -367,8 +379,8 @@ static int do_measurement_locked(void)
   /* 5. Read battery */
   data.battery_mv = battery_read_voltage_mv();
   data.battery_percent = battery_get_percentage();
-  data.battery_low = battery_is_low();
-  data.battery_critical = battery_is_critical();
+  data.battery_low = data.battery_mv < 3300;
+  data.battery_critical = data.battery_mv < 3000;
   LOG_DBG("Battery: %u mV (%u%%)", data.battery_mv, data.battery_percent);
 
   /* Note: Update BLE Battery Service */
@@ -412,6 +424,7 @@ static void sensor_work_handler(struct k_work *work)
   ARG_UNUSED(work);
   k_mutex_lock(&meas_mutex, K_FOREVER);
   if (!running || !initialized) {
+    health_progress(HEALTH_SENSOR, 0);
     k_mutex_unlock(&meas_mutex);
     return;
   }
@@ -432,7 +445,10 @@ static void sensor_work_handler(struct k_work *work)
    * a 1 s target does not drift to 1 s plus the measurement execution time. */
   uint32_t period = use_single_shot_mode ? measurement_interval_ms : 1000;
   int64_t delay = period - (k_uptime_get() - started);
-  if (running) k_work_schedule(&sensor_work, K_MSEC(delay > 0 ? delay : 1));
+  if (running) {
+    health_progress(HEALTH_SENSOR, (delay > 0 ? delay : 1) + 35000);
+    k_work_schedule(&sensor_work, K_MSEC(delay > 0 ? delay : 1));
+  }
   k_mutex_unlock(&meas_mutex);
 }
 
@@ -461,6 +477,7 @@ int sensor_manager_start(uint32_t interval_ms)
 
   LOG_INF("Starting sensor measurements (interval: %u ms)", interval_ms);
 
+  health_progress(HEALTH_SENSOR, 35000);
   /* Do first measurement immediately */
   k_work_schedule(&sensor_work, K_NO_WAIT);
   k_mutex_unlock(&meas_mutex);
@@ -475,6 +492,7 @@ void sensor_manager_stop(void)
 {
   k_mutex_lock(&meas_mutex, K_FOREVER);
   running = false;
+  health_progress(HEALTH_SENSOR, 0);
   k_mutex_unlock(&meas_mutex);
   /* Called by main for soft-off/lockout, never from the sensor work handler. */
   struct k_work_sync sync;
@@ -588,9 +606,10 @@ bool sensor_manager_is_ready(void) { return initialized; }
  *
  * @param power_mode 0=on-demand, 1=low, 2=mid, 3=high.
  */
-void sensor_manager_set_power_mode(uint8_t power_mode)
+int sensor_manager_set_power_mode(uint8_t power_mode)
 {
-  if (!initialized) return;
+  if (!initialized) return -ENODEV;
+  if (power_mode > 3) return -EINVAL;
   uint32_t new_interval;
   bool want_single_shot;
 
@@ -637,10 +656,11 @@ void sensor_manager_set_power_mode(uint8_t power_mode)
     if (want_single_shot)
     {
       /* Switch to single-shot mode */
-      if (stcc4_stop() != 0) {
+      int ret = stcc4_stop();
+      if (ret != 0) {
         LOG_ERR("Failed to stop STCC4; keeping existing measurement mode");
         k_mutex_unlock(&meas_mutex);
-        return;
+        return ret;
       }
       use_single_shot_mode = true;
       LOG_INF("STCC4: Switched to single-shot mode (power saving)");
@@ -660,7 +680,7 @@ void sensor_manager_set_power_mode(uint8_t power_mode)
       {
         LOG_WRN("STCC4 continuous start failed: %d, keeping single-shot", ret);
         k_mutex_unlock(&meas_mutex);
-        return;
+        return ret;
       }
     }
   }
@@ -669,8 +689,6 @@ void sensor_manager_set_power_mode(uint8_t power_mode)
   {
     measurement_interval_ms = new_interval;
     next_report_ms = k_uptime_get() + new_interval;
-    timing = (sensor_timing_diagnostic_t){0};
-    last_compensation_ms = 0;
 
     if (new_interval == 0)
     {
@@ -680,6 +698,7 @@ void sensor_manager_set_power_mode(uint8_t power_mode)
       {
         k_work_cancel_delayable(&sensor_work);
         running = false;
+  health_progress(HEALTH_SENSOR, 0);
       }
     }
     else
@@ -692,10 +711,42 @@ void sensor_manager_set_power_mode(uint8_t power_mode)
       /* A worker may already be running and waiting for meas_mutex. Cancel +
        * schedule can leave it CANCELLING, causing schedule() to do nothing.
        * Reschedule updates its deadline without cancelling that running work. */
+      health_progress(HEALTH_SENSOR, (use_single_shot_mode ? measurement_interval_ms : 1000) + 35000);
       k_work_reschedule(&sensor_work,
           K_MSEC(use_single_shot_mode ? measurement_interval_ms : 1000));
     }
   }
+  k_mutex_unlock(&meas_mutex);
+  return 0;
+}
+
+K_MUTEX_DEFINE(mode_change_mutex);
+int sensor_manager_change_power_mode(uint8_t mode)
+{
+  k_mutex_lock(&mode_change_mutex, K_FOREVER);
+  uint8_t previous = user_settings_get_power_mode();
+  int rc = sensor_manager_set_power_mode(mode);
+  if (!rc) {
+    rc = user_settings_set_power_mode(mode);
+    if (rc && sensor_manager_set_power_mode(previous)) {
+      /* Don't continue reporting a mode that hardware could not restore. */
+      k_mutex_lock(&meas_mutex, K_FOREVER);
+      initialized = false;
+      k_mutex_unlock(&meas_mutex);
+    }
+  }
+  k_mutex_unlock(&mode_change_mutex);
+  return rc;
+}
+
+void sensor_manager_factory_probe(uint8_t *sht_ok, uint8_t *lps_ok, uint8_t *stcc_ok)
+{
+  k_mutex_lock(&meas_mutex, K_FOREVER);
+  uint32_t serial = 0;
+  uint8_t id = 0, product[9] = {0};
+  *sht_ok = sht40_read_serial(&serial) == 0 && serial != 0;
+  *lps_ok = lps22hh_read_id(&id) == 0 && id == 0xB3;
+  *stcc_ok = stcc4_get_product_id(product, sizeof(product)) == 0;
   k_mutex_unlock(&meas_mutex);
 }
 
@@ -717,8 +768,6 @@ int sensor_manager_reset_co2_sensor(void)
   k_mutex_lock(&data_mutex, K_FOREVER);
   latest_data.valid = false;
   k_mutex_unlock(&data_mutex);
-  timing = (sensor_timing_diagnostic_t){0};
-  last_compensation_ms = 0;
   next_report_ms = 0;
   int ret = stcc4_reset();
   if (!ret) {

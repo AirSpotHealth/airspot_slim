@@ -44,6 +44,8 @@ static record_t cur_record = {0};
 
 /* Pending data log request */
 static record_request_t pending_request = {0};
+static struct k_spinlock request_lock;
+static uint32_t pending_session, erase_session;
 static volatile bool request_pending = false;
 
 /* Erase all flag */
@@ -594,37 +596,6 @@ static void set_store_area_from_half_page(store_area_t *area,
  * =============================================================================
  */
 
-#if defined(CONFIG_AIRSPOT_FORENSIC_HISTORY)
-static void dump_history_readonly(void) {
-  uint8_t small[32], large[128];
-  LOG_INF("FORENSIC: external flash writes/erases disabled");
-  for (uint32_t addr = FLASH_METADATA_OFFSET;
-       addr < FLASH_HISTORY_OFFSET + FLASH_SECTOR_SIZE; addr += sizeof(small)) {
-    memset(small, 0xa5, sizeof(small));
-    int ret = spi_flash_read(addr, small, sizeof(small));
-    char hex[65];
-    const char digits[] = "0123456789abcdef";
-    for (size_t i = 0; i < sizeof(small); i++) {
-      hex[i * 2] = digits[small[i] >> 4];
-      hex[i * 2 + 1] = digits[small[i] & 15];
-    }
-    hex[64] = 0;
-    LOG_INF("RAWFLASH %06x rc=%d %s", addr, ret, hex);
-    if (!(addr % 128)) {
-      memset(large, 0x5a, sizeof(large));
-      int rc = spi_flash_read(addr, large, sizeof(large));
-      LOG_INF("RAWCOMPARE %06x rc=%d same_prefix=%d first=%02x%02x%02x%02x",
-              addr, rc, !memcmp(small, large, sizeof(small)),
-              large[0], large[1], large[2], large[3]);
-    }
-    watchdog_feed();
-    k_msleep(25); /* Allow RTT host to drain without dropping the capture. */
-  }
-  LOG_INF("FORENSIC: raw capture complete");
-  spi_flash_forensic_wake_probe();
-}
-#endif
-
 int data_log_init(void) {
   if (initialized) {
     return 0;
@@ -640,10 +611,6 @@ int data_log_init(void) {
   /* Wake flash from power-down if needed */
   spi_flash_power_up();
   k_msleep(1);
-
-#if defined(CONFIG_AIRSPOT_FORENSIC_HISTORY)
-  dump_history_readonly();
-#endif
 
   /* Recover existing data log */
   ret = data_log_recover();
@@ -666,7 +633,7 @@ int data_log_store_record(uint32_t timestamp, uint16_t co2_ppm,
     return -ENODEV;
   }
 
-  k_mutex_lock(&data_log_mutex, K_FOREVER);
+  if (k_mutex_lock(&data_log_mutex, K_MSEC(100)) != 0) return -EBUSY;
 
   /* Wake flash from deep sleep */
   spi_flash_power_up();
@@ -743,7 +710,7 @@ uint32_t data_log_get_count(void) {
     return 0;
   }
 
-  k_mutex_lock(&data_log_mutex, K_FOREVER);
+  if (k_mutex_lock(&data_log_mutex, K_MSEC(100)) != 0) return 0;
 
   uint32_t fst_addr = GET_HIS_ADDR(&fst_store_area);
   uint32_t cur_addr = GET_HIS_ADDR(&cur_store_area);
@@ -772,7 +739,7 @@ uint16_t data_log_get_current_half_page(void) {
     return 0;
   }
 
-  k_mutex_lock(&data_log_mutex, K_FOREVER);
+  if (k_mutex_lock(&data_log_mutex, K_MSEC(100)) != 0) return 0;
 
   uint16_t result =
       (cur_store_area.sector * FLASH_PAGE_OF_SECTOR + cur_store_area.page) * 2 +
@@ -782,46 +749,60 @@ uint16_t data_log_get_current_half_page(void) {
   return result;
 }
 
-void data_log_request(uint16_t half_page_number) {
+void data_log_request(uint16_t half_page_number, uint32_t session) {
+  k_spinlock_key_t key = k_spin_lock(&request_lock);
   LOG_INF("Data log request: half-page %d", half_page_number);
   pending_request.half_page_number = half_page_number;
   request_pending = true;
+  pending_session = session;
+  k_spin_unlock(&request_lock, key);
   /* Signal semaphore to wake up main loop immediately */
   k_sem_give(&data_log_request_sem);
 }
 
-bool data_log_has_pending_request(void) { return request_pending; }
+bool data_log_has_pending_request(void) {
+  k_spinlock_key_t key = k_spin_lock(&request_lock);
+  bool pending = request_pending;
+  k_spin_unlock(&request_lock, key);
+  return pending;
+}
 
 int data_log_process_request(record_page_t *out_page, uint8_t *out_count,
-                             uint16_t *out_half_page) {
+                             uint16_t *out_half_page, uint32_t *out_session) {
+  k_spinlock_key_t key = k_spin_lock(&request_lock);
   if (!request_pending) {
+    k_spin_unlock(&request_lock, key);
     return -EINVAL;
   }
+  uint16_t half_page = pending_request.half_page_number;
+  *out_session = pending_session;
+  request_pending = false;
+  k_spin_unlock(&request_lock, key);
 
   if (!initialized) {
     return -ENODEV;
   }
 
   /* Validate half-page number */
-  if (pending_request.half_page_number >= FLASH_HALF_PAGE_COUNT) {
-    LOG_WRN("Invalid half-page number: %d", pending_request.half_page_number);
-    request_pending = false;
+  if (half_page >= FLASH_HALF_PAGE_COUNT) {
+    LOG_WRN("Invalid half-page number: %d", half_page);
     return -EINVAL;
   }
 
-  k_mutex_lock(&data_log_mutex, K_FOREVER);
+  if (k_mutex_lock(&data_log_mutex, K_MSEC(100)) != 0) return -EBUSY;
 
   /* Wake flash from deep sleep */
-  spi_flash_power_up();
+  int wake_rc = spi_flash_power_up();
+  if (wake_rc) { k_mutex_unlock(&data_log_mutex); return wake_rc; }
   k_usleep(50);
 
   store_area_t tx_area;
-  set_store_area_from_half_page(&tx_area, pending_request.half_page_number);
+  set_store_area_from_half_page(&tx_area, half_page);
 
   uint32_t read_addr = GET_HIS_ADDR(&tx_area);
 
   /* If odd half-page, read second half (offset by 128 bytes) */
-  if (pending_request.half_page_number % 2) {
+  if (half_page % 2) {
     read_addr += HISTORY_SIZE / 2;
   }
 
@@ -831,8 +812,8 @@ int data_log_process_request(record_page_t *out_page, uint8_t *out_count,
   int ret = flash_read_chunked(read_addr, out_page->buf, HISTORY_SIZE / 2);
   if (ret != 0) {
     LOG_ERR("Failed to read data log: %d", ret);
+    (void)spi_flash_power_down();
     k_mutex_unlock(&data_log_mutex);
-    request_pending = false;
     return ret;
   }
 
@@ -846,25 +827,33 @@ int data_log_process_request(record_page_t *out_page, uint8_t *out_count,
     }
   }
 
-  *out_half_page = pending_request.half_page_number;
+  *out_half_page = half_page;
 
   /* Put flash back to sleep */
   spi_flash_power_down();
 
   k_mutex_unlock(&data_log_mutex);
-  request_pending = false;
-
   return 0;
 }
 
-void data_log_request_erase_all(void) {
+void data_log_request_erase_all(uint32_t session) {
+  k_spinlock_key_t key = k_spin_lock(&request_lock);
   LOG_WRN("Erase all data log requested");
   erase_all_pending = true;
+  erase_session = session;
+  k_spin_unlock(&request_lock, key);
   /* Signal semaphore to wake up main loop immediately */
   k_sem_give(&data_log_request_sem);
 }
 
-bool data_log_is_erase_pending(void) { return erase_all_pending; }
+bool data_log_take_erase_request(uint32_t *session) {
+  k_spinlock_key_t key = k_spin_lock(&request_lock);
+  bool pending = erase_all_pending;
+  *session = erase_session;
+  erase_all_pending = false;
+  k_spin_unlock(&request_lock, key);
+  return pending;
+}
 
 int data_log_wait_for_request(k_timeout_t timeout) {
   return k_sem_take(&data_log_request_sem, timeout);
@@ -877,10 +866,11 @@ int data_log_erase_all(void) {
 
   LOG_WRN("Erasing all data log...");
 
-  k_mutex_lock(&data_log_mutex, K_FOREVER);
+  if (k_mutex_lock(&data_log_mutex, K_MSEC(100)) != 0) return -EBUSY;
 
   /* Wake flash from deep sleep */
-  spi_flash_power_up();
+  int wake_rc = spi_flash_power_up();
+  if (wake_rc) { k_mutex_unlock(&data_log_mutex); return wake_rc; }
   k_usleep(50);
 
   /* Erase all sectors */
@@ -888,7 +878,9 @@ int data_log_erase_all(void) {
     int ret = spi_flash_erase_sector(FLASH_ADDR_OF_SECTOR(sector));
     if (ret != 0) {
       LOG_ERR("Failed to erase sector %d: %d", sector, ret);
-      /* Continue anyway */
+      (void)spi_flash_power_down();
+      k_mutex_unlock(&data_log_mutex);
+      return ret;
     }
 
     /* Feed watchdog and yield periodically during long erase
@@ -911,7 +903,6 @@ int data_log_erase_all(void) {
   memset(&rec_page, 0, sizeof(rec_page));
   memset(&cur_record, 0, sizeof(cur_record));
 
-  erase_all_pending = false;
 
   /* Put flash back to sleep */
   spi_flash_power_down();

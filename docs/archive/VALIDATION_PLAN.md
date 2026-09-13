@@ -1,5 +1,9 @@
 # Validation Plan
 
+> Archived on 13 September 2026. Historical evidence and plans; experiment
+> profiles and commands described here may have been retired. See the
+> [current Slim status](../STATUS.md) for supported workflow and open findings.
+
 Hardware verification and production readiness checklist for AirSpot Slim.
 
 ## Scope
@@ -82,7 +86,7 @@ Focus on post-implementation validation:
 
 ## Related Docs
 
-- [docs/firmware/DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md)
-- [docs/firmware/BUILD_INSTRUCTIONS.md](BUILD_INSTRUCTIONS.md)
-- [docs/firmware/BLE_PROTOCOL.md](BLE_PROTOCOL.md)
-- [docs/firmware/SERVICES.md](SERVICES.md)
+- [docs/firmware/DEVELOPER_GUIDE.md](../firmware/DEVELOPER_GUIDE.md)
+- [docs/firmware/BUILD_INSTRUCTIONS.md](../firmware/BUILD_INSTRUCTIONS.md)
+- [docs/firmware/BLE_PROTOCOL.md](../firmware/BLE_PROTOCOL.md)
+- [docs/firmware/SERVICES.md](../firmware/SERVICES.md)

@@ -17,7 +17,8 @@ static uint8_t saved,applied;static uint32_t interval;static int measurements;
 static uint8_t user_settings_get_power_mode(void){return saved;}
 static int sensor_manager_measure_now(void){measurements++;return 0;}
 static int sensor_manager_start(uint32_t ms){interval=ms;return 0;}
-static void sensor_manager_set_power_mode(uint8_t mode){applied=mode;}
+static int sensor_manager_set_power_mode(uint8_t mode){applied=mode;return 0;}
+static bool startup_check(uint16_t subsystem,int rc){return rc==0;}
 static void boot(void){int ret;bool startup_healthy=true;
 '''+s[a:b]+r'''
 assert(startup_healthy);}

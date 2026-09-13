@@ -21,7 +21,9 @@ class ProtocolRxTests(unittest.TestCase):
 #define CMD_SECOND_BYTE 170
 #define K_NO_WAIT 0
 static uint8_t rx_frame[64],rx_frame_idx;
-typedef struct {uint8_t data[64];uint16_t len;} protocol_frame_t;
+static uint32_t rx_generation,session=1;
+static uint32_t airspot_nus_generation(void) {return session;}
+typedef struct {uint8_t data[64];uint16_t len;uint32_t generation;} protocol_frame_t;
 static int protocol_msgq,count;
 static protocol_frame_t last;
 static int k_msgq_put(int *q, const protocol_frame_t *f,int timeout) {last=*f;count++;return 0;}
@@ -39,6 +41,9 @@ int main(void) {
   nus_rx_callback(oversized,4);
   nus_rx_callback(good,5);
   assert(count==1 && memcmp(last.data,good,5)==0);
+  count=0;nus_rx_callback(good,3);session++;
+  nus_rx_callback(good,5);
+  assert(count==1 && last.generation==session && last.len==5);
   uint8_t joined[10];memcpy(joined,good,5);memcpy(joined+5,good,5);
   count=0;nus_rx_callback(joined,10);assert(count==2);
   uint8_t maximum[64]={255,170,9,59};

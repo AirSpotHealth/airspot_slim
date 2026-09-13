@@ -33,9 +33,6 @@ extern "C"
      * @return 0 on success, negative errno on failure
      */
     int spi_flash_init(void);
-#if defined(CONFIG_AIRSPOT_FORENSIC_HISTORY)
-    void spi_flash_forensic_wake_probe(void);
-#endif
 
     /**
      * @brief Read flash device ID (JEDEC ID)

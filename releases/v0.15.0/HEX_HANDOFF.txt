@@ -1,0 +1,18 @@
+AirSpot Slim v0.15.0 — wired flashing test handoff
+
+File: airspot_slim_v0.15.0_merged.hex
+Target: production nRF54L15 AirSpot Slim hardware.
+Source release: v0.15.0 / develop commit 4ba68b6e954151697614c40a5408a6669851189e.
+
+Contains MCUboot at 0x000000 and the signed v0.15.0 application at 0x010000.
+Packaged from existing binaries, each verified against firmware-artifact.json;
+no source rebuild or signing-key change. Intel HEX round-trip verified.
+SHA-256: 9f4f3720fbcebbd41715b8877d5691a59617524459cacaa28f117c6ce883d30d
+
+This release is documented as a manual OTA test release. Physical-device
+validation remains pending; this handoff does not certify production readiness.
+Use this HEX for initial wired installation on correctly prepared hardware.
+It does not clear stale OTA slots/trailers or migrate settings on used devices.
+For used devices, use the documented checked provisioning/update workflow.
+For Bluetooth OTA, use airspot_slim_v0.15.0_dfu.zip instead.
+No device flashing was performed when preparing this file.

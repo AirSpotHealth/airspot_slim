@@ -18,6 +18,8 @@ class SensorAscTests(unittest.TestCase):
 #include <stdint.h>
 #include <stddef.h>
 #include <services/sensor_manager.h>
+#include <services/health_service.h>
+void health_progress(enum health_worker w,uint32_t ms) {}
 #include <drivers/stcc4.h>
 #define LOG_MODULE_REGISTER(...)
 #define LOG_ERR(...)
@@ -72,6 +74,10 @@ static bool battery_is_critical(void) {return false;}
 static bool qi_charger_is_charging(void) {return false;}
 static void ble_service_update_battery_level(uint8_t p) {}
 static uint8_t user_settings_get_power_mode(void) {return power;}
+static int user_settings_set_power_mode(uint8_t v) {if(!save_error)power=v;return save_error;}
+static int sht40_read_serial(uint32_t *v) {*v=1;return 0;}
+static int lps22hh_read_id(uint8_t *v) {*v=0xB3;return 0;}
+int stcc4_get_product_id(uint8_t *v,size_t n) {return 0;}
 static int user_settings_set_co2_correction(int16_t v) {if(!save_error)correction=v;return save_error;}
 static void software_asc_sensor_restarted(void) {sensor_restart_notifications++;}
 static void software_asc_end_manual(void) {manual=false;restart_calls++;}
@@ -167,22 +173,17 @@ int main(void) {
   assert(!use_single_shot_mode && measurement_interval_ms==5000);
   sensor_manager_start(5000);
   callbacks=ambient_writes=pressure_writes=0;
-  now=100000;next_report_ms=0;last_compensation_ms=0;timing=(sensor_timing_diagnostic_t){0};
+  now=100000;next_report_ms=0;
   for(int i=0;i<11;i++) {
     sensor_work_handler(NULL);
     assert(scheduled_delay==984);
     now+=scheduled_delay;
   }
   assert(ambient_writes==11 && pressure_writes==11 && callbacks==3);
-  sensor_timing_diagnostic_t timing_snapshot;
-  sensor_manager_get_timing_diagnostic(&timing_snapshot);
-  assert(timing_snapshot.continuous && timing_snapshot.updates==11);
-  assert(timing_snapshot.last_gap_ms==1000 && timing_snapshot.max_gap_ms==1000);
-  assert(timing_snapshot.report_interval_ms==5000 && timing_snapshot.failures==0);
   /* Compensation-only ticks neither publish nor feed calibration through callback. */
   int previous_callbacks=callbacks;
   pressure_error=-EIO;sensor_work_handler(NULL);
-  assert(callbacks==previous_callbacks && !latest_data.valid && timing.failures==1);
+  assert(callbacks==previous_callbacks && !latest_data.valid);
   pressure_error=0;
   ambient_write_error=-EIO;assert(sensor_manager_measure_now()==-EIO && !callback_valid);
   ambient_write_error=0;pressure_write_error=-EIO;
@@ -203,6 +204,13 @@ int main(void) {
   sensor_manager_set_power_mode(3);
   assert(use_single_shot_mode && measurement_interval_ms==180000);
   assert(meas_mutex==0 && data_mutex==0 && resume_calls==0);
+  initialized=true;start_error=stop_error=save_error=0;
+  assert(sensor_manager_change_power_mode(1)==0);
+  assert(power==1 && use_single_shot_mode);
+  start_error=-EIO;
+  assert(sensor_manager_change_power_mode(3)==-EIO && power==1);
+  start_error=0;save_error=-EIO;
+  assert(sensor_manager_change_power_mode(3)==-EIO && power==1 && use_single_shot_mode);
 }
 '''
         with tempfile.TemporaryDirectory() as directory:

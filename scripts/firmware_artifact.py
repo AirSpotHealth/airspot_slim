@@ -77,6 +77,7 @@ def validate_build(build):
         require(chosen is tree.label2node["slot0_partition" if domain == "application" else "boot_partition"],
                 "Incorrect code partition")
         if domain == "application":
+            require(config.get("CONFIG_IMG_ERASE_PROGRESSIVELY") == "y", "OTA must avoid bulk slot preparation")
             require(config.get("CONFIG_SEGGER_RTT_INIT_MODE_ALWAYS") == "y", "RTT must reset stale image pointers")
             for symbol in ("BOOTLOADER_MCUBOOT", "MCUMGR", "MCUMGR_GRP_IMG", "MCUMGR_TRANSPORT_BT",
                            "MCUMGR_SMP_COMMAND_STATUS_HOOKS"):

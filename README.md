@@ -9,12 +9,29 @@ signed Bluetooth OTA, the existing AirSpot BLE protocol, and SEGGER RTT logs.
 
 ```sh
 source scripts/airspot
-export AIRSPOT_JLINK_SERIAL=603003276  # Set to your board's probe.
 airspot build
 airspot check
-airspot flash    # First installation; backs up memory and migrates settings.
-airspot logs rtt
+airspot flash    # Install firmware; back up memory and preserve settings bytes.
+airspot logs
 ```
+
+`airspot` shows a styled command guide; `airspot menu` opens the interactive menu.
+Use `airspot devices` (or `info`), `reset`, `version`, `memory`, and `ports` to inspect
+and control devices. `airspot bf` builds and flashes; `airspot bfl` also opens logs.
+`airspot erase` confirms before removing internal firmware, bootloader, settings and
+UICR; `-y` skips confirmation. External history flash is not erased. Reinstall with
+`airspot flash`. Styling respects `NO_COLOR` and is disabled when output is redirected.
+
+Flash and logs list connected J-Link probes, automatically use a single probe, and
+prompt for a selection when several are connected. Use `--serial SERIAL` to select
+a probe explicitly (required for noninteractive use with multiple probes). No serial
+environment export is needed. Logs stream in the terminal until Ctrl-C and are also
+saved to `application/build_production/rtt.log`. `airspot logs rtt` remains supported.
+
+Flashing does not require a recognized bootloader or local build history. It preserves
+36 KiB at `0x15c000` by default. Use `airspot flash --reset-settings` for fresh settings,
+or `airspot flash --settings-source 0x74000` to migrate a device known to use that
+older settings address. Arbitrary legacy layouts are not detected automatically.
 
 For subsequent wired updates, use `airspot flash` for a checked wired reinstall, or upload
 `application/build_production/airspot_slim_dfu.zip` through the mobile app's Slim
@@ -23,6 +40,8 @@ updater. The raw OTA file is
 Keep the same product signing key for subsequent builds; set `AIRSPOT_SIGNING_KEY`
 if it is stored outside the ignored `application/keys/` directory.
 
+- [Current firmware status](docs/STATUS.md)
+- [Archived investigations and qualification records](docs/archive/README.md)
 - [Wireless updates, recovery and signing](docs/OTA.md)
 - [Board wiring and qualification](docs/board/PRODUCTION_BOARD.md)
 

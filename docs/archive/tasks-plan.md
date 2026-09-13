@@ -1,5 +1,9 @@
 # Rev3A firmware migration plan
 
+> Archived on 13 September 2026. Historical evidence and plans; experiment
+> profiles and commands described here may have been retired. See the
+> [current Slim status](../STATUS.md) for supported workflow and open findings.
+
 Assessment date: 2026-09-05. Status: initial port and hardware startup verified; full qualification pending. See docs/board/REV3A_BRINGUP.md for current commands and evidence.
 
 ## Repository baseline

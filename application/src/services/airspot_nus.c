@@ -31,6 +31,7 @@ LOG_MODULE_REGISTER(airspot_nus, CONFIG_AIRSPOT_LOG_LEVEL);
 
 static struct bt_conn *current_conn = NULL;
 static struct k_spinlock connection_lock;
+static uint32_t generation;
 static airspot_nus_rx_callback_t rx_callback = NULL;
 static bool tx_notifications_enabled = false;
 
@@ -82,8 +83,17 @@ int airspot_nus_init(airspot_nus_rx_callback_t callback) {
 }
 
 int airspot_nus_send(const uint8_t *data, uint16_t len) {
+  return airspot_nus_send_session(data, len, 0);
+}
+uint32_t airspot_nus_generation(void) {
   k_spinlock_key_t key = k_spin_lock(&connection_lock);
-  struct bt_conn *conn = current_conn ? bt_conn_ref(current_conn) : NULL;
+  uint32_t value = generation;
+  k_spin_unlock(&connection_lock, key);
+  return value;
+}
+int airspot_nus_send_session(const uint8_t *data, uint16_t len, uint32_t session) {
+  k_spinlock_key_t key = k_spin_lock(&connection_lock);
+  struct bt_conn *conn = current_conn && (!session || session == generation) ? bt_conn_ref(current_conn) : NULL;
   bool enabled = tx_notifications_enabled;
   k_spin_unlock(&connection_lock, key);
   if (!conn) { return -ENOTCONN; }
@@ -118,6 +128,7 @@ void airspot_nus_set_conn(struct bt_conn *conn) {
   k_spinlock_key_t key = k_spin_lock(&connection_lock);
   struct bt_conn *previous = current_conn;
   current_conn = replacement;
+  if (++generation == 0) ++generation;
   tx_notifications_enabled = false;
   k_spin_unlock(&connection_lock, key);
   if (previous) { bt_conn_unref(previous); }

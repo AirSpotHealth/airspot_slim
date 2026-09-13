@@ -1,5 +1,9 @@
 # Button and System OFF qualification
 
+> Archived on 13 September 2026. Historical evidence and plans; experiment
+> profiles and commands described here may have been retired. See the
+> [current Slim status](../STATUS.md) for supported workflow and open findings.
+
 Current result: physical System OFF wake is verified on the single test board.
 Production configuration enables it starting with 0.14.6. The chronological
 notes below describe earlier candidates and disabled defaults at those stages.

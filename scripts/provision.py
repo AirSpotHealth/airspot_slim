@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Install the checked bootloader/application, preserving the device's NVS.
 
-Known factory/bring-up images, this bootloader, and blank devices are accepted.
+Installation does not depend on the previously installed firmware.
 Every write is preceded by a full RRAM snapshot and followed by readback.
 """
 import argparse
@@ -19,13 +19,6 @@ RRAM_SIZE = 0x17d000
 APP_MEMORY_END = 0x165000
 SETTINGS_START = 0x15c000
 SETTINGS_SIZE = 0x9000
-# Exact image previously installed during the board bring-up, before MCUboot.
-BRINGUP_SIZE = 245172
-BRINGUP_SHA256 = "6a4423e55f30123c9ad8258429b2476dbf60cdbefec0f8282d26142f76cbd884"
-# Factory image captured before Rev3A migration, and matched on a new board.
-# Hash the entire main-processor region, including its erased settings space;
-# accepting this does not infer an NVS location from an arbitrary application.
-FACTORY_MAIN_SHA256 = "bce98bb80f25c7b5abaa70a1e31ddcf7c744f50d58070a8b26f33fc649e84bb8"
 
 
 def jlink(commands, serial, directory):
@@ -40,16 +33,17 @@ def jlink(commands, serial, directory):
     require(result.returncode == 0, f"J-Link failed; inspect {directory / 'jlink.log'}")
 
 
-def prepare_image(before, boot, app, update):
+def prepare_image(before, boot, app, settings_source=SETTINGS_START, reset_settings=False):
     require(len(before) == RRAM_SIZE, "Incomplete device backup")
-    provisioned = before[:len(boot)] == boot
-    blank = before[:APP_MEMORY_END] == b"\xff" * APP_MEMORY_END
-    known_bringup = hashlib.sha256(before[:BRINGUP_SIZE]).hexdigest() == BRINGUP_SHA256
-    known_factory = hashlib.sha256(before[:APP_MEMORY_END]).hexdigest() == FACTORY_MAIN_SHA256
-    require(provisioned or (not update and (blank or known_bringup or known_factory)),
-            "Unknown installed firmware/layout; refusing to overwrite or guess settings location")
-    source = SETTINGS_START if provisioned or blank or known_factory else 0x74000
-    settings = before[source:source + SETTINGS_SIZE]
+    require(0 < len(boot) <= 0x10000, "Bootloader exceeds its partition")
+    require(0 < len(app) <= 0xa6000, "Application exceeds its partition")
+    require(0 <= settings_source <= APP_MEMORY_END - SETTINGS_SIZE,
+            "Settings source is outside main-processor memory")
+    # Preserve the configured region as bytes; do not infer a legacy layout from
+    # bootloader identity. An explicit source allows migration from older layouts.
+    source = None if reset_settings else settings_source
+    settings = (b"\xff" * SETTINGS_SIZE if reset_settings else
+                before[source:source + SETTINGS_SIZE])
     # Explicitly clear old swap state and staged images. Preserve NVS and the
     # auxiliary processor's memory (outside the image written below).
     image = bytearray(b"\xff" * APP_MEMORY_END)
@@ -62,7 +56,13 @@ def prepare_image(before, boot, app, update):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("build", type=Path)
-    parser.add_argument("--update", action="store_true")
+    parser.add_argument("--update", action="store_true", help=argparse.SUPPRESS)
+    settings = parser.add_mutually_exclusive_group()
+    settings.add_argument("--settings-source", type=lambda value: int(value, 0),
+                          default=SETTINGS_START, metavar="ADDRESS",
+                          help="copy settings from this address (default: 0x15c000)")
+    settings.add_argument("--reset-settings", action="store_true",
+                          help="install with erased settings instead of preserving them")
     args = parser.parse_args()
     serial = os.environ.get("AIRSPOT_JLINK_SERIAL")
     require(serial and serial.isdecimal(), "Set AIRSPOT_JLINK_SERIAL to the connected product probe")
@@ -84,14 +84,15 @@ def main():
         before = before_path.read_bytes()
         boot = (args.build / "mcuboot/zephyr/zephyr.bin").read_bytes()
         app = (args.build / "application/zephyr/airspot_slim.signed.bin").read_bytes()
-        image, source = prepare_image(before, boot, app, args.update)
+        image, source = prepare_image(before, boot, app, args.settings_source, args.reset_settings)
     except Exception:
         # Preflight failure: resume the unchanged device.
         jlink(["g"], serial, backup)
         raise
-    (backup / "settings.bin").write_bytes(before[source:source + SETTINGS_SIZE])
+    (backup / "settings.bin").write_bytes(before[args.settings_source:args.settings_source + SETTINGS_SIZE])
     (backup / "backup.json").write_text(json.dumps({"probe": serial, "part": hex(part),
-        "settings_source": hex(source), "settings_destination": hex(SETTINGS_START),
+        "settings_source": hex(source) if source is not None else None,
+        "settings_reset": args.reset_settings, "settings_destination": hex(SETTINGS_START),
         "before_sha256": hashlib.sha256(before).hexdigest(), "build": recorded}, indent=2) + "\n")
     install = backup / "install.bin"
     install.write_bytes(image)
@@ -102,7 +103,8 @@ def main():
     require(after[:APP_MEMORY_END] == image and after[APP_MEMORY_END:] == before[APP_MEMORY_END:],
             f"Readback mismatch. Device is halted; recovery snapshot: {before_path}")
     jlink(["r", "g"], serial, backup)
-    print("Readback verified; settings preserved; device reset and running", flush=True)
+    settings_status = "settings reset" if args.reset_settings else f"settings bytes preserved from {source:#x}"
+    print(f"Readback verified; {settings_status}; device reset and running", flush=True)
 
 
 if __name__ == "__main__":

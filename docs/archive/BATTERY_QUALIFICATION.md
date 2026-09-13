@@ -1,5 +1,9 @@
 # Battery qualification
 
+> Archived on 13 September 2026. Historical evidence and plans; experiment
+> profiles and commands described here may have been retired. See the
+> [current Slim status](../STATUS.md) for supported workflow and open findings.
+
 No runtime result is available yet. Optimize for the best practical runtime;
 there is no fixed days-per-charge requirement. Preserve measurement behavior.
 The schematic lists 75 mAh nominal; this is not measured usable capacity.

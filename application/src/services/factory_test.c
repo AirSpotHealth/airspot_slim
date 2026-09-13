@@ -19,6 +19,7 @@
 #include <drivers/stcc4.h>
 #include <services/ble_service.h>
 #include <services/factory_test.h>
+#include <services/sensor_manager.h>
 
 LOG_MODULE_REGISTER(factory_test, CONFIG_AIRSPOT_LOG_LEVEL);
 
@@ -83,32 +84,9 @@ int factory_test_start_auto(void) {
     last_report.battery_status = 0;
   }
 
-  /* 3. SHT40 Check */
-  uint32_t serial = 0;
-  if (sht40_read_serial(&serial) == 0 && serial != 0) {
-    last_report.sht40_status = 1;
-  } else {
-    LOG_ERR("Factory Test: SHT40 FAIL");
-    last_report.sht40_status = 0;
-  }
-
-  /* 4. LPS22HH Check */
-  uint8_t id = 0;
-  if (lps22hh_read_id(&id) == 0 && id == 0xB3) {
-    last_report.lps22hh_status = 1;
-  } else {
-    LOG_ERR("Factory Test: LPS22HH FAIL (ID: 0x%02X)", id);
-    last_report.lps22hh_status = 0;
-  }
-
-  /* 5. STCC4 Check */
-  uint8_t pid[9] = {0};
-  if (stcc4_get_product_id(pid, 9) == 0) {
-    last_report.stcc4_status = 1;
-  } else {
-    LOG_ERR("Factory Test: STCC4 FAIL");
-    last_report.stcc4_status = 0;
-  }
+  /* Sensor command sequences share the measurement owner, including probes. */
+  sensor_manager_factory_probe(&last_report.sht40_status,
+      &last_report.lps22hh_status, &last_report.stcc4_status);
 
   /* 6. Qi Charger Info (Not a fail condition) */
   last_report.qi_status = qi_charger_is_charging() ? 1 : 0;

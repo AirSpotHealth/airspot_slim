@@ -7,6 +7,9 @@
  */
 
 #include <string.h>
+#include <zephyr/dfu/mcuboot.h>
+#include <zephyr/sys/crc.h>
+#include <zephyr/sys/byteorder.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/settings/settings.h>
@@ -18,8 +21,28 @@ LOG_MODULE_REGISTER(user_settings, CONFIG_AIRSPOT_LOG_LEVEL);
 /* Settings key prefix */
 #define SETTINGS_KEY "airspot"
 
+K_MUTEX_DEFINE(settings_mutex);
+
 /* Default settings */
 static user_settings_t settings = {
+    .device_name = "AirSpot Slim",
+    .power_mode = 1,  /* Low power (3 min interval) */
+    .flight_mode = 0, /* Off */
+    .dnd_enabled = 0, /* Off */
+    .dnd_start_hour = 22,
+    .dnd_start_minute = 0,
+    .dnd_end_hour = 7,
+    .dnd_end_minute = 0,
+    .buzzer_enabled = 0,   /* Stub */
+    .vibrator_enabled = 0, /* Stub */
+    .co2_correction = 0,
+    .calib_target = 426,
+    .auto_calibrate = 0, /* ASC off by default - manual recalibration is used */
+    .asc_day_count = 0,
+    .co2_yellow_start = 800,
+    .co2_red_start = 1000,
+    .paired = 0};
+static const user_settings_t defaults = {
     .device_name = "AirSpot Slim",
     .power_mode = 1,  /* Low power (3 min interval) */
     .flight_mode = 0, /* Off */
@@ -44,10 +67,106 @@ static bool initialized = false;
 static volatile uint32_t time_base = 0;
 static bool time_set = false;
 
+/* Versioned all-settings transaction. Legacy keys are read only for migration.
+ * A trial rollback to pre-journal firmware sees its last legacy settings. */
+#define SNAPSHOT_SIZE 49
+static bool snapshot_loaded;
+static bool persistence_blocked;
+static int snapshot_error, legacy_error;
+static user_settings_t loaded_snapshot;
+static void encode_settings(const user_settings_t *value, uint8_t *out)
+{
+    memset(out, 0, SNAPSHOT_SIZE);
+    out[0] = 1;
+    size_t i = 4;
+    memcpy(out + i, value->device_name, 21); i += 21;
+    out[i++] = value->power_mode;
+    out[i++] = value->flight_mode;
+    out[i++] = value->dnd_enabled;
+    out[i++] = value->dnd_start_hour;
+    out[i++] = value->dnd_start_minute;
+    out[i++] = value->dnd_end_hour;
+    out[i++] = value->dnd_end_minute;
+    out[i++] = value->buzzer_enabled;
+    out[i++] = value->vibrator_enabled;
+    sys_put_le16((uint16_t)value->co2_correction, out + i); i += 2;
+    sys_put_le16((uint16_t)value->calib_target, out + i); i += 2;
+    out[i++] = value->auto_calibrate;
+    out[i++] = value->asc_day_count;
+    sys_put_le16((uint16_t)value->co2_yellow_start, out + i); i += 2;
+    sys_put_le16((uint16_t)value->co2_red_start, out + i); i += 2;
+    out[i++] = value->paired;
+    sys_put_le32(crc32_ieee(out, SNAPSHOT_SIZE - 4), out + i);
+}
+static int decode_settings(const uint8_t *in, user_settings_t *value)
+{
+    if (in[0] != 1 || in[1] || in[2] || in[3] ||
+        sys_get_le32(in + SNAPSHOT_SIZE - 4) != crc32_ieee(in, SNAPSHOT_SIZE - 4)) return -EINVAL;
+    size_t i = 4;
+    memset(value, 0, sizeof(*value));
+    memcpy(value->device_name, in + i, 21); i += 21;
+    value->power_mode = in[i++];
+    value->flight_mode = in[i++];
+    value->dnd_enabled = in[i++];
+    value->dnd_start_hour = in[i++];
+    value->dnd_start_minute = in[i++];
+    value->dnd_end_hour = in[i++];
+    value->dnd_end_minute = in[i++];
+    value->buzzer_enabled = in[i++];
+    value->vibrator_enabled = in[i++];
+    value->co2_correction = (int16_t)sys_get_le16(in + i); i += 2;
+    value->calib_target = (uint16_t)sys_get_le16(in + i); i += 2;
+    value->auto_calibrate = in[i++];
+    value->asc_day_count = in[i++];
+    value->co2_yellow_start = (uint16_t)sys_get_le16(in + i); i += 2;
+    value->co2_red_start = (uint16_t)sys_get_le16(in + i); i += 2;
+    value->paired = in[i++];
+    if (!memchr(value->device_name, 0, 21) || value->power_mode > 3 ||
+        value->flight_mode > 1 || value->dnd_enabled > 1 ||
+        value->dnd_start_hour > 23 || value->dnd_end_hour > 23 ||
+        value->dnd_start_minute > 59 || value->dnd_end_minute > 59 ||
+        value->buzzer_enabled > 1 || value->vibrator_enabled > 1 ||
+        value->auto_calibrate > 1 || value->paired > 1 ||
+        value->co2_yellow_start < 400 || value->co2_red_start > 5000 ||
+        value->co2_yellow_start >= value->co2_red_start) return -EINVAL;
+    return 0;
+}
+/* Caller holds settings_mutex; publish only after atomic NVS acceptance. */
+static int save_snapshot_impl(const user_settings_t *candidate, bool recovery)
+{
+    if (!boot_is_img_confirmed()) return -EBUSY;
+    if (!recovery && (persistence_blocked || snapshot_error ||
+                      (!snapshot_loaded && legacy_error))) return -EIO;
+    uint8_t record[SNAPSHOT_SIZE];
+    encode_settings(candidate, record);
+    int rc = settings_save_one(SETTINGS_KEY "/snapshot", record, sizeof(record));
+    if (!rc) settings = *candidate;
+    return rc;
+}
+static int save_snapshot(const user_settings_t *candidate)
+{
+    return save_snapshot_impl(candidate, false);
+}
+static int snapshot_commit(void)
+{
+    if (snapshot_error) return snapshot_error;
+    if (snapshot_loaded) { settings = loaded_snapshot; return 0; }
+    return legacy_error;
+}
+
 /* Reject truncated records before touching live settings. */
-static int settings_set(const char *name, size_t len, settings_read_cb read_cb,
+static int load_value(const char *name, size_t len, settings_read_cb read_cb,
                         void *cb_arg)
 {
+  if (strcmp(name, "snapshot") == 0) {
+    uint8_t record[SNAPSHOT_SIZE];
+    if (len != sizeof(record)) return -EINVAL;
+    int rc = read_cb(cb_arg, record, sizeof(record));
+    if (rc != sizeof(record)) return rc < 0 ? rc : -EIO;
+    rc = decode_settings(record, &loaded_snapshot);
+    if (!rc) snapshot_loaded = true;
+    return rc;
+  }
   user_settings_t candidate = settings;
   void *destination = NULL;
   size_t expected = 0;
@@ -99,15 +218,29 @@ static int settings_set(const char *name, size_t len, settings_read_cb read_cb,
   return 0;
 }
 
+/* Zephyr intentionally ignores per-key load errors; preserve them for commit. */
+static int settings_set(const char *name, size_t len, settings_read_cb read_cb, void *arg)
+{
+    int rc = load_value(name, len, read_cb, arg);
+    if (strcmp(name, "snapshot") == 0) snapshot_error = rc;
+    else if (rc && rc != -ENOENT) legacy_error = rc;
+    return rc;
+}
+
 /* Publish a scalar setting only after NVS accepts it. */
 static int save_value(const char *key, void *destination, const void *value, size_t size)
 {
-  int rc = settings_save_one(key, value, size);
-  if (rc == 0) { memcpy(destination, value, size); }
+  ARG_UNUSED(key);
+  k_mutex_lock(&settings_mutex, K_FOREVER);
+  user_settings_t candidate = settings;
+  size_t offset = (uint8_t *)destination - (uint8_t *)&settings;
+  memcpy((uint8_t *)&candidate + offset, value, size);
+  int rc = save_snapshot(&candidate);
+  k_mutex_unlock(&settings_mutex);
   return rc;
 }
 
-SETTINGS_STATIC_HANDLER_DEFINE(airspot, SETTINGS_KEY, NULL, settings_set, NULL,
+SETTINGS_STATIC_HANDLER_DEFINE(airspot, SETTINGS_KEY, NULL, settings_set, snapshot_commit,
                                NULL);
 
 int user_settings_init(void)
@@ -117,6 +250,7 @@ int user_settings_init(void)
     return 0;
   }
 
+  persistence_blocked = true;
   int rc = settings_subsys_init();
   if (rc)
   {
@@ -131,13 +265,29 @@ int user_settings_init(void)
     return rc;
   }
 
+  /* Migrate only after every legacy key has been loaded, independent of order. */
+  if (!snapshot_loaded) {
+    uint8_t record[SNAPSHOT_SIZE];
+    user_settings_t checked;
+    encode_settings(&settings, record);
+    if (decode_settings(record, &checked)) return -EINVAL;
+    if (boot_is_img_confirmed()) {
+      rc = save_snapshot_impl(&checked, true);
+      if (rc) return rc;
+    }
+  }
+  persistence_blocked = false;
   initialized = true;
   LOG_INF("User settings initialized: name='%s', power=%d, flight=%d",
           settings.device_name, settings.power_mode, settings.flight_mode);
   return 0;
 }
 
-const user_settings_t *user_settings_get(void) { return &settings; }
+void user_settings_get_snapshot(user_settings_t *out) {
+  k_mutex_lock(&settings_mutex, K_FOREVER);
+  *out = settings;
+  k_mutex_unlock(&settings_mutex);
+}
 
 const char *user_settings_get_device_name(void) { return settings.device_name; }
 
@@ -150,9 +300,7 @@ int user_settings_set_device_name(const char *name)
 
   char value[USER_SETTINGS_NAME_MAX_LEN + 1] = {0};
   strncpy(value, name, USER_SETTINGS_NAME_MAX_LEN);
-  int rc = settings_save_one(SETTINGS_KEY "/name", value, strlen(value));
-  if (rc == 0) { memcpy(settings.device_name, value, sizeof(value)); }
-  return rc;
+  return save_value(SETTINGS_KEY "/name", settings.device_name, value, sizeof(value));
 }
 
 uint8_t user_settings_get_power_mode(void) { return settings.power_mode; }
@@ -215,15 +363,16 @@ int user_settings_set_dnd(uint8_t enabled, uint8_t start_hour,
 {
   if (enabled > 1 || start_hour > 23 || end_hour > 23 ||
       start_minute > 59 || end_minute > 59) { return -EINVAL; }
-  uint8_t dnd_data[5] = {enabled, start_hour, start_minute, end_hour, end_minute};
-  int rc = settings_save_one(SETTINGS_KEY "/dnd", dnd_data, sizeof(dnd_data));
-  if (rc) { return rc; }
-  settings.dnd_enabled = enabled;
-  settings.dnd_start_hour = start_hour;
-  settings.dnd_start_minute = start_minute;
-  settings.dnd_end_hour = end_hour;
-  settings.dnd_end_minute = end_minute;
-  return 0;
+  k_mutex_lock(&settings_mutex, K_FOREVER);
+  user_settings_t candidate = settings;
+  candidate.dnd_enabled = enabled;
+  candidate.dnd_start_hour = start_hour;
+  candidate.dnd_start_minute = start_minute;
+  candidate.dnd_end_hour = end_hour;
+  candidate.dnd_end_minute = end_minute;
+  int rc = save_snapshot(&candidate);
+  k_mutex_unlock(&settings_mutex);
+  return rc;
 }
 
 uint8_t user_settings_get_buzzer(void) { return settings.buzzer_enabled; }
@@ -275,19 +424,13 @@ int user_settings_set_co2_thresholds(uint16_t yellow_start, uint16_t red_start)
     return -EINVAL;
   }
 
-  settings.co2_yellow_start = yellow_start;
-  settings.co2_red_start = red_start;
-
-  int rc = settings_save_one(SETTINGS_KEY "/co2_yellow",
-                             &settings.co2_yellow_start,
-                             sizeof(settings.co2_yellow_start));
-  if (rc)
-  {
-    return rc;
-  }
-
-  return settings_save_one(SETTINGS_KEY "/co2_red", &settings.co2_red_start,
-                           sizeof(settings.co2_red_start));
+  k_mutex_lock(&settings_mutex, K_FOREVER);
+  user_settings_t candidate = settings;
+  candidate.co2_yellow_start = yellow_start;
+  candidate.co2_red_start = red_start;
+  int rc = save_snapshot(&candidate);
+  k_mutex_unlock(&settings_mutex);
+  return rc;
 }
 
 uint8_t user_settings_get_auto_calibrate(void)
@@ -383,103 +526,16 @@ void user_settings_inc_second(void) { time_base++; }
 
 int user_settings_factory_reset(void)
 {
-  LOG_WRN("Factory reset - clearing all user settings");
-
-  /* Reset to defaults */
-  memset(&settings, 0, sizeof(settings));
-  settings.power_mode = 1;       /* Low power (3 min interval) */
-  settings.buzzer_enabled = 0;   /* Stub - keep off */
-  settings.vibrator_enabled = 0; /* Stub - keep off */
-  settings.calib_target = 426;
-  settings.co2_correction = 0;
-  settings.auto_calibrate = 0; /* ASC off by default - manual recalibration is used */
-  settings.asc_day_count = 0;
-  settings.co2_yellow_start = 800;
-  settings.co2_red_start = 1000;
-
-  /* Clear time */
-  time_base = 0;
-  time_set = false;
-
-  /* Delete all settings from NVS */
-  int rc = settings_delete(SETTINGS_KEY "/name");
-  if (rc && rc != -ENOENT)
-  {
-    LOG_WRN("Failed to delete name: %d", rc);
+  k_mutex_lock(&settings_mutex, K_FOREVER);
+  int rc = save_snapshot_impl(&defaults, true);
+  if (!rc) {
+    time_base = 0; time_set = false;
+    snapshot_error = legacy_error = 0;
+    snapshot_loaded = true;
+    loaded_snapshot = defaults;
+    persistence_blocked = false;
+    initialized = true;
   }
-
-  rc = settings_delete(SETTINGS_KEY "/power");
-  if (rc && rc != -ENOENT)
-  {
-    LOG_WRN("Failed to delete power: %d", rc);
-  }
-
-  rc = settings_delete(SETTINGS_KEY "/flight");
-  if (rc && rc != -ENOENT)
-  {
-    LOG_WRN("Failed to delete flight: %d", rc);
-  }
-
-  rc = settings_delete(SETTINGS_KEY "/dnd");
-  if (rc && rc != -ENOENT)
-  {
-    LOG_WRN("Failed to delete dnd: %d", rc);
-  }
-
-  rc = settings_delete(SETTINGS_KEY "/buzzer");
-  if (rc && rc != -ENOENT)
-  {
-    LOG_WRN("Failed to delete buzzer: %d", rc);
-  }
-
-  rc = settings_delete(SETTINGS_KEY "/vibrator");
-  if (rc && rc != -ENOENT)
-  {
-    LOG_WRN("Failed to delete vibrator: %d", rc);
-  }
-
-  rc = settings_delete(SETTINGS_KEY "/co2_cc");
-  if (rc && rc != -ENOENT)
-  {
-    LOG_WRN("Failed to delete co2_cc: %d", rc);
-  }
-
-  rc = settings_delete(SETTINGS_KEY "/calib_target");
-  if (rc && rc != -ENOENT)
-  {
-    LOG_WRN("Failed to delete calib_target: %d", rc);
-  }
-
-  rc = settings_delete(SETTINGS_KEY "/auto_calib");
-  if (rc && rc != -ENOENT)
-  {
-    LOG_WRN("Failed to delete auto_calib: %d", rc);
-  }
-
-  rc = settings_delete(SETTINGS_KEY "/asc_day");
-  if (rc && rc != -ENOENT)
-  {
-    LOG_WRN("Failed to delete asc_day: %d", rc);
-  }
-
-  rc = settings_delete(SETTINGS_KEY "/co2_yellow");
-  if (rc && rc != -ENOENT)
-  {
-    LOG_WRN("Failed to delete co2_yellow: %d", rc);
-  }
-
-  rc = settings_delete(SETTINGS_KEY "/co2_red");
-  if (rc && rc != -ENOENT)
-  {
-    LOG_WRN("Failed to delete co2_red: %d", rc);
-  }
-
-  rc = settings_delete(SETTINGS_KEY "/paired");
-  if (rc && rc != -ENOENT)
-  {
-    LOG_WRN("Failed to delete paired: %d", rc);
-  }
-
-  LOG_INF("Factory reset complete - settings cleared");
-  return 0;
+  k_mutex_unlock(&settings_mutex);
+  return rc;
 }

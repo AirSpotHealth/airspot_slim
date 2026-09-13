@@ -18,13 +18,9 @@ class CalibrationProtocolTests(unittest.TestCase):
 #include <string.h>
 #include <services/protocol.h>
 #include <services/sensor_manager.h>
-#include <drivers/supply_diagnostic.h>
 #define ARRAY_SIZE(a) (sizeof(a)/sizeof((a)[0]))
 #define LOG_INF(...)
 #define LOG_WRN(...)
-static uint8_t supply_action;
-int supply_diagnostic_control(uint8_t a,supply_diagnostic_t *s) {supply_action=a;s->pwm_active=1;s->seconds_remaining=300;return a>2?-22:0;}
-void sensor_manager_get_timing_diagnostic(sensor_timing_diagnostic_t *d) {*d=(sensor_timing_diagnostic_t){.continuous=true,.report_interval_ms=5000,.updates=0x12345678,.failures=2,.last_gap_ms=1000,.max_gap_ms=1012};}
 static int self_test_error;static uint16_t self_test_word;
 static int save_error, reset_error, measure_error, enabled, mode_commands, state_reads, duration;
 static uint8_t reply[32];static uint16_t reply_len;
@@ -44,15 +40,6 @@ static void handle(const uint8_t *frame,uint16_t len) {switch(frame[2]) {
 }}
 int main(void) {
   uint8_t f[7]={255,170,CMD_SET_SELF_CALIB,1,1,0,0};
-  f[2]=CMD_SENSOR_TIMING_DIAGNOSTIC;handle(f,6);
-  assert(reply_len==27 && reply[3]==22 && reply[4]==1 && reply[5]==1);
-  assert(reply[8]==0x13 && reply[9]==0x88 && reply[10]==0x12 && reply[13]==0x78);
-  assert(reply[17]==2 && reply[20]==3 && reply[21]==232 && reply[25]==244);
-  f[2]=CMD_SUPPLY_DIAGNOSTIC;f[4]=1;handle(f,6);
-  assert(supply_action==1 && reply_len==11 && reply[3]==6 && reply[4]==1);
-  assert(reply[5]==0 && reply[6]==0 && reply[7]==1 && reply[8]==1 && reply[9]==44);
-  f[3]=0;handle(f,5);assert(supply_action==255 && reply[5]==255 && reply[6]==234);
-  f[3]=1;
   f[2]=CMD_SENSOR_SELF_TEST;self_test_word=0x10;handle(f,6);
   assert(reply_len==10 && reply[3]==5 && reply[4]==1);
   assert(reply[5]==0 && reply[6]==0 && reply[7]==0 && reply[8]==0x10);

@@ -30,3 +30,17 @@ Removed two additional unused setup helpers after reference inspection:
 - `application/scripts/ensure_mcuboot_key_link.sh`: superseded by the absolute signing-key path passed by scripts/airspot; no production caller. Actual signing keys and existing SDK paths are untouched.
 
 Replaced obsolete nRF54L05 memory guidance with generated nRF54L15 baseline/candidate figures.
+
+## Experiment retirement — 13 September 2026
+
+Removed the qualification/resource-metrics, adaptive-BLE and forensic-history
+profiles and implementations, including production no-op BLE hooks. Removed the
+PMIC PWM experiment and qualification-only compensation timing counters/commands;
+0x35 and 0x36 are reserved. The flash wake fix and sensor compensation scheduling
+remain, with their regression tests. Removed only the dedicated supply experiment
+and forensic read-only tests; retained production tests and manufacturing support.
+
+Historical qualification documents and task lists moved to `docs/archive/` with
+archive notices and adjusted Markdown links. `docs/STATUS.md` is the current
+entry point. Existing uncommitted hardening work, signing material, release
+packages, SDK, raw backups and legacy local firmware directories were preserved.

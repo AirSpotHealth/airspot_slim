@@ -65,7 +65,7 @@ static int data_log_store_record(uint32_t t, uint16_t v, record_type_t k) { logs
 #include "''' + str(ROOT/'application/src/services/software_asc.c') + '''"
 #include "services/calibration_service.c"
 static int finished, failed, mode;
-void sensor_manager_set_power_mode(uint8_t m) {mode=m;}
+int sensor_manager_change_power_mode(uint8_t m) {if(storage_error)return storage_error;mode=m;power=m;return 0;}
 static void done(int16_t d) {finished++;}
 static void error(int e) {failed++;}
 static void feed(int n, uint16_t value) { while(n--) software_asc_process_measurement(value); }

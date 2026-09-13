@@ -45,6 +45,8 @@ int airspot_nus_init(airspot_nus_rx_callback_t rx_callback);
  * @return 0 on success, negative errno on failure
  */
 int airspot_nus_send(const uint8_t *data, uint16_t len);
+int airspot_nus_send_session(const uint8_t *data, uint16_t len, uint32_t generation);
+uint32_t airspot_nus_generation(void);
 
 /**
  * @brief Check if NUS is ready to send

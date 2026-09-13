@@ -1,5 +1,9 @@
 # Production board migration checklist
 
+> Archived on 13 September 2026. Historical evidence and plans; experiment
+> profiles and commands described here may have been retired. See the
+> [current Slim status](../STATUS.md) for supported workflow and open findings.
+
 See `plan.md` for dependencies, acceptance criteria and verification.
 
 - [x] Identify current branch, shared commit and live remote branches.

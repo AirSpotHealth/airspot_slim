@@ -242,7 +242,7 @@ uint16_t data_log_get_current_half_page(void);
  *
  * @param half_page_number Half-page number (0 to FLASH_HALF_PAGE_COUNT-1)
  */
-void data_log_request(uint16_t half_page_number);
+void data_log_request(uint16_t half_page_number, uint32_t session);
 
 /**
  * @brief Check if there's a pending data log request
@@ -263,7 +263,7 @@ bool data_log_has_pending_request(void);
  * @return 0 on success, negative errno on failure
  */
 int data_log_process_request(record_page_t *out_page, uint8_t *out_count,
-                             uint16_t *out_half_page);
+                             uint16_t *out_half_page, uint32_t *out_session);
 
 /**
  * @brief Erase all data log data
@@ -280,12 +280,12 @@ int data_log_erase_all(void);
  *
  * Set this flag to trigger an erase from the main loop.
  */
-void data_log_request_erase_all(void);
+void data_log_request_erase_all(uint32_t session);
 
 /**
  * @brief Check if erase all is pending
  */
-bool data_log_is_erase_pending(void);
+bool data_log_take_erase_request(uint32_t *session);
 
 /**
  * @brief Wait for a data log request (history or erase)

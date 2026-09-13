@@ -12,6 +12,8 @@
 #include <zephyr/drivers/hwinfo.h>
 #include <zephyr/drivers/watchdog.h>
 #include <services/ota_service.h>
+#include <services/health_service.h>
+#include <services/diagnostics.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/printk.h>
@@ -83,6 +85,7 @@ static volatile bool data_log_due = false;
 /* WDT device and channel */
 static const struct device *wdt_dev;
 static int wdt_channel_id = -1;
+static k_tid_t watchdog_owner;
 
 /**
  * @brief Initialize watchdog timer
@@ -93,6 +96,7 @@ static int wdt_channel_id = -1;
  * @return 0 on success, negative errno on failure
  */
 static int watchdog_init(void) {
+  watchdog_owner = k_current_get();
   /* Get WDT device */
   wdt_dev = DEVICE_DT_GET_OR_NULL(DT_ALIAS(watchdog0));
   if (!wdt_dev) {
@@ -126,6 +130,7 @@ static int watchdog_init(void) {
   /* Start WDT - after this, must feed regularly! */
   int ret = wdt_setup(wdt_dev, WDT_OPT_PAUSE_HALTED_BY_DBG);
   if (ret < 0) {
+    wdt_channel_id = -1;
     LOG_ERR("Failed to start WDT: %d", ret);
     return ret;
   }
@@ -141,6 +146,11 @@ static int watchdog_init(void) {
  * Called from main loop and during long operations.
  */
 void watchdog_feed(void) {
+  /* Check expiry BEFORE renewal, including keepalives from long operations.
+   * A different worker can never renew the main thread's deadline. */
+  uint32_t failed = health_failed();
+  if (failed) { diagnostics_watchdog(failed); return; }
+  if (k_current_get() == watchdog_owner) health_progress(HEALTH_MAIN, 5000);
   if (wdt_dev && wdt_channel_id >= 0) {
     wdt_feed(wdt_dev, wdt_channel_id);
   }
@@ -319,6 +329,7 @@ static struct k_work_q co2_readout_wq;
 
 static void co2_readout_work_handler(struct k_work *work) {
   ARG_UNUSED(work);
+  health_progress(HEALTH_READOUT, 35000);
   sensor_data_t data;
 
   /* Phase 1: flash the LAST reading's color for the full readout window as
@@ -356,6 +367,7 @@ static void co2_readout_work_handler(struct k_work *work) {
 
   /* Phase 2: fresh reading shown SOLID (steady, not blinking) for 5 s. */
   led_indicator_show_color(new_color, CO2_READOUT_DURATION_MS);
+  health_progress(HEALTH_READOUT, 0);
 }
 
 static K_WORK_DEFINE(co2_readout_work, co2_readout_work_handler);
@@ -737,10 +749,20 @@ static void boot_wait_for_console(void) {
 #endif
 }
 
+/* First failing subsystem + errno are retained; later failures stay in RTT. */
+static bool startup_check(uint16_t subsystem, int rc) {
+  if (rc) diagnostics_record(DIAG_STARTUP_FAILED,
+      ((uint32_t)subsystem << 16) | ((uint32_t)(rc < 0 ? -rc : rc) & 0xffff));
+  return rc == 0;
+}
+
 int main(void) {
   int ret;
   bool startup_healthy = true;
   ota_service_init();
+  ret = watchdog_init();
+  startup_healthy &= startup_check(1, ret);
+  if (ret) LOG_ERR("Watchdog unavailable: %d; trial confirmation disabled", ret);
   uint32_t wake_hold_start = k_uptime_get_32();
   uint32_t initial_reset_cause = 0;
   hwinfo_get_reset_cause(&initial_reset_cause);
@@ -792,7 +814,7 @@ int main(void) {
 
   /* Initialize LED driver */
   ret = led_driver_init();
-  startup_healthy &= (ret == 0);
+  startup_healthy &= startup_check(2, ret);
   if (ret) {
     LOG_ERR("LED driver init failed: %d", ret);
   } else {
@@ -806,7 +828,7 @@ int main(void) {
 
   /* Initialize button driver */
   ret = button_driver_init();
-  startup_healthy &= (ret == 0);
+  startup_healthy &= startup_check(3, ret);
   if (ret) {
     LOG_ERR("Button driver init failed: %d", ret);
   } else {
@@ -816,7 +838,7 @@ int main(void) {
 
   /* Initialize Battery driver */
   ret = battery_init();
-  startup_healthy &= (ret == 0);
+  startup_healthy &= startup_check(4, ret);
   if (ret) {
     LOG_ERR("Battery init failed: %d", ret);
   } else {
@@ -825,7 +847,7 @@ int main(void) {
 
   /* Initialize Qi Charger driver */
   ret = qi_charger_init();
-  startup_healthy &= (ret == 0);
+  startup_healthy &= startup_check(5, ret);
   if (ret) {
     LOG_ERR("Qi charger init failed: %d", ret);
   } else {
@@ -834,7 +856,7 @@ int main(void) {
 
   /* Initialize LED indicator service */
   ret = led_indicator_init();
-  startup_healthy &= (ret == 0);
+  startup_healthy &= startup_check(6, ret);
   if (ret) {
     LOG_ERR("LED indicator init failed: %d", ret);
   } else {
@@ -884,7 +906,7 @@ int main(void) {
 
   /* 1. User settings (loads from NVS) */
   ret = user_settings_init();
-  startup_healthy &= (ret == 0);
+  startup_healthy &= startup_check(7, ret);
   if (ret) {
     LOG_WRN("User settings init failed: %d (using defaults)", ret);
   } else {
@@ -893,12 +915,14 @@ int main(void) {
             user_settings_get_co2_correction());
   }
 
+  diagnostics_init(initial_reset_cause);
+
   /* Initialize Factory Test Service */
   factory_test_init();
 
   /* Initialize Power Manager */
   ret = power_manager_init();
-  startup_healthy &= (ret == 0);
+  startup_healthy &= startup_check(8, ret);
   if (ret) {
     LOG_WRN("Power manager init failed: %d", ret);
   } else {
@@ -907,7 +931,7 @@ int main(void) {
 
   /* 2. BLE service (enables Bluetooth stack) */
   ret = ble_service_init();
-  startup_healthy &= (ret == 0);
+  startup_healthy &= startup_check(9, ret);
   if (ret) {
     LOG_ERR("BLE service init failed: %d", ret);
   } else {
@@ -917,28 +941,19 @@ int main(void) {
   /* 3. Protocol handler (initializes NUS) */
   software_asc_init();
   ret = protocol_init();
-  startup_healthy &= (ret == 0);
+  startup_healthy &= startup_check(10, ret);
   if (ret) {
     LOG_ERR("Protocol init failed: %d", ret);
   } else {
     LOG_INF("Protocol handler initialized");
   }
 
-  /* Watchdog — start it BEFORE the sensor manager. STCC4 conditioning blocks
-   * for ~22s, which far exceeds the WDT timeout; conditioning feeds the WDT via
-   * its keepalive so it survives. Critically, a watchdog left running across a
-   * soft reset (by design) would otherwise fire during the next boot's
-   * conditioning — the cause of the double-boot + CO2=0 we were chasing. */
-  ret = watchdog_init();
-  startup_healthy &= (ret == 0);
-  if (ret < 0) {
-    LOG_WRN("Watchdog init failed: %d (continuing without WDT)", ret);
-  }
-
+  /* The watchdog already covers startup. Conditioning keepalives are bounded
+   * by the main owner and cannot hide another worker's expired deadline. */
   /* 4. Sensor manager (initializes all sensors) */
   ret = sensor_manager_init();
   sensor_manager_register_callback(sensor_data_callback);
-  startup_healthy &= (ret == 0);
+  startup_healthy &= startup_check(11, ret);
   if (ret) {
     LOG_ERR("Sensor manager init failed: %d", ret);
   } else {
@@ -950,7 +965,7 @@ int main(void) {
 
   /* 5. Data log (requires SPI flash) */
   ret = data_log_init();
-  startup_healthy &= (ret == 0);
+  startup_healthy &= startup_check(12, ret);
   if (ret) {
     LOG_WRN("Data log init failed: %d (history disabled)", ret);
   } else {
@@ -959,7 +974,7 @@ int main(void) {
 
   /* 6. BLE mode service (starts advertising) */
   ret = ble_mode_init();
-  startup_healthy &= (ret == 0);
+  startup_healthy &= startup_check(13, ret);
   if (ret) {
     LOG_ERR("BLE mode init failed: %d", ret);
     /* Try starting advertising directly */
@@ -1022,10 +1037,10 @@ int main(void) {
     LOG_INF("Sensor mode: ON DEMAND (manual measurements only)");
     /* Do one initial measurement */
     ret = sensor_manager_measure_now();
-    startup_healthy &= (ret == 0);
+    startup_healthy &= startup_check(14, ret);
   } else {
     ret = sensor_manager_start(interval_ms);
-    startup_healthy &= (ret == 0);
+    startup_healthy &= startup_check(15, ret);
     if (ret) {
       LOG_ERR("Failed to start sensor measurements: %d", ret);
     } else {
@@ -1035,7 +1050,8 @@ int main(void) {
 
   /* The interval alone does not select STCC4 continuous operation. Restore
    * the saved hardware mode too, including when its interval is already 5 s. */
-  sensor_manager_set_power_mode(power_mode);
+  ret = sensor_manager_set_power_mode(power_mode);
+  startup_healthy &= startup_check(16, ret);
 
   /*
    * ========================================
@@ -1058,6 +1074,7 @@ int main(void) {
    * ========================================
    */
 
+  health_start();
   ota_service_startup_complete(startup_healthy);
 
   while (1) {

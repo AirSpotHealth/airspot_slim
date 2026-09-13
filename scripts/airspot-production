@@ -7,20 +7,82 @@ build="$AIRSPOT_BUILD_DIR"
 command="${1:-help}"
 [[ $# -eq 0 ]] || shift
 pristine=auto
+serial=""
+yes=false
+settings_options=()
+source "$script_dir/terminal.sh"
+[[ "$command" != monitor ]] || command=logs
 if [[ "$command" = logs ]]; then
-    [[ "${1:-rtt}" = rtt ]] || { echo "Diagnostics use RTT" >&2; exit 1; }
     command=rtt
-    [[ $# -eq 0 ]] || shift
+    if [[ "${1:-}" = rtt ]]; then shift; fi
 fi
-for arg in "$@"; do
-    case "$arg" in
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --reset-settings) settings_options+=(--reset-settings) ;;
+        --settings-source)
+            [[ $# -ge 2 ]] || { echo "--settings-source requires an address" >&2; exit 1; }
+            settings_options+=(--settings-source "$2")
+            shift ;;
+        -y|--yes) yes=true ;;
+        --serial)
+            [[ $# -ge 2 && "$2" =~ ^[0-9]+$ ]] || { echo "--serial requires a numeric probe serial" >&2; exit 1; }
+            serial="$2"
+            shift ;;
         --clean|--pristine) pristine=always ;;
         --rtt|--debug) ;; # Compatibility aliases for the single RTT configuration.
-        *) echo "Unsupported option: $arg" >&2; exit 1 ;;
+        *) echo "Unsupported option: $1" >&2; exit 1 ;;
     esac
+    shift
 done
+if [[ "$yes" = true && "$command" != erase ]]; then
+    echo "--yes is only supported for erase" >&2; exit 1
+fi
+if [[ ${#settings_options[@]} -gt 0 ]]; then
+    case "$command" in
+        flash|provision|bf|bfl) ;;
+        *) echo "Settings options are only supported for flash, provision, bf and bfl" >&2; exit 1 ;;
+    esac
+fi
 validator="$script_dir/firmware_artifact.py"
 case "$command" in
+    flash|provision|rtt|erase|reset|bf|bfl)
+        AIRSPOT_JLINK_SERIAL=$("$python" "$script_dir/probe.py" select "$serial")
+        export AIRSPOT_JLINK_SERIAL
+        ;;
+esac
+case "$command" in
+    menu) show_menu ;;
+    devices|info)
+        heading "AIRSPOT  /  Slim $(firmware_version)"
+        printf '  Board: %s\n  Build: %s\n\n' "$AIRSPOT_BOARD" "$build"
+        nrfutil device list --traits jlink
+        ;;
+    version) printf 'AirSpot Slim %s\n' "$(firmware_version)" ;;
+    ports)
+        "$python" -c 'import glob; ports = sorted(set(glob.glob("/dev/cu.*") + glob.glob("/dev/ttyACM*") + glob.glob("/dev/ttyUSB*"))); print("\n".join(ports) if ports else "No serial ports found.")'
+        ;;
+    erase)
+        printf 'Erase probe %s: internal firmware, bootloader, settings and UICR will be removed.\n' "$AIRSPOT_JLINK_SERIAL"
+        if [[ "$yes" != true ]]; then
+            [[ -t 0 ]] || { echo 'Erase requires confirmation in a terminal, or explicit --yes.' >&2; exit 1; }
+            read -r -p 'Continue? [y/N] ' answer
+            [[ "$answer" = y || "$answer" = Y ]] || { echo 'Erase cancelled.'; exit 1; }
+        fi
+        nrfutil device erase --all --family nrf54l --serial-number "$AIRSPOT_JLINK_SERIAL"
+        echo 'Internal memory erased. Run airspot flash to reinstall firmware.'
+        ;;
+    reset)
+        nrfutil device reset --family nrf54l --serial-number "$AIRSPOT_JLINK_SERIAL"
+        ;;
+    bf|bfl)
+        build_options=()
+        [[ "$pristine" != always ]] || build_options=(--clean)
+        bash "$script_dir/airspot-production" build "${build_options[@]}"
+        bash "$script_dir/airspot-production" flash --serial "$AIRSPOT_JLINK_SERIAL" "${settings_options[@]}"
+        if [[ "$command" = bfl ]]; then
+            bash "$script_dir/airspot-production" logs --serial "$AIRSPOT_JLINK_SERIAL"
+        fi
+        ;;
     build)
         key="${AIRSPOT_SIGNING_KEY:-$AIRSPOT_PROJECT_DIR/keys/airspot-signing-key-ecdsa.pem}"
         [[ -f "$key" ]] || { echo "Set AIRSPOT_SIGNING_KEY to the product signing key" >&2; exit 1; }
@@ -35,13 +97,12 @@ case "$command" in
     check) "$python" "$validator" verify "$build" ;;
     flash)
         "$python" "$validator" verify "$build"
-        # One command handles checked updates and recognized first installs.
-        # provision.py backs up the device and preserves/migrates known NVS.
-        "$python" "$script_dir/provision.py" "$build"
+        # Install independently of the old firmware; back up and preserve settings bytes.
+        "$python" "$script_dir/provision.py" "$build" "${settings_options[@]}"
         ;;
     provision)
         "$python" "$validator" verify "$build"
-        "$python" "$script_dir/provision.py" "$build"
+        "$python" "$script_dir/provision.py" "$build" "${settings_options[@]}"
         ;;
     memory)
         "$python" "$validator" verify "$build"
@@ -53,17 +114,10 @@ case "$command" in
         address=$("$ZEPHYR_SDK_INSTALL_DIR/arm-zephyr-eabi/bin/arm-zephyr-eabi-nm" \
             "$build/application/zephyr/airspot_slim.elf" | awk '$3 == "_SEGGER_RTT" {print $1}')
         [[ -n "$address" ]] || { echo "RTT control block not found" >&2; exit 1; }
-        probe=()
-        [[ -z "${AIRSPOT_JLINK_SERIAL:-}" ]] || probe=(-SelectEmuBySN "$AIRSPOT_JLINK_SERIAL")
-        JLinkRTTLogger -Device "$AIRSPOT_JLINK_DEVICE" -If SWD -Speed 1000 \
-            -RTTAddress "0x$address" -RTTChannel 0 "${probe[@]}" "$build/rtt.log"
+        "$python" "$script_dir/probe.py" logs "$build/rtt.log" -Device "$AIRSPOT_JLINK_DEVICE" -If SWD -Speed 1000 \
+            -RTTAddress "0x$address" -RTTChannel 0 -USB "$AIRSPOT_JLINK_SERIAL"
         ;;
     clean) rm -rf "$build" ;;
-    help|--help|-h)
-        echo "AirSpot Slim: airspot {build|check|provision|flash|memory|clean} [--clean]"
-        echo "Logs: airspot logs rtt. All builds include signed Bluetooth OTA and RTT."
-        echo "Wired install/update: flash (backs up and preserves known settings); provision is also accepted."
-        echo "OTA file: application/build_production/application/zephyr/airspot_slim.signed.bin"
-        ;;
+    help|--help|-h) show_help ;;
     *) echo "Unknown command: $command" >&2; exit 1 ;;
 esac

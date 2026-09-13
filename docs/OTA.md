@@ -2,7 +2,7 @@
 
 AirSpot Slim uses MCUmgr SMP over Bluetooth LE and MCUboot with ECDSA P-256
 signatures. The existing mobile `SlimDfuService` uses the compatible
-`testAndConfirm` update mode. Upload the production `airspot_slim_dfu.zip` or
+`testOnly` update mode (device-controlled confirmation). Upload the production `airspot_slim_dfu.zip` or
 `airspot_slim.signed.bin`; never upload the unsigned application or bootloader.
 
 ## Memory layout
@@ -20,25 +20,25 @@ has 1,428 KiB NVM and 188 KiB RAM. External SPI flash remains sensor history sto
 
 ## Initial wired installation
 
-1. Connect J-Link and set `AIRSPOT_JLINK_SERIAL` to its serial number.
+1. Connect J-Link; the flash command lists probes and selects one automatically or prompts if several are connected.
 2. Run `airspot build`, then `airspot flash` (`airspot provision` is also accepted).
-3. Open `airspot logs rtt` and check startup, live readings and confirmation.
+3. Open `airspot logs` and check startup, live readings and confirmation.
 
-Flashing accepts a blank device, the exact known bring-up image, the archived
-pre-Rev3A factory image with erased settings, or the current production bootloader.
-The factory image is identified by a hash of the entire main-processor region;
-changed or unknown legacy images are refused rather than guessing their settings. It backs up all 1,524 KiB RRAM under the ignored
-`local_backups/` directory and verifies the MCU identity. For the known bring-up
-image, it copies the 36 KiB settings region from `0x74000` to `0x15C000`. It writes
-the bootloader, signed primary image and preserved settings, clears stale update
-state, reads everything back and checks that auxiliary memory is unchanged.
-No external flash erase or UICR/recover operation is performed.
+Flashing installs independently of the previous firmware: blank, older, unknown,
+or damaged images do not require a bootloader allowlist or local build history.
+The helper still validates the new build and MCU identity, backs up all 1,524 KiB
+RRAM under `local_backups/`, writes firmware, and verifies readback and unchanged
+auxiliary memory. External flash and UICR are not erased or recovered.
 
-Subsequent `airspot flash` reinstalls checked firmware and clears pending updates,
-preserving current settings. It refuses devices with an unknown bootloader. A
-readback mismatch leaves the device halted and names the recovery snapshot; use
-that snapshot for diagnosis, rather than a mass erase. Wired reinstall discards
-the staged update and its rollback image, so normal field updates should use OTA.
+By default, the 36 KiB at `0x15c000` is preserved byte-for-byte. This is the current
+settings address, not a claim that arbitrary old firmware used the same layout.
+Use `airspot flash --reset-settings` for fresh settings. For a device known to use
+the old bring-up layout, use `airspot flash --settings-source 0x74000` to copy its
+settings to the current address. Both modes retain the full original memory backup.
+
+Wired installation clears pending updates and rollback images. A readback mismatch
+leaves the device halted and names the recovery snapshot. Hardware/debug access
+failures can still stop flashing; unknown old firmware alone cannot.
 
 ## Wireless update behavior
 
@@ -56,13 +56,17 @@ checker verifies its presence. Re-evaluate this workaround when upgrading NCS.
 The new application confirms only after driver/service startup and a valid live
 sensor sample. An unconfirmed application that reaches its 120-second startup
 deadline reboots, allowing MCUboot to revert. A hard lock is handled by the
-hardware watchdog once started. Remote writes are blocked before startup checks
-pass, and the client cannot permanently confirm an inactive slot.
+hardware watchdog started before driver initialization. Remote writes are blocked
+while the running image is unconfirmed; confirmed firmware permits repair uploads
+even when sensor startup fails. The client cannot confirm the trial remotely.
 
-Image writes and reset requests require a cached battery reading of at least
-3,600 mV. This is a conservative software guard, not a replacement for brownout
-and interrupted-update qualification. The battery reading follows the configured
-sensor sampling interval.
+Image writes and reset requests require a successful battery reading no older
+than five seconds and at least 3,600 mV (lower of raw and filtered voltage).
+Refresh is independent of sensor sampling; ADC failure rejects the operation.
+This guard does not replace brownout and interrupted-update qualification.
+
+See [beta hardening](archive/BETA_HARDENING.md) and [attached-device verification](archive/BETA_HARDWARE_CHECK.md) for the 0.17.1 candidate, recovery
+boundaries, diagnostic protocol and outstanding physical release gates.
 
 ## Signing and access
 
@@ -88,7 +92,7 @@ airspot check
 /opt/nordic/ncs/toolchains/322ac893fe/bin/python3 -m unittest discover -s tests -p test_firmware_artifact.py
 ```
 
-Fourteen automated checks cover real build artifacts, signature tampering, MCU identity,
+Automated checks cover real build artifacts, signature tampering, MCU identity,
 bootloader offsets, rollback configuration, key mismatch, writes outside slots,
 and preservation of settings during provisioning. Physical test results are
 recorded in the board qualification document.

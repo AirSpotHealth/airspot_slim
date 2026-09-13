@@ -16,7 +16,6 @@
 
 #include <drivers/led_driver.h>
 #include <drivers/stcc4.h>
-#include <drivers/supply_diagnostic.h>
 
 #include <airspot/version.h>
 #include <services/led_indicator.h>
@@ -29,6 +28,10 @@
 #include <services/factory_test.h>
 #include <services/power_manager.h>
 #include <services/protocol.h>
+#include <services/health_service.h>
+#include <services/diagnostics.h>
+#include <zephyr/sys/byteorder.h>
+#include <zephyr/dfu/mcuboot.h>
 #include <services/sensor_manager.h>
 #include <services/user_settings.h>
 
@@ -38,6 +41,8 @@ LOG_MODULE_REGISTER(protocol, CONFIG_AIRSPOT_LOG_LEVEL);
 #define RX_FRAME_MAX_LEN 64
 static uint8_t rx_frame[RX_FRAME_MAX_LEN];
 static uint8_t rx_frame_idx = 0;
+static uint32_t rx_generation;
+static uint32_t command_generation;
 
 /*
  * Command dispatch runs on a dedicated thread, NOT in the NUS RX callback.
@@ -49,6 +54,7 @@ static uint8_t rx_frame_idx = 0;
 typedef struct {
   uint8_t data[RX_FRAME_MAX_LEN];
   uint16_t len;
+  uint32_t generation;
 } protocol_frame_t;
 
 #define PROTOCOL_QUEUE_DEPTH 8
@@ -78,6 +84,8 @@ static uint8_t verify_frame_checksum(const uint8_t *frame, uint16_t len);
 /* NUS RX callback - accumulates data into frames */
 static void nus_rx_callback(const uint8_t *data, uint16_t len)
 {
+  uint32_t session = airspot_nus_generation();
+  if (session != rx_generation) { rx_frame_idx = 0; rx_generation = session; }
   for (uint16_t i = 0; i < len; i++)
   {
     if (rx_frame_idx >= RX_FRAME_MAX_LEN)
@@ -115,6 +123,7 @@ static void nus_rx_callback(const uint8_t *data, uint16_t len)
         protocol_frame_t frame;
         frame.len = rx_frame_idx;
         memcpy(frame.data, rx_frame, rx_frame_idx);
+        frame.generation = session;
         if (k_msgq_put(&protocol_msgq, &frame, K_NO_WAIT) != 0)
         {
           LOG_WRN("Protocol command queue full, dropping frame");
@@ -138,7 +147,13 @@ static void protocol_thread_fn(void *p1, void *p2, void *p3)
   {
     if (k_msgq_get(&protocol_msgq, &frame, K_FOREVER) == 0)
     {
+      if (frame.generation != airspot_nus_generation()) continue;
+      command_generation = frame.generation;
+      health_progress(HEALTH_PROTOCOL, 120000);
       frame_received_handler(frame.data, frame.len);
+      /* Check before disarming: expired work must not erase its evidence. */
+      (void)health_failed();
+      health_progress(HEALTH_PROTOCOL, 0);
     }
   }
 }
@@ -217,7 +232,8 @@ static uint8_t verify_frame_checksum(const uint8_t *frame, uint16_t len)
  */
 static void send_frame(const uint8_t *frame, uint16_t len)
 {
-  int ret = airspot_nus_send(frame, len);
+  uint32_t session = k_current_get() == &protocol_thread_data ? command_generation : 0;
+  int ret = airspot_nus_send_session(frame, len, session);
   if (ret)
   {
     LOG_WRN("Failed to send frame: %d", ret);
@@ -378,6 +394,17 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len)
     }
     break;
 
+  case CMD_GET_FAULT_EVENTS:
+  {
+    if (frame[3] != 5) break;
+    uint8_t response[41] = {CMD_FIRST_BYTE, CMD_SECOND_BYTE, CMD_GET_FAULT_EVENTS};
+    size_t payload = diagnostics_read(frame[4], sys_get_be32(frame + 5), response + 4);
+    response[3] = payload;
+    set_frame_checksum(response, payload + 5);
+    send_frame(response, payload + 5);
+    break;
+  }
+
   case CMD_GET_ASC_DIAGNOSTIC:
   {
     sensor_asc_diagnostic_t diagnostic;
@@ -401,37 +428,6 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len)
     uint8_t tx_frame[10] = {CMD_FIRST_BYTE, CMD_SECOND_BYTE,
       CMD_SENSOR_SELF_TEST, 5, 1, (uint8_t)(error >> 8), (uint8_t)error,
       (uint8_t)(result >> 8), (uint8_t)result, 0};
-    set_frame_checksum(tx_frame, sizeof(tx_frame));
-    send_frame(tx_frame, sizeof(tx_frame));
-    break;
-  }
-
-  case CMD_SUPPLY_DIAGNOSTIC:
-  {
-    supply_diagnostic_t state = {0};
-    /* A missing/malformed action becomes an invalid request, never an enable. */
-    uint8_t action = frame[3] == 1 ? frame[4] : UINT8_MAX;
-    uint16_t error = (uint16_t)supply_diagnostic_control(action, &state);
-    uint8_t tx_frame[11] = {CMD_FIRST_BYTE, CMD_SECOND_BYTE,
-      CMD_SUPPLY_DIAGNOSTIC, 6, 1, (uint8_t)(error >> 8), (uint8_t)error,
-      state.pwm_active, (uint8_t)(state.seconds_remaining >> 8),
-      (uint8_t)state.seconds_remaining, 0};
-    set_frame_checksum(tx_frame, sizeof(tx_frame));
-    send_frame(tx_frame, sizeof(tx_frame));
-    break;
-  }
-
-  case CMD_SENSOR_TIMING_DIAGNOSTIC:
-  {
-    sensor_timing_diagnostic_t timing;
-    sensor_manager_get_timing_diagnostic(&timing);
-    uint8_t tx_frame[27] = {CMD_FIRST_BYTE, CMD_SECOND_BYTE,
-      CMD_SENSOR_TIMING_DIAGNOSTIC, 22, 1, timing.continuous};
-    uint32_t values[] = {timing.report_interval_ms, timing.updates,
-      timing.failures, timing.last_gap_ms, timing.max_gap_ms};
-    for (unsigned i = 0; i < ARRAY_SIZE(values); i++) {
-      for (unsigned j = 0; j < 4; j++) tx_frame[6 + i * 4 + j] = values[i] >> (24 - 8 * j);
-    }
     set_frame_checksum(tx_frame, sizeof(tx_frame));
     send_frame(tx_frame, sizeof(tx_frame));
     break;
@@ -576,10 +572,8 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len)
   case CMD_SET_POWER_MODE:
     if (len >= 6)
     {
-      if (user_settings_set_power_mode(frame[4]) == 0) {
-        sensor_manager_set_power_mode(frame[4]);
-      }
-      LOG_INF("Power mode set: %d", frame[4]);
+      int rc = sensor_manager_change_power_mode(frame[4]);
+      if (rc) LOG_WRN("Power mode change failed: %d", rc);
     }
     protocol_send_device_state();
     break;
@@ -604,14 +598,14 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len)
     {
       uint16_t half_page = ((uint16_t)frame[4] << 8) | frame[5];
       LOG_INF("History request: half-page %d", half_page);
-      data_log_request(half_page);
+      data_log_request(half_page, command_generation);
     }
     break;
 
   case CMD_ERASE_HISTORY:
     /* Erase all history data */
     LOG_WRN("Erase history command received");
-    data_log_request_erase_all();
+    data_log_request_erase_all(command_generation);
     break;
 
   case CMD_RESET_SENSOR:
@@ -758,29 +752,22 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len)
     break;
 
   case CMD_FACTORY_RESET:
-    /* Factory reset - clear all settings and history, then reboot */
-    LOG_WRN("Factory reset command received");
-    /* Send ACK first */
-    {
-      uint8_t tx_frame[8] = {0};
-      tx_frame[0] = CMD_FIRST_BYTE;
-      tx_frame[1] = CMD_SECOND_BYTE;
-      tx_frame[2] = CMD_FACTORY_RESET;
-      tx_frame[3] = 0x01;
-      tx_frame[4] = 0x01; /* ACK */
-      set_frame_checksum(tx_frame, 6);
-      send_frame(tx_frame, 6);
+  {
+    /* Trial firmware cannot erase user data before it has earned confirmation. */
+    int rc = boot_is_img_confirmed() ? data_log_erase_all() : -EBUSY;
+    if (!rc) rc = user_settings_factory_reset();
+    uint8_t response[6] = {CMD_FIRST_BYTE, CMD_SECOND_BYTE, CMD_FACTORY_RESET,
+                          1, rc ? 0 : 1, 0};
+    set_frame_checksum(response, sizeof(response));
+    send_frame(response, sizeof(response));
+    if (!rc) {
+      k_msleep(100);
+      sys_reboot(SYS_REBOOT_COLD);
+    } else {
+      diagnostics_record(DIAG_STORAGE_FAILED, (uint32_t)-rc);
     }
-    k_msleep(100);
-    /* Clear user settings */
-    user_settings_factory_reset();
-    /* Erase history data */
-    data_log_request_erase_all();
-    k_msleep(500); /* Allow erase to start */
-    /* Reboot */
-    LOG_WRN("Factory reset complete - rebooting");
-    sys_reboot(SYS_REBOOT_COLD);
     break;
+  }
 
   case CMD_CALIB_START:
     /* 0x0D len 0: start calibration; len 2: set target only (mobile app) */
@@ -1025,6 +1012,9 @@ void protocol_send_low_battery_lockout(void)
  */
 void protocol_send_device_state(void)
 {
+  user_settings_t snapshot;
+  user_settings_get_snapshot(&snapshot);
+  const user_settings_t *us = &snapshot;
   /*
    * Device state payload format (must match old firmware for app
    * compatibility):
@@ -1052,12 +1042,12 @@ void protocol_send_device_state(void)
   int offset = 4;
 
   /* Basic settings */
-  tx_frame[offset++] = user_settings_get_buzzer();   /* buzzer state */
-  tx_frame[offset++] = user_settings_get_vibrator(); /* vibrator state */
-  tx_frame[offset++] = user_settings_get_power_mode();
+  tx_frame[offset++] = us->buzzer_enabled;   /* buzzer state */
+  tx_frame[offset++] = us->vibrator_enabled; /* vibrator state */
+  tx_frame[offset++] = us->power_mode;
 
-  uint16_t yellow_start = user_settings_get_co2_yellow_start();
-  uint16_t red_start = user_settings_get_co2_red_start();
+  uint16_t yellow_start = us->co2_yellow_start;
+  uint16_t red_start = us->co2_red_start;
   tx_frame[offset++] = (uint8_t)(yellow_start >> 8);
   tx_frame[offset++] = (uint8_t)(yellow_start & 0xFF);
   tx_frame[offset++] = (uint8_t)(red_start >> 8);
@@ -1065,10 +1055,9 @@ void protocol_send_device_state(void)
 
   /* Screen/Display settings - N/A for Slim */
   tx_frame[offset++] = 0; /* screen const on */
-  tx_frame[offset++] = user_settings_get_auto_calibrate();
+  tx_frame[offset++] = us->auto_calibrate;
 
   /* DND settings - report the values actually stored in NVS */
-  const user_settings_t *us = user_settings_get();
   tx_frame[offset++] = us->dnd_enabled;
   tx_frame[offset++] = us->dnd_start_hour;
   tx_frame[offset++] = us->dnd_start_minute;
@@ -1112,7 +1101,7 @@ void protocol_send_device_state(void)
   tx_frame[offset++] = (uint8_t)(scale_bits);
 
   /* Flight mode */
-  tx_frame[offset++] = user_settings_get_flight_mode();
+  tx_frame[offset++] = us->flight_mode;
 
   /* Set header */
   tx_frame[0] = CMD_FIRST_BYTE;
@@ -1179,7 +1168,7 @@ void protocol_send_current_half_page(void)
 }
 
 void protocol_send_history_data(const uint8_t *data, uint8_t record_count,
-                                uint16_t half_page_number)
+                                uint16_t half_page_number, uint32_t session)
 {
   /*
    * IMPORTANT: Must match old firmware format exactly!
@@ -1234,7 +1223,7 @@ void protocol_send_history_data(const uint8_t *data, uint8_t record_count,
   /* Calculate and append checksum */
   set_frame_checksum(tx_frame, offset + 1);
 
-  send_frame(tx_frame, offset + 1);
+  (void)airspot_nus_send_session(tx_frame, offset + 1, session);
 }
 
 void protocol_send_erase_done(void)
@@ -1265,13 +1254,16 @@ void protocol_process_history(void)
   }
 
   /* Handle erase all request */
-  if (data_log_is_erase_pending())
+  uint32_t session;
+  if (data_log_take_erase_request(&session))
   {
     LOG_INF("Processing history erase...");
     int ret = data_log_erase_all();
     if (ret == 0)
     {
-      protocol_send_erase_done();
+      uint8_t reply[6] = {CMD_FIRST_BYTE, CMD_SECOND_BYTE, CMD_ERASE_HISTORY, 1, 1, 0};
+      set_frame_checksum(reply, sizeof(reply));
+      (void)airspot_nus_send_session(reply, sizeof(reply), session);
     }
     return;
   }
@@ -1283,10 +1275,10 @@ void protocol_process_history(void)
     uint8_t count;
     uint16_t half_page;
 
-    int ret = data_log_process_request(&page, &count, &half_page);
+    int ret = data_log_process_request(&page, &count, &half_page, &session);
     if (ret == 0)
     {
-      protocol_send_history_data(page.buf, count, half_page);
+      protocol_send_history_data(page.buf, count, half_page, session);
     }
     else
     {

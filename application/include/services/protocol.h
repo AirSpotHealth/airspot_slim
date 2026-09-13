@@ -53,8 +53,8 @@ extern "C" {
 #define CMD_GET_SENSOR_VARIANT 0x2B  /* Get CO2 sensor type */
 #define CMD_GET_ASC_DIAGNOSTIC 0x33 /* Read-only pause verification diagnostics */
 #define CMD_SENSOR_SELF_TEST 0x34 /* Non-calibrating STCC4 diagnostic */
-#define CMD_SENSOR_TIMING_DIAGNOSTIC 0x36 /* Read-only compensation cadence */
-#define CMD_SUPPLY_DIAGNOSTIC 0x35 /* Temporary regulator PWM experiment */
+/* 0x35-0x36 reserved: retired regulator and timing experiments. */
+#define CMD_GET_FAULT_EVENTS 0x37 /* Read-only versioned fault journal */
 #define CMD_GET_SENSOR_DETAILS 0x30  /* Get sensor details */
 #define CMD_SET_CO2_SCALE_FACTOR 0x31 /* Set CO2 scale factor (stub) */
 #define CMD_SET_FLIGHT_MODE 0x32
@@ -138,7 +138,7 @@ void protocol_send_current_half_page(void);
  * @param half_page_number The half-page number being sent
  */
 void protocol_send_history_data(const uint8_t *data, uint8_t record_count,
-                                uint16_t half_page_number);
+                                uint16_t half_page_number, uint32_t session);
 
 /**
  * @brief Send erase history complete notification

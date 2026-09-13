@@ -55,6 +55,9 @@ int battery_init(void);
  */
 uint16_t battery_read_voltage_mv(void);
 
+/* Fresh (<=5 s), serialized, fail-closed voltage for update authorization. */
+int battery_get_ota_voltage(uint16_t *mv);
+
 /**
  * @brief Get battery percentage
  *

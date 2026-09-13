@@ -54,6 +54,7 @@ int main(void) {
   airspot_nus_init(receive);
   airspot_nus_set_conn(&c);
   assert(c.refs==2);
+  assert(airspot_nus_send_session(&value,1,airspot_nus_generation()+1)==-ENOTCONN);
   tx_ccc_changed(NULL,BT_GATT_CCC_NOTIFY);
   assert(airspot_nus_is_ready());
   assert(airspot_nus_send(&value,1)==-ENOTCONN);

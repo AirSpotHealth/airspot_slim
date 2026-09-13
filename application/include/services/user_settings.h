@@ -54,9 +54,9 @@ extern "C"
   int user_settings_init(void);
 
   /**
-   * @brief Get pointer to current settings (read-only)
+   * @brief Copy a consistent settings snapshot
    */
-  const user_settings_t *user_settings_get(void);
+  void user_settings_get_snapshot(user_settings_t *out);
 
   /**
    * @brief Get device name

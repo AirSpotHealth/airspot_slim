@@ -10,7 +10,7 @@ endif()
 # =============================================================================
 # Main Application
 # =============================================================================
-target_sources(app PRIVATE src/main.c src/services/ota_service.c)
+target_sources(app PRIVATE src/main.c src/services/ota_service.c src/services/health_service.c src/services/diagnostics.c)
 
 # =============================================================================
 # Drivers
@@ -22,7 +22,6 @@ target_sources(app PRIVATE src/drivers/sht40.c)
 target_sources(app PRIVATE src/drivers/lps22hh.c)
 target_sources(app PRIVATE src/drivers/stcc4.c)
 target_sources(app PRIVATE src/drivers/battery.c)
-target_sources(app PRIVATE src/drivers/supply_diagnostic.c)
 target_sources(app PRIVATE src/drivers/qi_charger.c)
 target_sources(app PRIVATE src/drivers/spi_flash.c)
 
