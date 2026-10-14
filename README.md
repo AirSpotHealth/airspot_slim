@@ -1,4 +1,6 @@
-![AirSpot Slim firmware](docs/assets/slim-header.svg)
+<img src="https://airspothealth.com/cdn/shop/files/Screen_Shot_2024-09-01_at_9.02.32_am.png?v=1725145402&amp;width=500" alt="AirSpot" width="250">
+
+# AirSpot Slim firmware
 
 Firmware for the **AirSpot Slim** air quality monitor. It reads CO₂, temperature,
 humidity and pressure, saves measurements on the device, and connects to the
