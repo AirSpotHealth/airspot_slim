@@ -21,21 +21,12 @@ extern "C"
 #define USER_SETTINGS_NAME_MAX_LEN 20
 
   /**
-   * @brief User settings structure
+   * @brief User settings structure (native_asc_mode controls sensor learning independently)
    */
   typedef struct
   {
     char device_name[USER_SETTINGS_NAME_MAX_LEN + 1];
     uint8_t power_mode;  /* 0=on-demand, 1=low, 2=mid, 3=high */
-    uint8_t flight_mode; /* 0=off, 1=on */
-    uint8_t dnd_enabled; /* Do Not Disturb */
-    uint8_t dnd_start_hour;
-    uint8_t dnd_start_minute;
-    uint8_t dnd_end_hour;
-    uint8_t dnd_end_minute;
-    /* Stub settings (no buzzer/vibrator on Slim) */
-    uint8_t buzzer_enabled;
-    uint8_t vibrator_enabled;
     /* Calibration settings (matches legacy behavior) */
     int16_t co2_correction; /* CC value (ppm) */
     uint16_t calib_target;  /* Calibration target (ppm) */
@@ -43,6 +34,7 @@ extern "C"
     uint8_t asc_day_count;  /* Legacy stored field; current ASC progress is volatile */
     uint16_t co2_yellow_start; /* Green/amber LED boundary (ppm) */
     uint16_t co2_red_start;    /* Amber/red LED boundary (ppm) */
+    uint8_t native_asc_mode; /* 0=legacy host correction, 1=native paused, 2=native learning */
     uint8_t paired;            /* 1 = a phone has connected at least once */
   } user_settings_t;
 
@@ -52,6 +44,11 @@ extern "C"
    * @return 0 on success, negative errno on failure
    */
   int user_settings_init(void);
+
+  uint8_t user_settings_get_native_asc_mode(void);
+  int user_settings_set_native_asc_mode(uint8_t mode);
+  /* Commit an explicit manual correction and leave native baseline-only mode. */
+  int user_settings_commit_manual_correction(int16_t correction);
 
   /**
    * @brief Copy a consistent settings snapshot
@@ -79,21 +76,6 @@ extern "C"
   int user_settings_set_power_mode(uint8_t mode);
 
   /**
-   * @brief Get flight mode
-   */
-  uint8_t user_settings_get_flight_mode(void);
-
-  /**
-   * @brief Set flight mode (saves to NVS)
-   */
-  int user_settings_set_flight_mode(uint8_t enabled);
-
-  /**
-   * @brief Check if DND is currently active
-   */
-  bool user_settings_is_dnd_active(void);
-
-  /**
    * @brief Set timebase (seconds since 2000-01-01, synced from app)
    * @param time Seconds since 2000-01-01 00:00:00
    */
@@ -105,16 +87,6 @@ extern "C"
   uint32_t user_settings_get_time_now(void);
 
   /**
-   * @brief Get current hour (24-hour format)
-   */
-  uint8_t user_settings_get_time_now_hour24(void);
-
-  /**
-   * @brief Get current minute
-   */
-  uint8_t user_settings_get_time_now_minute(void);
-
-  /**
    * @brief Check if time has been set by the app
    */
   bool user_settings_is_time_set(void);
@@ -123,33 +95,6 @@ extern "C"
    * @brief Increment time by 1 second (called from timer)
    */
   void user_settings_inc_second(void);
-
-  /**
-   * @brief Set DND settings (saves to NVS)
-   */
-  int user_settings_set_dnd(uint8_t enabled, uint8_t start_hour,
-                            uint8_t start_minute, uint8_t end_hour,
-                            uint8_t end_minute);
-
-  /**
-   * @brief Get buzzer state (stub - always returns saved value)
-   */
-  uint8_t user_settings_get_buzzer(void);
-
-  /**
-   * @brief Set buzzer state (stub - saves but no hardware effect)
-   */
-  int user_settings_set_buzzer(uint8_t enabled);
-
-  /**
-   * @brief Get vibrator state (stub - always returns saved value)
-   */
-  uint8_t user_settings_get_vibrator(void);
-
-  /**
-   * @brief Set vibrator state (stub - saves but no hardware effect)
-   */
-  int user_settings_set_vibrator(uint8_t enabled);
 
   /**
    * @brief Get CO2 correction (CC value)
@@ -225,12 +170,14 @@ extern "C"
   /**
    * @brief Factory reset - clear all user settings to defaults
    *
-   * Clears device name, power mode, flight mode, DND settings, etc.
+   * Restores device name, power mode, calibration and LED thresholds.
    * Does NOT reboot - caller should reboot after if needed.
    *
    * @return 0 on success, negative errno on failure
    */
   int user_settings_factory_reset(void);
+  int user_settings_reset_preferences(void);
+  int user_settings_start_settling(void);
 
 #ifdef __cplusplus
 }

@@ -20,6 +20,10 @@ class PressureRuntimeTests(unittest.TestCase):
 #include <stdint.h>
 #include <string.h>
 #include <drivers/lps22hh.h>
+#include <services/diagnostics.h>
+static uint32_t failure_detail;
+static void watchdog_feed(void) {}
+void diagnostics_record(enum diagnostic_event event,uint32_t detail) {assert(event==DIAG_SENSOR_FAILED);failure_detail=detail;}
 #define LOG_MODULE_REGISTER(...)
 #define LOG_INF(...) ((void)0)
 #define LOG_WRN(...) ((void)0)
@@ -28,7 +32,7 @@ class PressureRuntimeTests(unittest.TestCase):
 #define I2C_ADDR_LPS22HH 0x5d
 static uint8_t regs[256];
 static bool stuck, recoverable, boot_stuck, reset_stuck;
-static int fail_write = -1, fail_read = -1, resets, output_reads, elapsed;
+static int fail_write = -1, fail_read = -1, resets, output_reads, elapsed, id_failures;
 static void k_msleep(int ms) {elapsed += ms;}
 static bool i2c_bus_is_ready(void) {return true;}
 static int i2c_bus_write(uint8_t addr, const uint8_t *b, size_t len) {
@@ -48,6 +52,7 @@ static int i2c_bus_write(uint8_t addr, const uint8_t *b, size_t len) {
 }
 static int i2c_bus_write_read(uint8_t addr,const uint8_t *w,size_t wn,uint8_t *b,size_t n) {
  assert(addr==0x5d && wn==1);
+ if (*w == 0x0f && id_failures>0) {id_failures--;return -EIO;}
  if (*w == fail_read) return -EIO;
  if (*w == 0x2b) {assert(n==2);output_reads++;b[0]=0xc4;b[1]=9;return 0;}
  if (*w == 0x28) {
@@ -63,11 +68,11 @@ static void fresh(void) {
  initialized=false;startup_recovery_attempted=false;has_valid_sample=false;
  last_data=(lps22hh_data_t){.pressure=0,.temperature=NAN};
  stuck=recoverable=boot_stuck=reset_stuck=false;
- fail_write=fail_read=-1;resets=output_reads=elapsed=0;
+ fail_write=fail_read=-1;resets=output_reads=elapsed=id_failures=0;
 }
 int main(void) {
  lps22hh_data_t d={.pressure=777,.temperature=22};
- fresh();assert(lps22hh_init()==0);assert(lps22hh_read(&d)==0);
+ fresh();assert(lps22hh_init()==0);assert(regs[0x0e]==2);assert(lps22hh_read(&d)==0);
  assert(d.pressure==1013 && d.temperature==25 && output_reads==2 && resets==0);
  /* Failure after successful operation must not reset/retry or publish stale data. */
  stuck=true;d.pressure=777;assert(lps22hh_read(&d)==-ETIMEDOUT);
@@ -76,7 +81,7 @@ int main(void) {
  fail_write=-1;fail_read=0x27;assert(lps22hh_read(&d)==-EIO);assert(output_reads==2);
  /* A first-sample timeout gets exactly one bounded volatile reset. */
  fresh();stuck=recoverable=true;assert(lps22hh_init()==0);assert(lps22hh_read(&d)==0);
- assert(resets==1 && d.pressure==1013 && elapsed<1500);
+ assert(resets==1 && d.pressure==1013 && elapsed<1500 && regs[0x0e]==2);
  fresh();stuck=true;assert(lps22hh_init()==0);d.pressure=777;
  assert(lps22hh_read(&d)==-ETIMEDOUT && resets==1 && output_reads==0 && d.pressure==777);
  assert(lps22hh_read(&d)==-ETIMEDOUT && resets==1);
@@ -84,10 +89,19 @@ int main(void) {
  /* Power-restoration failure: unreadable identity must not initialize or reset
   * the sensor, and a later successful identity read can retry initialization. */
  fresh();fail_read=0x0f;assert(lps22hh_init()==-EIO && !initialized);
- assert(resets==0 && output_reads==0);
+ assert(resets==0 && output_reads==0 && failure_detail==0x50020005);
  fail_read=-1;assert(lps22hh_init()==0 && lps22hh_read(&d)==0);
  assert(d.pressure==1013 && resets==0);
+ fresh();id_failures=2;assert(lps22hh_init()==0 && elapsed>=100 && regs[0x0e]==2);
+ fresh();id_failures=3;assert(lps22hh_init()==0 && initialized && resets==1 && elapsed<2000);
+ assert(failure_detail==0x50020005);
+ fresh();id_failures=4;assert(lps22hh_init()==-EIO && !initialized && resets==0);
+ fresh();fail_write=0x0e;assert(lps22hh_init()==-EIO && !initialized);
+ assert(failure_detail==0x50080005 && resets==1);
+ fresh();fail_read=0x0e;assert(lps22hh_init()==-EIO && !initialized);
+ assert(failure_detail==0x50090005 && resets==1);
  fresh();boot_stuck=true;assert(lps22hh_init()==-ETIMEDOUT && !initialized);
+ assert(failure_detail==(0x50060000U | ETIMEDOUT));
  fresh();fail_write=0x10;assert(lps22hh_init()==-EIO && !initialized);
  fresh();fail_write=0x11;assert(lps22hh_init()==-EIO && !initialized);
  fresh();fail_read=0x11;assert(lps22hh_init()==-EIO && !initialized);

@@ -7,6 +7,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#include <services/history_events.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/hwinfo.h>
@@ -26,7 +27,9 @@
 
 /* Driver includes */
 #include <drivers/battery.h>
+#include <services/battery_monitor.h>
 #include <drivers/button_driver.h>
+#include <drivers/button_hold.h>
 #include <drivers/led_driver.h>
 #include <drivers/qi_charger.h>
 #include <drivers/spi_flash.h>
@@ -58,18 +61,11 @@ BUILD_ASSERT(DT_NODE_HAS_PROP(DT_NODELABEL(flash_hold), output_high),
 /* Measurement interval (milliseconds) */
 #define MEASUREMENT_INTERVAL_MS 5000
 
-/* Data log interval - store CO2 every 5 minutes */
-#define DATA_LOG_INTERVAL_MS (5 * 60 * 1000)
-
 /* Time increment interval (1 second) */
 #define TIME_INCREMENT_INTERVAL_MS 1000
 
 /* Timers */
 static struct k_timer time_timer;
-static struct k_timer data_log_timer;
-
-/* Flags */
-static volatile bool data_log_due = false;
 
 /* =============================================================================
  * Watchdog Timer - Auto-recovery from hard locks
@@ -156,10 +152,16 @@ void watchdog_feed(void) {
   }
 }
 
-/* Set from the sensor callback (system workqueue) when the pack drops below the
- * lockout threshold while discharging. Handled in the main loop so the actual
- * teardown + blocking lockout loop run in the main thread, not the workqueue. */
-static volatile bool low_battery_lockout_requested = false;
+static bool battery_recovery_ready(bool charging, bool valid, uint16_t mv,
+                                   int64_t *stable_since) {
+  if (!charging || !valid || mv < BATTERY_RECOVER_MV) {
+    *stable_since = -1;
+    return false;
+  }
+  int64_t now = k_uptime_get();
+  if (*stable_since < 0) *stable_since = now;
+  return now - *stable_since >= BATTERY_RECOVER_STABLE_MS;
+}
 
 /**
  * @brief Enter low-power low-battery lockout (does not return until reboot).
@@ -178,6 +180,8 @@ static void enter_low_battery_lockout(bool teardown) {
           BATTERY_RECOVER_MV);
 
   if (teardown) {
+    int32_t mv = battery_read_voltage_mv();
+    (void)history_event_record(mv > 0 ? (uint16_t)mv : 0, RECORD_TYPE_BATTERY_LOW);
     /* Tell the app we're entering lockout BEFORE dropping the link, so it can
      * show a "low battery — charging required" state instead of an error. */
     if (ble_service_is_connected()) {
@@ -186,7 +190,7 @@ static void enter_low_battery_lockout(bool teardown) {
     }
     ble_service_set_advertising_suppressed(true);
     sensor_manager_stop();
-    k_timer_stop(&data_log_timer);
+    history_events_flush();
     k_timer_stop(&time_timer);
     if (ble_service_is_connected()) {
       ble_service_disconnect();
@@ -196,11 +200,15 @@ static void enter_low_battery_lockout(bool teardown) {
 
   bool led_charging = false;
   bool led_first = true;
+  int64_t recovery_since = -1;
 
   while (1) {
     ota_service_poll();
     bool charging = qi_charger_is_charging();
-    int32_t mv = battery_read_voltage_mv();
+    /* Force a fresh ADC sample; cached display voltage cannot authorize wake. */
+    (void)battery_read_voltage_mv();
+    uint16_t mv = 0;
+    bool voltage_ok = battery_get_ota_voltage(&mv) == 0;
 
     /* Update the LED only when the charge state flips, so we don't restart the
      * pattern every poll. On charger: slow red flash. Off charger: a brief red
@@ -217,8 +225,8 @@ static void enter_low_battery_lockout(bool teardown) {
 
     LOG_INF("Lockout: %d mV, %s", mv, charging ? "charging" : "idle");
 
-    /* Resume only after charging back above the recovery threshold. */
-    if (charging && mv >= BATTERY_RECOVER_MV) {
+    /* Any charger loss, low reading or ADC failure restarts the dwell time. */
+    if (battery_recovery_ready(charging, voltage_ok, mv, &recovery_since)) {
       LOG_INF("Battery recovered (%d mV) — cold reboot for clean start", mv);
       led_indicator_show_color(LED_COLOR_GREEN, 500);
       k_msleep(600);
@@ -237,11 +245,6 @@ static void enter_low_battery_lockout(bool teardown) {
 static void time_timer_handler(struct k_timer *timer) {
   ARG_UNUSED(timer);
   user_settings_inc_second();
-}
-
-static void data_log_timer_handler(struct k_timer *timer) {
-  ARG_UNUSED(timer);
-  data_log_due = true;
 }
 
 /* Button tap/gesture detection.
@@ -276,20 +279,11 @@ static void show_device_status(void) {
 static volatile bool soft_off_requested = false;
 static volatile bool soft_off_active = false;
 static volatile bool soft_on_requested = false;
+static bool button_off_armed;
 
-/* Power-on gesture progress (only meaningful while soft_off_active). Set on the
- * button PRESS edge while charging; the soft-off loop uses the hold duration to
- * drive the fade-in. */
-static volatile bool soft_on_holding = false;
-static volatile uint32_t soft_on_press_uptime = 0;
-
-/* Soft power-off / power-on light cues. The power-on fade-in plays over the LAST
- * POWER_ON_FADE_MS of the hold so the light reaches full just as the device
- * powers on (symmetric with the fade-out). */
+/* Normal gestures complete on release; longer holds remain available for recovery. */
 #define SOFT_OFF_FADE_MS 1000
-#define POWER_ON_HOLD_MS CONFIG_AIRSPOT_BUTTON_LONG_PRESS_TIMEOUT_MS /* 5000 */
-#define POWER_ON_FADE_MS 3000
-#define POWER_ON_FADE_DELAY_MS (POWER_ON_HOLD_MS - POWER_ON_FADE_MS) /* 2000 */
+#define POWER_ON_HOLD_MS BUTTON_NORMAL_HOLD_MS
 
 /* Qi charger callback — placing the device on the charger acts like a single
  * button press: show the device status. Suppressed while soft-off so the
@@ -397,46 +391,51 @@ static K_WORK_DELAYABLE_DEFINE(tap_decision_work, tap_decision_work_handler);
 
 /* Button event handler */
 static void button_event_handler(button_event_t event) {
-  if (calibration_service_is_active()) {
-    LOG_INF("Calibration active - ignoring button event");
+  /* Emergency input must remain available during calibration and sensor faults.
+   * Runs on the button queue and never acquires a sensor/calibration mutex. */
+  if (event == BUTTON_EVENT_RECOVERY_CONFIRMED) {
+    LOG_WRN("Emergency hold confirmed on release: rebooting, settings preserved");
+    sys_reboot(SYS_REBOOT_COLD);
     return;
   }
-
-  /* Software fallback: ignore everything except the power-on gesture (hold 5 s while on
-   * the Qi charger). Track the press/release so the soft-off loop can fade the
-   * light in over the hold; the loop performs the actual reboot. LONG_PRESS is a
-   * fallback that still honors a completed hold if the loop's fade didn't run
-   * (e.g. a just-came-on-charger race). */
-  if (soft_off_active) {
-    switch (event) {
-    case BUTTON_EVENT_PRESSED:
-      if (qi_charger_is_charging()) {
-        soft_on_press_uptime = k_uptime_get_32();
-        soft_on_holding = true;
-      }
-      break;
-    case BUTTON_EVENT_RELEASED:
-      soft_on_holding = false;
-      break;
-    case BUTTON_EVENT_LONG_PRESS:
-      if (qi_charger_is_charging()) {
-        LOG_INF("Power ON gesture (5s hold on charger)");
-        soft_on_requested = true;
-      }
-      break;
+  if (event == BUTTON_EVENT_RECOVERY_WARNING ||
+      event == BUTTON_EVENT_RECOVERY_READY ||
+      event == BUTTON_EVENT_RECOVERY_CANCELLED) {
+    button_off_armed = false;
+    tap_count = 0;
+    k_work_cancel_delayable(&tap_decision_work);
+    if (event == BUTTON_EVENT_RECOVERY_WARNING) {
+      LOG_INF("Emergency hold: keep holding until white flashes, then release");
+      led_indicator_flash(LED_COLOR_AMBER, 500, 5000);
+    } else if (event == BUTTON_EVENT_RECOVERY_READY) {
+      LOG_INF("Emergency hold ready: release within three seconds");
+      led_indicator_flash(LED_COLOR_WHITE, 200, 3000);
+    } else {
+      LOG_INF("Emergency hold cancelled; release and press again");
+      led_indicator_stop();
     }
+    return;
+  }
+  if (event == BUTTON_EVENT_PRESSED) button_off_armed = false;
+  if (calibration_service_is_active()) {
+    button_off_armed = false;
+    tap_count = 0;
+    k_work_cancel_delayable(&tap_decision_work);
+    LOG_INF("Calibration active - ignoring normal button event");
     return;
   }
 
   switch (event) {
   case BUTTON_EVENT_PRESSED:
+    button_off_armed = false;
+    if (soft_off_active) return;
     /* Count every press edge (hold duration is irrelevant — a press that
      * lingers still counts). A long hold also lands here as a single count, but
      * it never schedules a tap action: the decision timer is armed on RELEASE,
      * and a hold ends in BUTTON_EVENT_LONG_PRESS which clears the count. */
     tap_count++;
 
-    /* 5 quick presses while on the charger → factory reset, fired immediately
+    /* 5 quick presses while on the charger → MCU reboot, fired immediately
      * on the 5th press (don't wait for the decision window). */
     if (tap_count >= RAPID_PRESS_RESET_COUNT && qi_charger_is_charging()) {
       LOG_INF("5-press reset while charging");
@@ -450,6 +449,15 @@ static void button_event_handler(button_event_t event) {
     break;
 
   case BUTTON_EVENT_RELEASED:
+    if (button_off_armed) {
+      button_off_armed = false;
+      if (qi_charger_is_charging()) {
+        if (soft_off_active) soft_on_requested = true;
+        else soft_off_requested = true;
+      }
+      return;
+    }
+    if (soft_off_active) return;
     /* A press completed — (re)arm the single/double decision. Re-arming on
      * release means the window measures the pause between taps, so the burst
      * isn't fragmented by a press that lingers (the old bug). */
@@ -463,17 +471,26 @@ static void button_event_handler(button_event_t event) {
      * so a stray status flash can't appear mid power-off gesture. */
     k_work_cancel_delayable(&tap_decision_work);
     tap_count = 0;
-    /* Hold 5 s while on the Qi charger → soft power off (charger requirement
-     * prevents accidental pocket activation). Off the charger it stays a
-     * no-op: the charger gate is part of the existing gesture contract. */
+    /* Arm normal power transition; execute on release before the warning.
+     * Continuing to hold must leave time for the emergency gesture. */
     if (qi_charger_is_charging()) {
-      LOG_INF("Power OFF gesture (5s hold on charger)");
-      soft_off_requested = true;
+      LOG_INF("Five-second hold: release for power on/off, or keep holding for recovery");
+      button_off_armed = true;
     } else {
-      LOG_DBG("Long press off charger - no action");
+      LOG_DBG("Long press off charger - keep holding for recovery");
     }
     break;
+  default:
+    break;
   }
+}
+
+static void queue_co2_data(const sensor_data_t *data) {
+  if (!data || !data->valid) {
+    return;
+  }
+  (void)history_event_record(user_settings_apply_co2_correction(data->co2_ppm),
+                             RECORD_TYPE_CO2);
 }
 
 /* Sensor data callback - called when new measurement is available */
@@ -483,20 +500,6 @@ static void sensor_data_callback(const sensor_data_t *data) {
   }
 
   ota_service_observe_sample(data);
-
-  /* Low-battery lockout: once the pack drops below the lockout threshold
-   * (battery_low == <BATTERY_LOCKOUT_MV) while NOT on the charger, request the
-   * lockout. The main loop performs the teardown + blocking lockout loop so it
-   * runs in the main thread rather than blocking this workqueue callback. */
-  if (data->battery_low && !data->is_charging) {
-    LOG_WRN("Battery below lockout threshold — requesting low-power lockout");
-    low_battery_lockout_requested = true;
-  } else if (data->battery_critical && !data->is_charging &&
-             !led_indicator_is_active()) {
-    /* Belt-and-suspenders: if we somehow get here still draining, flag it. */
-    LOG_WRN("BATTERY CRITICAL!");
-    low_battery_lockout_requested = true;
-  }
 
   if (!data->valid) {
     if (ble_service_is_connected()) protocol_send_realtime_co2();
@@ -508,6 +511,7 @@ static void sensor_data_callback(const sensor_data_t *data) {
   calibration_service_process_measurement(data->co2_ppm);
 
   uint16_t corrected_co2 = user_settings_apply_co2_correction(data->co2_ppm);
+  queue_co2_data(data);
 
   LOG_INF("CO2=%uppm T=%.1f°C H=%.0f%% P=%.0fhPa Batt=%u%%%s", corrected_co2,
           (double)data->temperature_c, (double)data->humidity_rh,
@@ -524,30 +528,6 @@ static void sensor_data_callback(const sensor_data_t *data) {
   /* Note: BAS is automatically updated via CONFIG_BT_BAS */
 
 
-}
-
-/**
- * @brief Enter soft power-off (does not return until reboot).
- *
- * Fades the LED out, tears down BLE/sensors/timers and parks in a low-rate
- * loop with only the button poll and Qi detection alive. The power-on gesture
- * (hold 5 s while on the Qi charger, detected by button_event_handler) sets
- * soft_on_requested; we then cold-reboot so every driver/service starts
- * fresh — the boot LED sequence doubles as the "light comes on" cue.
- */
-/* Polled once per frame by led_indicator_ramp() during the power-on fade-in:
- * keep fading only while the button is STILL physically held and on the charger.
- * Uses a live GPIO read (button_driver_read_now) because the driver's cached
- * state can't refresh mid-ramp — the ramp busy-waits on the main thread, which
- * outranks the button workqueue. Also feeds the watchdog, since the ramp blocks
- * for the full POWER_ON_FADE_MS. */
-static bool power_on_hold_active(void) {
-  watchdog_feed();
-  bool pressed = false;
-  if (button_driver_read_now(&pressed) != 0) {
-    return false;
-  }
-  return pressed && qi_charger_is_charging();
 }
 
 /* Called only from main, after shutdown, or on a rejected System OFF wake. */
@@ -596,27 +576,73 @@ static void enter_system_off(bool peripherals_started)
 static void validate_system_off_wake(uint32_t hold_start)
 {
   soft_off_active = true;
-  LOG_INF("GPIO wake: validating charger and five-second button hold");
-  /* Qi starts with a false cached value until its asynchronous debounce runs. */
-  if (qi_charger_wait_ready(K_SECONDS(1)) != 0) {
-    LOG_ERR("GPIO wake: charger initial read unavailable");
-    enter_system_off(false);
-  }
-  while (power_on_hold_active()) {
+  /* A missing charger signal must not prevent the emergency gesture. */
+  int ready = qi_charger_wait_ready(K_SECONDS(1));
+  if (ready) LOG_WRN("Wake: charger unavailable; emergency hold remains available");
+  unsigned cue = 0;
+  for (;;) {
+    watchdog_feed();
+    bool pressed = false;
+    if (button_driver_read_now(&pressed) != 0) break;
     uint32_t elapsed = k_uptime_get_32() - hold_start;
-    if (elapsed >= POWER_ON_FADE_DELAY_MS) {
-      uint32_t remaining = elapsed < POWER_ON_HOLD_MS ? POWER_ON_HOLD_MS - elapsed : 0;
-      if (led_indicator_ramp(LED_COLOR_WHITE, 0, 100, remaining, power_on_hold_active)) {
-        LOG_INF("GPIO wake gesture accepted");
+    if (!pressed) {
+      k_msleep(20);
+      if (button_driver_read_now(&pressed) != 0) break;
+      if (pressed) continue;
+      enum button_hold_action action = button_hold_release(
+          elapsed, !ready && qi_charger_is_charging());
+      led_indicator_stop();
+      if (action != BUTTON_HOLD_CANCEL) {
+        LOG_INF("Wake accepted on release: %s", action == BUTTON_HOLD_RECOVER ?
+                "emergency (charger independent)" : "normal");
         soft_off_active = false;
+        led_indicator_ramp(LED_COLOR_WHITE, 0, 100, 500, NULL);
         return;
       }
       break;
     }
-    k_msleep(20); /* Only during an active wake gesture, never while off/idle. */
+    if (elapsed >= BUTTON_RECOVERY_EXPIRED_MS) break;
+    if (elapsed >= BUTTON_RECOVERY_READY_MS && cue < 3) {
+      cue = 3;
+      LOG_INF("Emergency wake ready: release within three seconds");
+      led_indicator_flash(LED_COLOR_WHITE, 200, 3000);
+    } else if (elapsed >= BUTTON_RECOVERY_WARNING_MS && cue < 2) {
+      cue = 2;
+      led_indicator_flash(LED_COLOR_AMBER, 500, 5000);
+    } else if (elapsed >= POWER_ON_HOLD_MS && cue < 1 &&
+               !ready && qi_charger_is_charging()) {
+      cue = 1;
+      led_indicator_show_color(LED_COLOR_WHITE, 500);
+    }
+    k_msleep(20);
   }
-  LOG_INF("GPIO wake gesture rejected; returning to System OFF");
+  LOG_INF("Wake cancelled; release and press again");
+  led_indicator_stop();
   enter_system_off(false);
+}
+
+/* Factory reset is the only path that physically disconnects the battery.
+ * Settings/calibration/history are already committed before main enters here. */
+static void enter_factory_off(void) {
+  soft_off_active = true;
+  sensor_manager_stop();
+  k_timer_stop(&time_timer);
+  ble_service_set_advertising_suppressed(true);
+  if (ble_service_is_connected()) ble_service_disconnect();
+  led_indicator_stop();
+  led_driver_all_off();
+  /* If the pad/button changed during erase, wait for removal/release. */
+  for (;;) {
+    watchdog_feed();
+    if (!power_manager_prepare_factory_off()) {
+      k_msleep(500); /* Allow input/VBUS capacitance to discharge. */
+      watchdog_feed();
+      int rc = power_manager_cut_battery();
+      LOG_ERR("Factory reset power-off not completed: %d; retrying", rc);
+      led_indicator_show_color(LED_COLOR_RED, 200);
+    }
+    k_msleep(500);
+  }
 }
 
 static void enter_soft_off(void) {
@@ -632,7 +658,7 @@ static void enter_soft_off(void) {
 
   /* Tear down the high-drain subsystems (same set as the battery lockout). */
   sensor_manager_stop();
-  k_timer_stop(&data_log_timer);
+  history_events_flush();
   k_timer_stop(&time_timer);
   /* Block advertising BEFORE disconnecting: otherwise the disconnect callback
    * re-advertises within ~100 ms and the phone reconnects in the race window
@@ -647,29 +673,10 @@ static void enter_soft_off(void) {
     enter_system_off(true);
   }
 
-  /* Park until the power-on gesture completes. While the button is held on the
-   * charger, once the hold passes POWER_ON_FADE_DELAY_MS we fade the white light
-   * IN over the remaining hold as live feedback; completing the fade == the full
-   * hold, so we power on. Releasing (or leaving the charger) mid-fade aborts it
-   * and requires a fresh press — same 5 s commitment as before, now visible. */
+  /* Software fallback uses the same release-confirmed button events. */
   while (!soft_on_requested) {
     ota_service_poll();
     watchdog_feed();
-
-    if (soft_on_holding && qi_charger_is_charging()) {
-      uint32_t held = k_uptime_get_32() - soft_on_press_uptime;
-      if (held >= POWER_ON_FADE_DELAY_MS) {
-        if (led_indicator_ramp(LED_COLOR_WHITE, 0, 100, POWER_ON_FADE_MS,
-                               power_on_hold_active)) {
-          soft_on_requested = true; /* held the full duration → power on */
-        } else {
-          led_driver_all_off();
-          soft_on_holding = false; /* aborted → require a fresh press */
-        }
-        continue;
-      }
-    }
-
     k_msleep(50);
   }
 
@@ -679,29 +686,7 @@ static void enter_soft_off(void) {
 
 /* Store CO2 data to flash */
 static void store_co2_data(void) {
-  sensor_data_t data;
-
-  if (sensor_manager_get_data(&data) != 0 || !data.valid) {
-    LOG_WRN("No valid sensor data for logging");
-    return;
-  }
-
-  /* Get timestamp - use synced time if available, otherwise uptime */
-  uint32_t timestamp;
-  if (user_settings_is_time_set()) {
-    timestamp = user_settings_get_time_now();
-  } else {
-    timestamp = k_uptime_get_32() / 1000;
-  }
-
-  /* Store record */
-  uint16_t corrected = user_settings_apply_co2_correction(data.co2_ppm);
-  int ret = data_log_store_record(timestamp, corrected, RECORD_TYPE_CO2);
-  if (ret != 0) {
-    LOG_ERR("Failed to store CO2 record: %d", ret);
-  } else {
-    LOG_DBG("Stored CO2: %u ppm at t=%u", data.co2_ppm, timestamp);
-  }
+  (void)history_events_process();
 }
 
 /**
@@ -766,6 +751,7 @@ int main(void) {
   uint32_t wake_hold_start = k_uptime_get_32();
   uint32_t initial_reset_cause = 0;
   hwinfo_get_reset_cause(&initial_reset_cause);
+  history_events_boot(initial_reset_cause);
   bool waking_from_off = IS_ENABLED(CONFIG_AIRSPOT_POWER_OFF_ENABLED) &&
                         (initial_reset_cause & RESET_LOW_POWER_WAKE) &&
                         boot_is_img_confirmed();
@@ -996,11 +982,6 @@ int main(void) {
   k_timer_start(&time_timer, K_MSEC(TIME_INCREMENT_INTERVAL_MS),
                 K_MSEC(TIME_INCREMENT_INTERVAL_MS));
 
-  /* Data log timer (5 minutes) */
-  k_timer_init(&data_log_timer, data_log_timer_handler, NULL);
-  k_timer_start(&data_log_timer, K_MSEC(DATA_LOG_INTERVAL_MS),
-                K_MSEC(DATA_LOG_INTERVAL_MS));
-
   /*
    * ========================================
    * Start Sensor Measurements
@@ -1064,7 +1045,7 @@ int main(void) {
   LOG_INF("BLE advertising as: %s", ble_service_get_device_name());
   LOG_INF("Watchdog: %s", (wdt_channel_id >= 0) ? "ENABLED (5s)" : "DISABLED");
   LOG_INF("Button: 1x status, 2x CO2 readout; on charger: hold 5s power "
-          "on/off, 5x reset");
+          "then release for on/off, 5x reset; emergency: hold 15s, release before 18s");
   LOG_INF("========================================");
 
 
@@ -1076,6 +1057,7 @@ int main(void) {
 
   health_start();
   ota_service_startup_complete(startup_healthy);
+  sensor_manager_start_recovery();
 
   while (1) {
     ota_service_poll();
@@ -1083,10 +1065,12 @@ int main(void) {
     /* Feed watchdog first - must happen at least every WDT_TIMEOUT_MS (5s) */
     watchdog_feed();
 
-    /* Low-battery lockout requested by the sensor callback: tear down the
+    protocol_process_factory_reset();
+    if (power_manager_factory_off_requested()) enter_factory_off();
+
+    /* Battery monitoring runs even in on-demand mode: tear down the
      * high-drain subsystems and park here until charged (does not return). */
-    if (low_battery_lockout_requested) {
-      low_battery_lockout_requested = false;
+    if (battery_monitor_poll()) {
       enter_low_battery_lockout(true);
     }
 
@@ -1104,11 +1088,8 @@ int main(void) {
     /* Process any pending history requests - non-blocking check */
     protocol_process_history();
 
-    /* Store CO2 data if due */
-    if (data_log_due) {
-      data_log_due = false;
-      store_co2_data();
-    }
+    /* Persist fresh samples, including on-demand measurements, once each. */
+    store_co2_data();
 
     /* Non-blocking: just yield to let other threads run
      *

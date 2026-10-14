@@ -1,5 +1,11 @@
 # Pressure recovery investigation
 
+Historical observations below refer to the 0.17.1 investigation. The local
+16 September 2026 candidate now retries startup identity reads and sets/verifies
+I3C_DISABLE after initialization; explicit Reset Sensor also resets pressure.
+See [current changes and qualification limits](SCREEN_PARITY_FIXES.md).
+The original physical failure remains unproven as fixed.
+
 Target: AirSpot-C58CC9, confirmed 0.17.1 image
 44d7eff174e3aac57df502055524c57ee7d41b95a903b2d5853aaaa1aa9c0251.
 
@@ -9,7 +15,7 @@ and STCC4 still responded; BLE worked. A subsequent reported 30-second cold
 off restored WHO_AM_I=0xB3 and pressure readings. This narrows the failure to
 the pressure sensor/interface/power path, but does not prove a cause.
 
-Current driver returns immediately on failed WHO_AM_I. Its existing soft-reset
+The investigated driver returned immediately on failed WHO_AM_I. Its soft-reset
 recovery addresses first-sample timeouts only, when register access works. A
 register reset cannot be assumed to recover an address that does not ACK.
 
@@ -21,8 +27,8 @@ Do not change this pin to an output: it is a sensor interrupt output.
 
 ST LPS22HH datasheet Rev2 section 7.5 says INT_DRDY high during startup selects
 I3C-only; for I2C it must be unconnected or pulled down during initialization.
-ST recommends setting IF_CTRL.I3C_DISABLE after initialization. Current driver
-leaves IF_CTRL=0 (also observed in successful boot logs). This is a configuration
+ST recommends setting IF_CTRL.I3C_DISABLE after initialization. That driver
+left IF_CTRL=0 (also observed in successful boot logs). This is a configuration
 hardening candidate, not proof that I3C selection caused the observed failure;
 it cannot repair a sensor already inaccessible before the first write.
 Source: https://www.st.com/resource/en/datasheet/lps22hh.pdf

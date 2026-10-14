@@ -43,8 +43,12 @@ static void restart_advertising_work_handler(struct k_work *work) {
   ble_service_start_advertising();
 }
 
-/* Dynamic advertising data */
-static struct bt_data ad[2];
+/* BT_DATA_BYTES owns a compound literal: keep it at file scope so the flags
+ * outlive initialization. A block-local literal leaves a dangling pointer and
+ * can accidentally enable limited advertising's 30-second timeout. */
+static struct bt_data ad[2] = {
+    BT_DATA_BYTES(BT_DATA_FLAGS, BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR),
+};
 
 /* Advertise the MCUmgr SMP service used by the mobile updater. */
 #define SMP_SERVICE_UUID \
@@ -179,8 +183,6 @@ int ble_service_init(void) {
   }
 
   /* Build advertising data with dynamic name */
-  ad[0] = (struct bt_data)BT_DATA_BYTES(BT_DATA_FLAGS,
-                                        (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR));
   ad[1] = (struct bt_data)BT_DATA(BT_DATA_NAME_COMPLETE, device_name,
                                   device_name_len);
 

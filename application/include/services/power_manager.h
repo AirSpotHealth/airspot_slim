@@ -13,6 +13,11 @@ int power_manager_init(void);
  */
 void power_manager_enter_off_state(void);
 bool power_manager_take_off_request(void);
+/* Factory reset only: preflight before erasing; main performs the power cut. */
+int power_manager_prepare_factory_off(void);
+void power_manager_request_factory_off(void);
+bool power_manager_factory_off_requested(void);
+int power_manager_cut_battery(void);
 
 #ifdef __cplusplus
 }

@@ -23,42 +23,33 @@ LOG_MODULE_REGISTER(user_settings, CONFIG_AIRSPOT_LOG_LEVEL);
 
 K_MUTEX_DEFINE(settings_mutex);
 
+/* Native ASC is opt-in, including upgrades from pre-native settings.
+ * A build overlay must never change an existing device calibration policy.
+ * Magic-tagged native preferences are restored unchanged by decode_settings. */
+#define DEFAULT_NATIVE_ASC_MODE 0
+
 /* Default settings */
 static user_settings_t settings = {
     .device_name = "AirSpot Slim",
     .power_mode = 1,  /* Low power (3 min interval) */
-    .flight_mode = 0, /* Off */
-    .dnd_enabled = 0, /* Off */
-    .dnd_start_hour = 22,
-    .dnd_start_minute = 0,
-    .dnd_end_hour = 7,
-    .dnd_end_minute = 0,
-    .buzzer_enabled = 0,   /* Stub */
-    .vibrator_enabled = 0, /* Stub */
     .co2_correction = 0,
     .calib_target = 426,
     .auto_calibrate = 0, /* ASC off by default - manual recalibration is used */
     .asc_day_count = 0,
     .co2_yellow_start = 800,
     .co2_red_start = 1000,
+    .native_asc_mode = DEFAULT_NATIVE_ASC_MODE,
     .paired = 0};
 static const user_settings_t defaults = {
     .device_name = "AirSpot Slim",
     .power_mode = 1,  /* Low power (3 min interval) */
-    .flight_mode = 0, /* Off */
-    .dnd_enabled = 0, /* Off */
-    .dnd_start_hour = 22,
-    .dnd_start_minute = 0,
-    .dnd_end_hour = 7,
-    .dnd_end_minute = 0,
-    .buzzer_enabled = 0,   /* Stub */
-    .vibrator_enabled = 0, /* Stub */
     .co2_correction = 0,
     .calib_target = 426,
     .auto_calibrate = 0, /* ASC off by default - manual recalibration is used */
     .asc_day_count = 0,
     .co2_yellow_start = 800,
     .co2_red_start = 1000,
+    .native_asc_mode = DEFAULT_NATIVE_ASC_MODE,
     .paired = 0};
 
 static bool initialized = false;
@@ -81,14 +72,13 @@ static void encode_settings(const user_settings_t *value, uint8_t *out)
     size_t i = 4;
     memcpy(out + i, value->device_name, 21); i += 21;
     out[i++] = value->power_mode;
-    out[i++] = value->flight_mode;
-    out[i++] = value->dnd_enabled;
-    out[i++] = value->dnd_start_hour;
-    out[i++] = value->dnd_start_minute;
-    out[i++] = value->dnd_end_hour;
-    out[i++] = value->dnd_end_minute;
-    out[i++] = value->buzzer_enabled;
-    out[i++] = value->vibrator_enabled;
+    /* Keep schema-1 offsets for upgrades/rollback. Removed Screen-only fields
+     * are reserved zero bytes, not Slim settings. */
+    /* Three formerly reserved bytes; magic distinguishes old Screen fields. */
+    out[i] = value->native_asc_mode;
+    out[i + 1] = 0x53;
+    out[i + 2] = 0xA1;
+    i += 8;
     sys_put_le16((uint16_t)value->co2_correction, out + i); i += 2;
     sys_put_le16((uint16_t)value->calib_target, out + i); i += 2;
     out[i++] = value->auto_calibrate;
@@ -106,14 +96,9 @@ static int decode_settings(const uint8_t *in, user_settings_t *value)
     memset(value, 0, sizeof(*value));
     memcpy(value->device_name, in + i, 21); i += 21;
     value->power_mode = in[i++];
-    value->flight_mode = in[i++];
-    value->dnd_enabled = in[i++];
-    value->dnd_start_hour = in[i++];
-    value->dnd_start_minute = in[i++];
-    value->dnd_end_hour = in[i++];
-    value->dnd_end_minute = in[i++];
-    value->buzzer_enabled = in[i++];
-    value->vibrator_enabled = in[i++];
+    value->native_asc_mode = (in[i + 1] == 0x53 && in[i + 2] == 0xA1)
+        ? in[i] : DEFAULT_NATIVE_ASC_MODE;
+    i += 8; /* Ignore old flight/DND/buzzer/vibrator values. */
     value->co2_correction = (int16_t)sys_get_le16(in + i); i += 2;
     value->calib_target = (uint16_t)sys_get_le16(in + i); i += 2;
     value->auto_calibrate = in[i++];
@@ -122,11 +107,7 @@ static int decode_settings(const uint8_t *in, user_settings_t *value)
     value->co2_red_start = (uint16_t)sys_get_le16(in + i); i += 2;
     value->paired = in[i++];
     if (!memchr(value->device_name, 0, 21) || value->power_mode > 3 ||
-        value->flight_mode > 1 || value->dnd_enabled > 1 ||
-        value->dnd_start_hour > 23 || value->dnd_end_hour > 23 ||
-        value->dnd_start_minute > 59 || value->dnd_end_minute > 59 ||
-        value->buzzer_enabled > 1 || value->vibrator_enabled > 1 ||
-        value->auto_calibrate > 1 || value->paired > 1 ||
+        value->native_asc_mode > 2 || value->auto_calibrate > 1 || value->paired > 1 ||
         value->co2_yellow_start < 400 || value->co2_red_start > 5000 ||
         value->co2_yellow_start >= value->co2_red_start) return -EINVAL;
     return 0;
@@ -170,14 +151,10 @@ static int load_value(const char *name, size_t len, settings_read_cb read_cb,
   user_settings_t candidate = settings;
   void *destination = NULL;
   size_t expected = 0;
-  uint8_t dnd[5];
 
 #define FIELD(key, member) \
   if (strcmp(name, key) == 0) { destination = &candidate.member; expected = sizeof(candidate.member); }
   FIELD("power", power_mode)
-  else FIELD("flight", flight_mode)
-  else FIELD("buzzer", buzzer_enabled)
-  else FIELD("vibrator", vibrator_enabled)
   else FIELD("co2_cc", co2_correction)
   else FIELD("calib_target", calib_target)
   else FIELD("auto_calib", auto_calibrate)
@@ -190,9 +167,6 @@ static int load_value(const char *name, size_t len, settings_read_cb read_cb,
     destination = candidate.device_name;
     expected = len;
     candidate.device_name[len] = '\0';
-  } else if (strcmp(name, "dnd") == 0) {
-    destination = dnd;
-    expected = sizeof(dnd);
   } else {
     return -ENOENT;
   }
@@ -201,19 +175,8 @@ static int load_value(const char *name, size_t len, settings_read_cb read_cb,
   int rc = read_cb(cb_arg, destination, expected);
   if (rc < 0) { return rc; }
   if ((size_t)rc != expected) { return -EIO; }
-  if (destination == dnd) {
-    candidate.dnd_enabled = dnd[0];
-    candidate.dnd_start_hour = dnd[1];
-    candidate.dnd_start_minute = dnd[2];
-    candidate.dnd_end_hour = dnd[3];
-    candidate.dnd_end_minute = dnd[4];
-  }
-  if (candidate.power_mode > 3 || candidate.flight_mode > 1 ||
-      candidate.buzzer_enabled > 1 || candidate.vibrator_enabled > 1 ||
-      candidate.auto_calibrate > 1 || candidate.paired > 1 ||
-      candidate.dnd_enabled > 1 || candidate.dnd_start_hour > 23 ||
-      candidate.dnd_end_hour > 23 || candidate.dnd_start_minute > 59 ||
-      candidate.dnd_end_minute > 59) { return -EINVAL; }
+  if (candidate.power_mode > 3 || candidate.auto_calibrate > 1 ||
+      candidate.paired > 1) { return -EINVAL; }
   settings = candidate;
   return 0;
 }
@@ -278,14 +241,19 @@ int user_settings_init(void)
   }
   persistence_blocked = false;
   initialized = true;
-  LOG_INF("User settings initialized: name='%s', power=%d, flight=%d",
-          settings.device_name, settings.power_mode, settings.flight_mode);
+  LOG_INF("User settings initialized: name='%s', power=%d",
+          settings.device_name, settings.power_mode);
   return 0;
 }
 
 void user_settings_get_snapshot(user_settings_t *out) {
   k_mutex_lock(&settings_mutex, K_FOREVER);
   *out = settings;
+  if (settings.native_asc_mode) {
+    out->co2_correction = 0;
+    out->auto_calibrate = settings.native_asc_mode == 2;
+    out->calib_target = settings.native_asc_mode == 2 ? 400 : settings.calib_target;
+  }
   k_mutex_unlock(&settings_mutex);
 }
 
@@ -303,6 +271,34 @@ int user_settings_set_device_name(const char *name)
   return save_value(SETTINGS_KEY "/name", settings.device_name, value, sizeof(value));
 }
 
+uint8_t user_settings_get_native_asc_mode(void) { return settings.native_asc_mode; }
+
+int user_settings_set_native_asc_mode(uint8_t mode)
+{
+  if (mode > 2) return -EINVAL;
+  k_mutex_lock(&settings_mutex, K_FOREVER);
+  user_settings_t candidate = settings;
+  candidate.native_asc_mode = mode;
+  candidate.auto_calibrate = 0; /* Never run two learning algorithms. */
+  int rc = save_snapshot(&candidate);
+  k_mutex_unlock(&settings_mutex);
+  return rc;
+}
+
+int user_settings_commit_manual_correction(int16_t correction)
+{
+  k_mutex_lock(&settings_mutex, K_FOREVER);
+  int rc = -EBUSY;
+  if (settings.native_asc_mode != 2) {
+    user_settings_t candidate = settings;
+    candidate.co2_correction = correction;
+    candidate.native_asc_mode = 0;
+    rc = save_snapshot(&candidate);
+  }
+  k_mutex_unlock(&settings_mutex);
+  return rc;
+}
+
 uint8_t user_settings_get_power_mode(void) { return settings.power_mode; }
 
 int user_settings_set_power_mode(uint8_t mode)
@@ -312,88 +308,9 @@ int user_settings_set_power_mode(uint8_t mode)
   return save_value(SETTINGS_KEY "/power", &settings.power_mode, &value, sizeof(value));
 }
 
-uint8_t user_settings_get_flight_mode(void) { return settings.flight_mode; }
-
-int user_settings_set_flight_mode(uint8_t enabled)
-{
-  uint8_t value = enabled ? 1 : 0;
-  return save_value(SETTINGS_KEY "/flight", &settings.flight_mode, &value, sizeof(value));
-}
-
-bool user_settings_is_dnd_active(void)
-{
-  if (!settings.dnd_enabled)
-  {
-    return false;
-  }
-
-  /* If time hasn't been set by app, we can't check DND window */
-  if (!time_set)
-  {
-    return false;
-  }
-
-  uint8_t current_hour = user_settings_get_time_now_hour24();
-  uint8_t current_minute = user_settings_get_time_now_minute();
-  uint8_t start_hour = settings.dnd_start_hour;
-  uint8_t start_minute = settings.dnd_start_minute;
-  uint8_t end_hour = settings.dnd_end_hour;
-  uint8_t end_minute = settings.dnd_end_minute;
-
-  /* Convert to minutes since midnight for easier comparison */
-  uint16_t current = current_hour * 60 + current_minute;
-  uint16_t start = start_hour * 60 + start_minute;
-  uint16_t end = end_hour * 60 + end_minute;
-
-  if (start < end)
-  {
-    /* Simple case: e.g., 09:00 to 17:00 */
-    return (current >= start && current < end);
-  }
-  else
-  {
-    /* Overnight case: e.g., 22:00 to 07:00 */
-    return (current >= start || current < end);
-  }
-}
-
-int user_settings_set_dnd(uint8_t enabled, uint8_t start_hour,
-                          uint8_t start_minute, uint8_t end_hour,
-                          uint8_t end_minute)
-{
-  if (enabled > 1 || start_hour > 23 || end_hour > 23 ||
-      start_minute > 59 || end_minute > 59) { return -EINVAL; }
-  k_mutex_lock(&settings_mutex, K_FOREVER);
-  user_settings_t candidate = settings;
-  candidate.dnd_enabled = enabled;
-  candidate.dnd_start_hour = start_hour;
-  candidate.dnd_start_minute = start_minute;
-  candidate.dnd_end_hour = end_hour;
-  candidate.dnd_end_minute = end_minute;
-  int rc = save_snapshot(&candidate);
-  k_mutex_unlock(&settings_mutex);
-  return rc;
-}
-
-uint8_t user_settings_get_buzzer(void) { return settings.buzzer_enabled; }
-
-int user_settings_set_buzzer(uint8_t enabled)
-{
-  uint8_t value = enabled ? 1 : 0;
-  return save_value(SETTINGS_KEY "/buzzer", &settings.buzzer_enabled, &value, sizeof(value));
-}
-
-uint8_t user_settings_get_vibrator(void) { return settings.vibrator_enabled; }
-
-int user_settings_set_vibrator(uint8_t enabled)
-{
-  uint8_t value = enabled ? 1 : 0;
-  return save_value(SETTINGS_KEY "/vibrator", &settings.vibrator_enabled, &value, sizeof(value));
-}
-
 int16_t user_settings_get_co2_correction(void)
 {
-  return settings.co2_correction;
+  return settings.native_asc_mode ? 0 : settings.co2_correction;
 }
 
 int user_settings_set_co2_correction(int16_t correction)
@@ -402,7 +319,9 @@ int user_settings_set_co2_correction(int16_t correction)
   return save_value(SETTINGS_KEY "/co2_cc", &settings.co2_correction, &value, sizeof(value));
 }
 
-uint16_t user_settings_get_calib_target(void) { return settings.calib_target; }
+uint16_t user_settings_get_calib_target(void) {
+  return settings.native_asc_mode == 2 ? 400 : settings.calib_target;
+}
 
 int user_settings_set_calib_target(uint16_t target)
 {
@@ -435,7 +354,7 @@ int user_settings_set_co2_thresholds(uint16_t yellow_start, uint16_t red_start)
 
 uint8_t user_settings_get_auto_calibrate(void)
 {
-  return settings.auto_calibrate;
+  return settings.native_asc_mode ? settings.native_asc_mode == 2 : settings.auto_calibrate;
 }
 
 int user_settings_set_auto_calibrate(uint8_t enabled)
@@ -470,6 +389,7 @@ int user_settings_set_paired(bool paired)
 
 uint16_t user_settings_apply_co2_correction(uint16_t raw_ppm)
 {
+  if (settings.native_asc_mode) return raw_ppm; /* Retain baseline when learning is paused. */
   int32_t corrected = (int32_t)raw_ppm + settings.co2_correction;
   if (corrected < 0)
   {
@@ -500,26 +420,6 @@ void user_settings_set_timebase(uint32_t time)
 
 uint32_t user_settings_get_time_now(void) { return time_base; }
 
-uint8_t user_settings_get_time_now_hour24(void)
-{
-  uint32_t current_seconds = time_base % 60;
-  uint32_t remaining_minutes = (time_base - current_seconds) / 60;
-  uint32_t current_minutes = remaining_minutes % 60;
-  uint32_t remaining_hours = (remaining_minutes - current_minutes) / 60;
-  uint32_t current_hours = remaining_hours % 24;
-
-  return (uint8_t)current_hours;
-}
-
-uint8_t user_settings_get_time_now_minute(void)
-{
-  uint32_t current_seconds = time_base % 60;
-  uint32_t remaining_minutes = (time_base - current_seconds) / 60;
-  uint32_t current_minutes = remaining_minutes % 60;
-
-  return (uint8_t)current_minutes;
-}
-
 bool user_settings_is_time_set(void) { return time_set; }
 
 void user_settings_inc_second(void) { time_base++; }
@@ -536,6 +436,33 @@ int user_settings_factory_reset(void)
     persistence_blocked = false;
     initialized = true;
   }
+  k_mutex_unlock(&settings_mutex);
+  return rc;
+}
+
+/* Reset preferences without erasing calibration, ASC policy or sampling cadence. */
+int user_settings_reset_preferences(void)
+{
+  k_mutex_lock(&settings_mutex, K_FOREVER);
+  user_settings_t candidate = defaults;
+  candidate.co2_correction = settings.co2_correction;
+  candidate.calib_target = settings.calib_target;
+  candidate.auto_calibrate = settings.auto_calibrate;
+  candidate.native_asc_mode = settings.native_asc_mode;
+  candidate.power_mode = settings.power_mode;
+  int rc = save_snapshot(&candidate);
+  k_mutex_unlock(&settings_mutex);
+  return rc;
+}
+int user_settings_start_settling(void)
+{
+  k_mutex_lock(&settings_mutex, K_FOREVER);
+  user_settings_t candidate = settings;
+  candidate.native_asc_mode = 2;
+  candidate.auto_calibrate = 0;
+  candidate.co2_correction = 0;
+  candidate.power_mode = 3;
+  int rc = save_snapshot(&candidate);
   k_mutex_unlock(&settings_mutex);
   return rc;
 }

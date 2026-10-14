@@ -21,7 +21,17 @@
 extern "C" {
 #endif
 
-#define STCC4_STATUS_TESTING_MODE 0x0004u
+/* Production Slim hardware: verified with paired enable/disable commands.
+ * 0x0004 remains set in both states and is not the ASC testing flag. */
+#define STCC4_STATUS_TESTING_MODE 0x0080u
+
+extern bool stcc4_native_asc_expected;
+void stcc4_set_asc_policy(bool enabled);
+
+static inline bool stcc4_status_matches_asc_policy(uint16_t status)
+{
+  return ((status & STCC4_STATUS_TESTING_MODE) == 0) == stcc4_native_asc_expected;
+}
 
 /* Measurement mode */
 typedef enum {
@@ -32,6 +42,8 @@ typedef enum {
 /* CO2 measurement data */
 typedef struct {
   uint16_t co2_ppm;  /* CO2 concentration in ppm */
+  int16_t raw_co2_ppm; /* CRC-checked signed wire value before clamping */
+  bool has_raw_co2; /* False when transport/CRC failed; true even for negative CO2 */
   float temperature; /* Temperature from STCC4 (if available) */
   float humidity;    /* Relative humidity from STCC4 (if available) */
   uint16_t status;   /* Sensor status bits */
@@ -58,6 +70,13 @@ int stcc4_init(void);
  * @return 0 on success, negative errno on failure
  */
 int stcc4_reset(void);
+
+/** Explicitly erase native FRC/ASC history (0x3632); caller stops measurement. */
+int stcc4_factory_reset(void);
+/* Last explicit factory-reset attempt: 0 none, 1 write, 2 read, 3 CRC,
+ * 4 rejected result, 5 acknowledged success. result is meaningful at 4/5. */
+typedef struct { uint8_t stage; uint16_t result; } stcc4_reset_diagnostic_t;
+void stcc4_get_reset_diagnostic(stcc4_reset_diagnostic_t *diagnostic);
 
 /**
  * @brief Start continuous measurement mode
@@ -151,6 +170,8 @@ stcc4_mode_t stcc4_get_mode(void);
  * @return 0 on success, negative errno on failure
  */
 int stcc4_enter_sleep_mode(void);
+/** Sleep after a completed single shot, without issuing a continuous stop. */
+int stcc4_sleep_after_sample(void);
 
 /**
  * @brief Exit low-power sleep mode
@@ -183,6 +204,9 @@ int stcc4_perform_conditioning(void (*keepalive)(void));
  * @return 0 on success, negative errno on failure
  */
 int stcc4_enable_testing_mode(void);
+
+/** Resume native ASC without resetting its calibration history. */
+int stcc4_disable_testing_mode(void);
 
 /**
  * @brief Perform forced recalibration (FRC) to a known reference (0x362F).

@@ -15,10 +15,13 @@ class ConditioningRecoveryTests(unittest.TestCase):
 #define LOG_WRN(...)
 #define LOG_ERR(...)
 #define LED_COLOR_WHITE 0
+#define SENSOR_FAULT_CO2 0x44
+static int last_fault;
+static void set_sensor_fault(int code) {last_fault=code;}
 static int failures,calls,elapsed,feeds,stops,wakes,sensor_stops,stop_error;
 static int stcc4_exit_sleep_mode(void){wakes++;return 0;}
 static int stcc4_stop(void){sensor_stops++;return stop_error;}
-static bool boot_attempt=true;
+static bool boot_attempt=true, stcc4_conditioned;
 static void conditioning_keepalive(void){feeds++;}
 static void k_msleep(int ms){assert(ms<=2000);elapsed+=ms;}
 static void led_indicator_start_flash_pulse(int a,int b,int c){}
@@ -36,7 +39,7 @@ int main(void){
   assert(wakes==(failures?1:0) && sensor_stops==wakes);
   if(failures==0){assert(rc==0 && elapsed==2000);}
   if(failures==1){assert(rc==0 && elapsed==26050 && feeds>=26);}
-  if(failures==2){assert(rc==-EIO && elapsed==24050 && feeds>=24);}
+  if(failures==2){assert(rc==-EIO && elapsed==24050 && feeds>=24 && last_fault==SENSOR_FAULT_CO2);}
  }
  boot_attempt=true;failures=1;calls=elapsed=feeds=stops=wakes=sensor_stops=0;stop_error=-EIO;
  assert(boot()==0 && calls==2 && sensor_stops==1 && elapsed==27250);

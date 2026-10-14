@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+venv_dir="$script_dir/../venv/live"
+if [[ "${1:-}" == setup ]]; then
+  "${AIRSPOT_LIVE_PYTHON:-python3}" -m venv "$venv_dir"
+  "$venv_dir/bin/python" -m pip install -r "$script_dir/requirements-live.txt"
+  printf 'Ready. Run: %s watch\n' "$0"
+  exit 0
+fi
+if [[ ! -x "$venv_dir/bin/python" ]]; then
+  printf 'Run once to install Bluetooth dependencies: %s setup\n' "$0" >&2
+  exit 1
+fi
+if [[ $# == 0 ]]; then set -- watch; fi
+exec "$venv_dir/bin/python" -u "$script_dir/airspot_live.py" "$@"

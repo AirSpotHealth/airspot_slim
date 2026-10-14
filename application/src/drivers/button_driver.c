@@ -6,6 +6,7 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/atomic.h>
 #include <drivers/button_driver.h>
+#include <drivers/button_hold.h>
 
 LOG_MODULE_REGISTER(button_driver, CONFIG_AIRSPOT_LOG_LEVEL);
 
@@ -21,6 +22,7 @@ static atomic_t last_edge_ms;
 static atomic_t enabled;
 static atomic_t ignore_until_release;
 static bool initialized;
+static uint32_t press_started;
 K_SEM_DEFINE(button_changed, 0, 1);
 
 /* Sensor reads block the system workqueue; button gestures must not wait for it. */
@@ -34,7 +36,26 @@ static void long_press_handler(struct k_work *work)
       atomic_get(&ignore_until_release)) { return; }
   /* A release may have occurred while its debounce work was still pending. */
   if (gpio_pin_get_dt(&button) != 1) { return; }
-  if (user_callback) { user_callback(BUTTON_EVENT_LONG_PRESS); }
+  uint32_t elapsed = k_uptime_get_32() - press_started;
+  button_event_t event;
+  uint32_t next;
+  if (elapsed >= BUTTON_RECOVERY_EXPIRED_MS) {
+    event = BUTTON_EVENT_RECOVERY_CANCELLED;
+    next = 0;
+  } else if (elapsed >= BUTTON_RECOVERY_READY_MS) {
+    event = BUTTON_EVENT_RECOVERY_READY;
+    next = BUTTON_RECOVERY_EXPIRED_MS;
+  } else if (elapsed >= BUTTON_RECOVERY_WARNING_MS) {
+    event = BUTTON_EVENT_RECOVERY_WARNING;
+    next = BUTTON_RECOVERY_READY_MS;
+  } else {
+    event = BUTTON_EVENT_LONG_PRESS;
+    next = BUTTON_RECOVERY_WARNING_MS;
+  }
+  if (user_callback) user_callback(event);
+  if (next) {
+    k_work_reschedule_for_queue(&button_wq, &long_press_work, K_MSEC(next - elapsed));
+  }
 }
 
 static void debounce_handler(struct k_work *work)
@@ -65,9 +86,17 @@ static void debounce_handler(struct k_work *work)
     return;
   }
   if (state) {
+    press_started = edge;
     k_work_reschedule_for_queue(&button_wq, &long_press_work, K_MSEC(LONG_PRESS_TIMEOUT_MS));
   } else {
     k_work_cancel_delayable(&long_press_work);
+    /* Use the physical release edge, not delayed worker execution time. */
+    uint32_t elapsed = edge - press_started;
+    if (user_callback && button_hold_release(elapsed, false) == BUTTON_HOLD_RECOVER) {
+      user_callback(BUTTON_EVENT_RECOVERY_CONFIRMED);
+    } else if (user_callback && elapsed >= BUTTON_RECOVERY_WARNING_MS) {
+      user_callback(BUTTON_EVENT_RECOVERY_CANCELLED);
+    }
   }
   if (user_callback) {
     user_callback(state ? BUTTON_EVENT_PRESSED : BUTTON_EVENT_RELEASED);

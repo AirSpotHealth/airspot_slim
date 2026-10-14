@@ -1,3 +1,4 @@
+#include <services/settling.h>
 /*
  * Copyright (c) 2025 AirSpot
  *
@@ -9,11 +10,17 @@
  * Frame format: [0xFF][0xAA][CMD][LEN][DATA...][CHECKSUM]
  */
 
+#include <services/history_events.h>
 #include <string.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/reboot.h>
+#include <zephyr/sys/atomic.h>
 
+#include <drivers/battery.h>
+#include <drivers/qi_charger.h>
+#include <services/device_identity.h>
+#include <math.h>
 #include <drivers/led_driver.h>
 #include <drivers/stcc4.h>
 
@@ -43,6 +50,8 @@ static uint8_t rx_frame[RX_FRAME_MAX_LEN];
 static uint8_t rx_frame_idx = 0;
 static uint32_t rx_generation;
 static uint32_t command_generation;
+static atomic_t factory_reset_pending;
+static uint32_t factory_reset_generation;
 
 /*
  * Command dispatch runs on a dedicated thread, NOT in the NUS RX callback.
@@ -304,6 +313,41 @@ static void protocol_calib_on_done(int16_t correction)
   led_indicator_show_calibration(false);
 }
 
+/* Run the long erase on the watchdog-owning main thread, not the BLE worker.
+ * Otherwise main can block on history locks while its health deadline expires. */
+void protocol_process_factory_reset(void)
+{
+  if (!atomic_cas(&factory_reset_pending, 1, 2)) return;
+  if (factory_reset_generation != airspot_nus_generation()) {
+    atomic_clear(&factory_reset_pending);
+    return;
+  }
+  /* Trial firmware cannot erase user data before it has earned confirmation. */
+  int rc = 0;
+  if (!rc && !boot_is_img_confirmed()) rc = -EBUSY;
+  if (!rc) rc = power_manager_prepare_factory_off();
+  uint8_t reset_stage = 1;
+  /* Erase learned sensor history before discarding settings/readings. Never
+   * acknowledge a partial reset as success. Button wake reloads defaults. */
+  if (!rc) rc = sensor_manager_factory_erase_calibration();
+  if (!rc) { reset_stage = 2; rc = history_events_erase_all(); }
+  if (!rc) { reset_stage = 3; rc = user_settings_factory_reset(); }
+  if (!rc) { reset_stage = 4; rc = user_settings_start_settling(); }
+  uint8_t response[6] = {CMD_FIRST_BYTE, CMD_SECOND_BYTE, CMD_FACTORY_RESET,
+                        1, rc ? 0 : 1, 0};
+  set_frame_checksum(response, sizeof(response));
+  airspot_nus_send_session(response, sizeof(response), factory_reset_generation);
+  if (!rc) {
+    /* ACK means erasures committed; allow notification delivery before cut. */
+    k_msleep(500);
+    power_manager_request_factory_off();
+  } else {
+    atomic_clear(&factory_reset_pending);
+    diagnostics_record(DIAG_FACTORY_RESET_FAILED,
+        ((uint32_t)reset_stage << 16) | (uint16_t)rc);
+  }
+}
+
 /**
  * @brief Handle a complete received frame
  */
@@ -319,6 +363,8 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len)
   uint8_t cmd = frame[2];
   LOG_DBG("Received cmd: 0x%02X, len: %d", cmd, len);
 
+  /* After destructive reset succeeds, do not accept changes before power-off. */
+  if (power_manager_factory_off_requested() || atomic_get(&factory_reset_pending)) return;
   switch (cmd)
   {
   case CMD_GET_CO2_VALUE:
@@ -405,6 +451,124 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len)
     break;
   }
 
+  case CMD_SETTLING:
+  {
+    int rc = 0;
+    if (frame[3] == 5 && len == 10)
+      rc = settling_action(frame[4], sys_get_be32(frame + 5));
+    else if (frame[3] != 0 || len != 5) rc = -EINVAL;
+    settling_status_t st;
+    settling_get(&st);
+    uint8_t response[27] = {CMD_FIRST_BYTE, CMD_SECOND_BYTE, CMD_SETTLING,
+      22, 1, st.stage, st.running, 0};
+    sys_put_be16((uint16_t)(rc ? rc : st.error), response + 8);
+    sys_put_be32(st.generation, response + 10);
+    sys_put_be32(st.reset_time, response + 14);
+    sys_put_be32(st.seconds, response + 18);
+    sys_put_be32(st.fresh_seconds, response + 22);
+    set_frame_checksum(response, sizeof(response));
+    send_frame(response, sizeof(response));
+    break;
+  }
+  case CMD_RESET_PREFERENCES:
+  {
+    int rc = (frame[3] == 0 && len == 5) ? user_settings_reset_preferences() : -EINVAL;
+    uint8_t response[7] = {CMD_FIRST_BYTE, CMD_SECOND_BYTE, CMD_RESET_PREFERENCES,
+      2, (uint8_t)((uint16_t)rc >> 8), (uint8_t)rc, 0};
+    set_frame_checksum(response, sizeof(response));
+    send_frame(response, sizeof(response));
+    if (!rc) { k_msleep(100); sys_reboot(SYS_REBOOT_COLD); }
+    break;
+  }
+
+  case CMD_NATIVE_ASC:
+  {
+    /* len 0 reads; len 1 with 0/1 changes. Always return authoritative state. */
+    int rc = 0;
+    if (frame[3] == 1 && len == 6 && frame[4] <= 1)
+      rc = sensor_manager_change_native_asc(frame[4] != 0);
+    else if (frame[3] != 0 || len != 5) rc = -EINVAL;
+    sensor_asc_diagnostic_t diagnostic;
+    sensor_manager_get_asc_diagnostic(&diagnostic);
+    uint8_t mode = user_settings_get_native_asc_mode();
+    bool verified = diagnostic.stage == 5 && !diagnostic.error &&
+      (((diagnostic.status & STCC4_STATUS_TESTING_MODE) == 0) == (mode == 2)) && sensor_manager_is_ready();
+    uint16_t error = (uint16_t)rc;
+    uint8_t response[12] = {CMD_FIRST_BYTE, CMD_SECOND_BYTE, CMD_NATIVE_ASC,
+      7, 1, mode, verified, (uint8_t)(error >> 8), (uint8_t)error,
+      (uint8_t)(diagnostic.status >> 8), (uint8_t)diagnostic.status, 0};
+    set_frame_checksum(response, sizeof(response));
+    send_frame(response, sizeof(response));
+    protocol_send_device_state();
+    break;
+  }
+
+  case CMD_CO2_READ_DIAGNOSTIC:
+  {
+    if (frame[3] != 0 || len != 5) break;
+    sensor_asc_diagnostic_t snapshot;
+    sensor_manager_get_asc_diagnostic(&snapshot);
+    const sensor_co2_diagnostic_t *d = &snapshot.read;
+    uint8_t response[28] = {CMD_FIRST_BYTE, CMD_SECOND_BYTE,
+      CMD_CO2_READ_DIAGNOSTIC, 23, 1, d->flags, d->fault};
+    sys_put_be16((uint16_t)d->error, response + 7);
+    sys_put_be16((uint16_t)d->raw_co2_ppm, response + 9);
+    sys_put_be16(d->status, response + 11);
+    sys_put_be32(d->sequence, response + 13);
+    sys_put_be32(d->uptime_ms, response + 17);
+    sys_put_be16((uint16_t)d->temperature_centi, response + 21);
+    sys_put_be16(d->humidity_centi, response + 23);
+    sys_put_be16(d->pressure_hpa, response + 25);
+    set_frame_checksum(response, sizeof(response));
+    send_frame(response, sizeof(response));
+    break;
+  }
+
+  case CMD_RESET_NATIVE_CALIBRATION:
+  {
+    if (len == 5 && frame[3] == 0) {
+      sensor_reset_diagnostic_t d;
+      sensor_manager_get_reset_diagnostic(&d);
+      uint8_t response[14] = {CMD_FIRST_BYTE, CMD_SECOND_BYTE,
+        CMD_RESET_NATIVE_CALIBRATION, 9, 1, d.stage, d.erase_stage};
+      sys_put_be16(d.sensor_result, response + 7);
+      sys_put_be16((uint16_t)d.error, response + 9);
+      sys_put_be16((uint16_t)d.recovery_error, response + 11);
+      set_frame_checksum(response, sizeof(response));
+      send_frame(response, sizeof(response));
+      break;
+    }
+    /* Deliberate separate operation: never erase learned history on boot,
+     * ordinary Reset Sensor, device reset, or calibration toggle. */
+    if (len != 8 || frame[3] != 3 || frame[4] != 'R' ||
+        frame[5] != 'S' || frame[6] != 'T') break;
+    int ret = sensor_manager_reset_native_calibration();
+    if (!ret) (void)history_event_record(1, RECORD_TYPE_SENSOR_USER_FACTORY_RESET);
+    uint8_t response[7] = {CMD_FIRST_BYTE, CMD_SECOND_BYTE,
+      CMD_RESET_NATIVE_CALIBRATION, 2, 0, 0, 0};
+    sys_put_be16((uint16_t)ret, &response[4]);
+    set_frame_checksum(response, sizeof(response));
+    send_frame(response, sizeof(response));
+    protocol_send_device_state();
+  }
+  break;
+
+  case CMD_SENSOR_RECOVERY_DIAGNOSTIC:
+  {
+    if (frame[3] != 0 || len != 5) break;
+    sensor_recovery_diagnostic_t d;
+    sensor_manager_get_recovery_diagnostic(&d);
+    uint8_t response[18] = {CMD_FIRST_BYTE, CMD_SECOND_BYTE,
+      CMD_SENSOR_RECOVERY_DIAGNOSTIC, 13, 1, d.stage, d.fault};
+    sys_put_be16((uint16_t)d.error, response + 7);
+    sys_put_be32(d.total_attempts, response + 9);
+    sys_put_be16(d.consecutive_attempts, response + 13);
+    sys_put_be16(d.retry_in_seconds, response + 15);
+    set_frame_checksum(response, sizeof(response));
+    send_frame(response, sizeof(response));
+    break;
+  }
+
   case CMD_GET_ASC_DIAGNOSTIC:
   {
     sensor_asc_diagnostic_t diagnostic;
@@ -437,8 +601,8 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len)
     /* Return sensor details - Slim uses STCC4, not SCD4x */
     {
       uint8_t tx_frame[32] = {0};
-      sensor_data_t data;
-      sensor_manager_get_data(&data);
+      sensor_data_t data = {0};
+      int sample_rc = sensor_manager_get_data(&data);
 
       tx_frame[0] = CMD_FIRST_BYTE;
       tx_frame[1] = CMD_SECOND_BYTE;
@@ -456,7 +620,9 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len)
       tx_frame[offset++] = 0x00;
 
       /* Ambient Pressure (uint16_t, mBar, big-endian) - from LPS22HH */
-      uint16_t pressure_mbar = (uint16_t)data.pressure_hpa;
+      uint16_t pressure_mbar = !sample_rc && data.valid &&
+          isfinite(data.pressure_hpa) && data.pressure_hpa > 0 &&
+          data.pressure_hpa <= UINT16_MAX ? (uint16_t)data.pressure_hpa : 0;
       tx_frame[offset++] = (uint8_t)(pressure_mbar >> 8);
       tx_frame[offset++] = (uint8_t)(pressure_mbar & 0xFF);
 
@@ -468,13 +634,11 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len)
       tx_frame[offset++] = (uint8_t)(calib_target >> 8);
       tx_frame[offset++] = (uint8_t)(calib_target & 0xFF);
 
-      /* Serial Number (6 bytes) - placeholder for Slim */
-      tx_frame[offset++] = 'S';
-      tx_frame[offset++] = 'L';
-      tx_frame[offset++] = 'I';
-      tx_frame[offset++] = 'M';
-      tx_frame[offset++] = '0';
-      tx_frame[offset++] = '1';
+      /* Factory identity, not a shared model label. Zero means unavailable. */
+      uint8_t serial[6] = {0};
+      if (device_identity_get(serial)) LOG_ERR("Factory device identity unavailable");
+      memcpy(&tx_frame[offset], serial, sizeof(serial));
+      offset += sizeof(serial);
 
       /* Sensor Variant (1 byte) - 2 = STCC4 (custom) */
       tx_frame[offset++] = 0x02;
@@ -529,7 +693,7 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len)
     {
       uint32_t time = ((uint32_t)frame[4] << 24) | ((uint32_t)frame[5] << 16) |
                       ((uint32_t)frame[6] << 8) | (uint32_t)frame[7];
-      user_settings_set_timebase(time);
+      history_time_sync(time);
       LOG_INF("Timebase set: %u", time);
 
       /* Send ACK */
@@ -547,25 +711,17 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len)
   case CMD_RESET_DEVICE:
 
     LOG_INF("Reset device command received");
+    history_events_flush();
     k_sleep(K_MSEC(100));
     sys_reboot(SYS_REBOOT_COLD);
     break;
 
+  /* Screen-only commands retain a state reply for old shared clients, but
+   * cannot mutate settings, calibration, or history on Slim. */
   case CMD_SET_BUZZER_STATE:
-    if (len >= 6)
-    {
-      user_settings_set_buzzer(frame[4]);
-      LOG_INF("Buzzer set: %d (stub)", frame[4]);
-    }
-    protocol_send_device_state();
-    break;
-
   case CMD_SET_VIBRATOR_STATE:
-    if (len >= 6)
-    {
-      user_settings_set_vibrator(frame[4]);
-      LOG_INF("Vibrator set: %d (stub)", frame[4]);
-    }
+  case CMD_SET_FLIGHT_MODE:
+  case CMD_SET_DND:
     protocol_send_device_state();
     break;
 
@@ -574,15 +730,6 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len)
     {
       int rc = sensor_manager_change_power_mode(frame[4]);
       if (rc) LOG_WRN("Power mode change failed: %d", rc);
-    }
-    protocol_send_device_state();
-    break;
-
-  case CMD_SET_FLIGHT_MODE:
-    if (len >= 6)
-    {
-      user_settings_set_flight_mode(frame[4]);
-      LOG_INF("Flight mode set: %d", frame[4]);
     }
     protocol_send_device_state();
     break;
@@ -611,7 +758,10 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len)
   case CMD_RESET_SENSOR:
     {
       int ret = sensor_manager_reset_co2_sensor();
-      if (!ret) ret = sensor_manager_measure_now();
+      if (!ret) {
+        (void)history_event_record(1, RECORD_TYPE_SENSOR_USER_FACTORY_RESET);
+        ret = sensor_manager_measure_now();
+      }
       uint8_t tx_frame[6] = {CMD_FIRST_BYTE, CMD_SECOND_BYTE,
                             CMD_RESET_SENSOR, 0x01, ret ? 0xff : 0x01, 0};
       set_frame_checksum(tx_frame, sizeof(tx_frame));
@@ -663,24 +813,6 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len)
     /* Force BLE disconnect */
     LOG_INF("Force disconnect command received");
     ble_service_disconnect();
-    break;
-
-  case CMD_SET_DND:
-    /* Set DND mode - just store settings for now */
-    /* payload: [enabled(1), startH(1), startM(1), endH(1), endM(1)] */
-    if (len >= 10)
-    {
-      uint8_t enabled = frame[4];
-      uint8_t start_h = frame[5];
-      uint8_t start_m = frame[6];
-      uint8_t end_h = frame[7];
-      uint8_t end_m = frame[8];
-
-      user_settings_set_dnd(enabled, start_h, start_m, end_h, end_m);
-      LOG_INF("DND set: %d, %02d:%02d-%02d:%02d", enabled, start_h, start_m,
-              end_h, end_m);
-    }
-    protocol_send_device_state();
     break;
 
   case CMD_ENTER_FACTORY_TEST:
@@ -752,22 +884,11 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len)
     break;
 
   case CMD_FACTORY_RESET:
-  {
-    /* Trial firmware cannot erase user data before it has earned confirmation. */
-    int rc = boot_is_img_confirmed() ? data_log_erase_all() : -EBUSY;
-    if (!rc) rc = user_settings_factory_reset();
-    uint8_t response[6] = {CMD_FIRST_BYTE, CMD_SECOND_BYTE, CMD_FACTORY_RESET,
-                          1, rc ? 0 : 1, 0};
-    set_frame_checksum(response, sizeof(response));
-    send_frame(response, sizeof(response));
-    if (!rc) {
-      k_msleep(100);
-      sys_reboot(SYS_REBOOT_COLD);
-    } else {
-      diagnostics_record(DIAG_STORAGE_FAILED, (uint32_t)-rc);
+    if (frame[3] == 0 && len == 5) {
+      factory_reset_generation = command_generation;
+      atomic_set(&factory_reset_pending, 1);
     }
     break;
-  }
 
   case CMD_CALIB_START:
     /* 0x0D len 0: start calibration; len 2: set target only (mobile app) */
@@ -895,7 +1016,7 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len)
 void protocol_send_realtime_co2(void)
 {
   uint8_t tx_frame[20] = {0};
-  sensor_data_t data;
+  sensor_data_t data = {0};
 
   tx_frame[0] = CMD_FIRST_BYTE;
   tx_frame[1] = CMD_SECOND_BYTE;
@@ -940,8 +1061,8 @@ void protocol_send_realtime_co2(void)
   else
   {
     /* Error state: 0xFFFF for CO2, error info in time bytes */
-    tx_frame[4] = 0x00; /* error code placeholder */
-    tx_frame[5] = 0x00; /* recovery attempts placeholder */
+    tx_frame[4] = data.error_code ? data.error_code : SENSOR_FAULT_STARTING;
+    tx_frame[5] = 0; /* No automatic recovery-attempt claim. */
     tx_frame[6] = 0x00;
     tx_frame[7] = 0x00;
     tx_frame[8] = 0xFF;
@@ -961,50 +1082,29 @@ void protocol_send_realtime_co2(void)
 /**
  * @brief Send battery level + charging state.
  */
-void protocol_send_battery_level(void)
+static int send_power_state(uint8_t cmd)
 {
-  uint8_t tx_frame[16] = {0};
-  sensor_data_t data;
+  uint16_t mv;
+  bool valid = battery_get_ota_voltage(&mv) == 0;
+  /* Preserve legacy length=1 for 0x20. 0xff means battery unavailable,
+   * never a fabricated 0% reading. Charger state is independent of CO2. */
+  uint8_t frame[7] = {CMD_FIRST_BYTE, CMD_SECOND_BYTE, cmd,
+      cmd == CMD_GET_BATTERY_LEVEL ? 1 : 2,
+      valid ? (cmd == CMD_LOW_BATTERY_LOCKOUT ? 1 : battery_get_percentage()) : 0xff,
+      qi_charger_is_charging() ? 1 : 0, 0};
+  set_frame_checksum(frame, sizeof(frame));
+  uint32_t session = k_current_get() == &protocol_thread_data ? command_generation : 0;
+  return airspot_nus_send_session(frame, sizeof(frame), session);
+}
 
-  tx_frame[0] = CMD_FIRST_BYTE;
-  tx_frame[1] = CMD_SECOND_BYTE;
-  tx_frame[2] = CMD_GET_BATTERY_LEVEL;
-  /* NOTE: Old firmware has tx_frame[3] = 0x01 but sends 2 bytes (bug) */
-  tx_frame[3] = 0x01;
-
-  if (sensor_manager_get_data(&data) == 0)
-  {
-    tx_frame[4] = data.battery_percent;
-    tx_frame[5] = data.is_charging ? 1 : 0;
-  }
-  else
-  {
-    tx_frame[4] = 0;
-    tx_frame[5] = 0;
-  }
-
-  set_frame_checksum(tx_frame, 7);
-  send_frame(tx_frame, 7);
+int protocol_send_battery_level(void)
+{
+  return send_power_state(CMD_GET_BATTERY_LEVEL);
 }
 
 void protocol_send_low_battery_lockout(void)
 {
-  uint8_t tx_frame[16] = {0};
-  sensor_data_t data;
-
-  tx_frame[0] = CMD_FIRST_BYTE;
-  tx_frame[1] = CMD_SECOND_BYTE;
-  tx_frame[2] = CMD_LOW_BATTERY_LOCKOUT;
-  tx_frame[3] = 0x02; /* payload length: battery %, charging flag */
-
-  if (sensor_manager_get_data(&data) == 0)
-  {
-    tx_frame[4] = data.battery_percent;
-    tx_frame[5] = data.is_charging ? 1 : 0;
-  }
-
-  set_frame_checksum(tx_frame, 7);
-  send_frame(tx_frame, 7);
+  (void)send_power_state(CMD_LOW_BATTERY_LOCKOUT);
 }
 
 /**
@@ -1024,11 +1124,11 @@ void protocol_send_device_state(void)
    * - Yellow start (2 bytes) - N/A for Slim, send defaults
    * - Red start (2 bytes) - N/A for Slim, send defaults
    * - Screen const on (1 byte) - N/A for Slim
-   * - Auto calibrate (1 byte) - N/A for STCC4
+   * - Auto calibrate (1 byte) - software ASC
    * - DND mode (1 byte)
    * - DND start hour/min (2 bytes)
    * - DND end hour/min (2 bytes)
-   * - Calib target (2 bytes) - N/A
+   * - Calib target (2 bytes) - software calibration
    * - UI mode (1 byte) - N/A
    * - Graph max (2 bytes) - N/A
    * - Graph min (2 bytes) - N/A
@@ -1042,8 +1142,8 @@ void protocol_send_device_state(void)
   int offset = 4;
 
   /* Basic settings */
-  tx_frame[offset++] = us->buzzer_enabled;   /* buzzer state */
-  tx_frame[offset++] = us->vibrator_enabled; /* vibrator state */
+  tx_frame[offset++] = 0; /* no buzzer */
+  tx_frame[offset++] = 0; /* no vibrator */
   tx_frame[offset++] = us->power_mode;
 
   uint16_t yellow_start = us->co2_yellow_start;
@@ -1057,12 +1157,8 @@ void protocol_send_device_state(void)
   tx_frame[offset++] = 0; /* screen const on */
   tx_frame[offset++] = us->auto_calibrate;
 
-  /* DND settings - report the values actually stored in NVS */
-  tx_frame[offset++] = us->dnd_enabled;
-  tx_frame[offset++] = us->dnd_start_hour;
-  tx_frame[offset++] = us->dnd_start_minute;
-  tx_frame[offset++] = us->dnd_end_hour;
-  tx_frame[offset++] = us->dnd_end_minute;
+  /* Reserved Screen DND fields: disabled, no schedule. */
+  for (int i = 0; i < 5; i++) tx_frame[offset++] = 0;
 
   /* Calibration target */
   uint16_t calib_target = user_settings_get_calib_target();
@@ -1101,7 +1197,7 @@ void protocol_send_device_state(void)
   tx_frame[offset++] = (uint8_t)(scale_bits);
 
   /* Flight mode */
-  tx_frame[offset++] = us->flight_mode;
+  tx_frame[offset++] = 0; /* no manual flight mode; pressure compensated */
 
   /* Set header */
   tx_frame[0] = CMD_FIRST_BYTE;
@@ -1205,9 +1301,10 @@ void protocol_send_history_data(const uint8_t *data, uint8_t record_count,
     tx_frame[offset++] = (uint8_t)(rec->timestamp >> 8);
     tx_frame[offset++] = (uint8_t)(rec->timestamp);
 
-    /* Value (little-endian in frame - LSB first, matches old firmware) */
-    tx_frame[offset++] = (uint8_t)(rec->value & 0xFF);
-    tx_frame[offset++] = (uint8_t)(rec->value >> 8);
+    /* Flash stores the value big-endian; decode before sending LSB first. */
+    uint16_t value = SWAP_ENDIAN16(rec->value);
+    tx_frame[offset++] = (uint8_t)(value & 0xFF);
+    tx_frame[offset++] = (uint8_t)(value >> 8);
 
     /* Type */
     tx_frame[offset++] = rec->type;
@@ -1258,7 +1355,7 @@ void protocol_process_history(void)
   if (data_log_take_erase_request(&session))
   {
     LOG_INF("Processing history erase...");
-    int ret = data_log_erase_all();
+    int ret = history_events_erase_all();
     if (ret == 0)
     {
       uint8_t reply[6] = {CMD_FIRST_BYTE, CMD_SECOND_BYTE, CMD_ERASE_HISTORY, 1, 1, 0};

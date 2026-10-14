@@ -7,11 +7,13 @@ import unittest
 ROOT=Path(__file__).resolve().parents[1]
 
 class SensorAscTests(unittest.TestCase):
-    def test_startup_reset_and_measurement_policy(self):
+    def _run_policy(self, native=False, recovery=False, sleep=False):
         source=(ROOT/'application/src/services/sensor_manager.c').read_text()
         source=re.sub(r'^#include .*$', '', source, flags=re.M)
         harness=r'''
 #include <assert.h>
+#include <services/diagnostics.h>
+void diagnostics_record(enum diagnostic_event event, uint32_t detail) {}
 #include <errno.h>
 #include <math.h>
 #include <stdbool.h>
@@ -21,6 +23,14 @@ class SensorAscTests(unittest.TestCase):
 #include <services/health_service.h>
 void health_progress(enum health_worker w,uint32_t ms) {}
 #include <drivers/stcc4.h>
+#if defined(CONFIG_AIRSPOT_STCC4_INTERNAL_ASC_EXPERIMENT)
+bool stcc4_native_asc_expected=true;static uint8_t native_mode=2;
+#else
+bool stcc4_native_asc_expected;static uint8_t native_mode;
+#endif
+void stcc4_set_asc_policy(bool v) {stcc4_native_asc_expected=v;}
+static uint8_t user_settings_get_native_asc_mode(void) {return native_mode;}
+static int user_settings_set_native_asc_mode(uint8_t v);
 #define LOG_MODULE_REGISTER(...)
 #define LOG_ERR(...)
 #define LOG_WRN(...)
@@ -40,13 +50,14 @@ static bool work_executing, work_cancelling;
 static int pressure_error, ambient_write_error, pressure_write_error, ambient_writes, pressure_writes, callbacks, scheduled_delay;
 static int ambient_error, sensor_restart_notifications, self_test_error, start_error, stop_error;
 static uint16_t self_test_word;
-static int64_t now=1;
-static bool internal_paused, manual, callback_valid;
+static int stale_policy_reads;static bool force_paused_status, unknown_status_mapping;
+static int64_t now=1,last_feed;static bool check_watchdog;
+static bool internal_paused, manual, callback_valid, continuous, require_continuous;
 static uint8_t auto_flag, power=2;
 static int16_t correction=123;
 static void k_mutex_lock(int *m,int t) { (*m)++; }
 static void k_mutex_unlock(int *m) { assert(*m>0); (*m)--; }
-static void k_msleep(int ms) {now+=ms;}
+static void k_msleep(int ms) {now+=ms;if(check_watchdog)assert(now-last_feed<5000);}
 static uint32_t k_uptime_get_32(void) {return now;}
 static int64_t k_uptime_get(void) {return now;}
 static void k_work_init_delayable(struct k_work_delayable *w,void (*f)(struct k_work *)) {}
@@ -56,14 +67,18 @@ static void k_work_schedule(struct k_work_delayable *w,int t) {if(!work_cancelli
 static void k_work_reschedule(struct k_work_delayable *w,int t) {assert(!work_cancelling);scheduled_delay=t;}
 static void k_work_cancel_delayable(struct k_work_delayable *w) {if(work_executing)work_cancelling=true;scheduled_delay=-1;}
 static void k_work_cancel_delayable_sync(struct k_work_delayable *w,struct k_work_sync *s) {}
-void watchdog_feed(void) {}
+void watchdog_feed(void) {last_feed=now;}
 static int i2c_bus_init(void) {return 0;}
 static int sht40_init(void) {return 0;}
+static int ambient_resets, pressure_resets, factory_resets;
+static bool heal_co2, heal_ambient, heal_pressure;
+static int sht40_soft_reset(void) {ambient_resets++;if(heal_ambient)ambient_error=0;return ambient_error;}
 typedef struct {float temperature,humidity;} sht40_data_t;
 #define SHT40_PRECISION_HIGH 0
 static int sht40_measure(sht40_data_t *d,int p) {now+=12;d->temperature=22;d->humidity=45;return ambient_error;}
 typedef struct {float pressure;} lps22hh_data_t;
 static int lps22hh_init(void) {return 0;}
+static int lps22hh_soft_reset(void) {pressure_resets++;if(heal_pressure)pressure_error=0;return pressure_error;}
 static int lps22hh_read(lps22hh_data_t *d) {now+=2;d->pressure=1013;return pressure_error;}
 static int battery_init(void) {return 0;}
 static int qi_charger_init(void) {return 0;}
@@ -73,30 +88,50 @@ static bool battery_is_low(void) {return false;}
 static bool battery_is_critical(void) {return false;}
 static bool qi_charger_is_charging(void) {return false;}
 static void ble_service_update_battery_level(uint8_t p) {}
+static uint8_t user_settings_get_auto_calibrate(void) {return auto_flag;}
 static uint8_t user_settings_get_power_mode(void) {return power;}
+static int user_settings_set_native_asc_mode(uint8_t v) {if(!save_error)native_mode=v;return save_error;}
 static int user_settings_set_power_mode(uint8_t v) {if(!save_error)power=v;return save_error;}
 static int sht40_read_serial(uint32_t *v) {*v=1;return 0;}
 static int lps22hh_read_id(uint8_t *v) {*v=0xB3;return 0;}
 int stcc4_get_product_id(uint8_t *v,size_t n) {return 0;}
+static int settling_prepared, settling_started, settling_error;
+static int settling_prepare_erase(uint32_t t) {settling_prepared++;return settling_error;}
+static int settling_erased(void) {settling_started++;return 0;}
+static void settling_observe(bool v) {}
+static bool user_settings_is_time_set(void) {return false;}
+static uint32_t user_settings_get_time_now(void) {return 0;}
+static int user_settings_start_settling(void) {if(!save_error){native_mode=2;power=3;correction=0;auto_flag=0;}return save_error;}
 static int user_settings_set_co2_correction(int16_t v) {if(!save_error)correction=v;return save_error;}
 static void software_asc_sensor_restarted(void) {sensor_restart_notifications++;}
 static void software_asc_end_manual(void) {manual=false;restart_calls++;}
 static int software_asc_begin_manual(void) {if(manual)return -EBUSY;manual=true;return 0;}
 int stcc4_init(void) {return 0;}
+int stcc4_exit_sleep_mode(void) {return 0;}
 int stcc4_enable_testing_mode(void) {pause_calls++;if(!pause_error)internal_paused=true;return pause_error;}
-int stcc4_disable_testing_mode(void) {resume_calls++;internal_paused=false;return 0;}
-int stcc4_trigger_single_shot(void) {return 0;}
+int stcc4_disable_testing_mode(void) {resume_calls++;if(!pause_error)internal_paused=false;return pause_error;}
+int stcc4_trigger_single_shot(void) {continuous=false;return 0;}
+static int16_t mock_raw_co2=800;
 int stcc4_read(stcc4_data_t *d) {
-  *d=(stcc4_data_t){.co2_ppm=800,.valid=true,.status=internal_paused?0x0084:0};
-  return read_error;
+  *d=(stcc4_data_t){.co2_ppm=mock_raw_co2<0?0:(uint16_t)mock_raw_co2,.raw_co2_ppm=mock_raw_co2,.has_raw_co2=!read_error,.valid=true,.status=internal_paused?0x0084:0};
+  if (stale_policy_reads || force_paused_status || (require_continuous && !continuous)) {
+    d->status=0x0084;
+    if(stale_policy_reads)stale_policy_reads--;
+  }
+  if (unknown_status_mapping) d->status=4;
+  return read_error ? read_error : (stcc4_status_matches_asc_policy(d->status) ? 0 : -EACCES);
 }
-int stcc4_reset(void) {reset_calls++;internal_paused=false;return reset_error;}
+void stcc4_get_reset_diagnostic(stcc4_reset_diagnostic_t *d) {*d=(stcc4_reset_diagnostic_t){.stage=reset_error?4:5,.result=reset_error?65535:0};}
+int stcc4_factory_reset(void) {factory_resets++;reset_calls++;assert(!continuous);internal_paused=false;return reset_error;}
+int stcc4_reset(void) {reset_calls++;if(heal_co2)read_error=0;internal_paused=false;return reset_error;}
 int stcc4_set_ambient(float t,float h) {ambient_writes++;now++;return ambient_write_error;}
 int stcc4_set_pressure(uint16_t p) {pressure_writes++;now++;return pressure_write_error;}
 uint16_t stcc4_get_co2(void) {return 777;}
+static int sleep_calls,sleep_error;
+int stcc4_sleep_after_sample(void) {assert(!continuous);sleep_calls++;return sleep_error;}
 int stcc4_enter_sleep_mode(void) {return 0;}
-int stcc4_stop(void) {return stop_error;}
-int stcc4_start_continuous(void) {return start_error;}
+int stcc4_stop(void) {if(!stop_error){continuous=false;k_msleep(1200);}return stop_error;}
+int stcc4_start_continuous(void) {if(!start_error)continuous=true;return start_error;}
 extern int meas_mutex;
 int stcc4_perform_self_test(uint16_t *r) {assert(meas_mutex==1 && manual);*r=self_test_word;return self_test_error;}
 int stcc4_perform_forced_recalibration(uint16_t t,int16_t *a) {assert(false);return 0;}
@@ -117,7 +152,7 @@ int main(void) {
     sensor_data_t snapshot;
     assert(sensor_manager_get_data(&snapshot)==0 && !snapshot.valid);
     correction=123;
-    assert(sensor_manager_reset_co2_sensor()==0 && internal_paused && correction==0);
+    assert(sensor_manager_reset_co2_sensor()==0 && internal_paused && correction==123);
     assert(sensor_manager_measure_now()==0 && callback_valid);
   }
   assert(pause_calls==4 && resume_calls==0 && sensor_restart_notifications==4);
@@ -138,8 +173,41 @@ int main(void) {
   reset_error=0;pause_error=-EIO;
   assert(sensor_manager_reset_co2_sensor()==-EIO && correction==100 && !manual);
   pause_error=0;save_error=-EIO;
-  assert(sensor_manager_reset_co2_sensor()==-EIO && correction==100 && !manual);
-  save_error=0;assert(sensor_manager_reset_co2_sensor()==0 && correction==0);
+  assert(sensor_manager_reset_co2_sensor()==0 && correction==100 && !manual);
+  save_error=0;assert(sensor_manager_reset_co2_sensor()==0 && correction==100);
+  correction=123;power=3;
+  int erases_before_intent=factory_resets;
+  settling_error=-EIO;
+  assert(sensor_manager_reset_native_calibration()==-EIO && factory_resets==erases_before_intent && correction==123 && !manual);
+  settling_error=0;
+  assert(sensor_manager_reset_native_calibration()==0 && correction==0 && native_mode==2 && continuous && !internal_paused && !manual);
+  correction=100;reset_error=-EIO;
+  assert(sensor_manager_reset_native_calibration()==-EIO && correction==100 && !manual);
+  assert(continuous && !use_single_shot_mode);
+  sensor_reset_diagnostic_t reset_diag;
+  sensor_manager_get_reset_diagnostic(&reset_diag);
+  assert(reset_diag.stage==3 && reset_diag.erase_stage==4 && reset_diag.sensor_result==65535 && reset_diag.error==-EIO && !reset_diag.recovery_error);
+  assert(sensor_manager_measure_now()==0);
+  reset_error=0;stop_error=-EIO;
+  assert(sensor_manager_reset_native_calibration()==-EIO && correction==100 && !manual);
+  stop_error=0;
+  assert(sensor_manager_reset_native_calibration()==0 && native_mode==2 && continuous && !internal_paused);
+  reset_error=-EIO;pause_error=-EACCES;
+  assert(sensor_manager_reset_native_calibration()==-EIO && !initialized && !manual);
+  sensor_manager_get_reset_diagnostic(&reset_diag);
+  assert(reset_diag.stage==3 && reset_diag.error==-EIO && reset_diag.recovery_error==-EACCES);
+  assert(sensor_manager_measure_now()==-ENODEV);
+  reset_error=0;pause_error=0;
+  assert(sensor_manager_reset_co2_sensor()==0 && initialized && continuous);
+  sensor_manager_get_reset_diagnostic(&reset_diag);
+  assert(reset_diag.error==-EIO && reset_diag.recovery_error==-EACCES);
+  /* Subsequent cases exercise the original caller policy independently. */
+#if defined(CONFIG_AIRSPOT_STCC4_INTERNAL_ASC_EXPERIMENT)
+  native_mode=2;
+#else
+  native_mode=0;
+#endif
+  assert(configure_stcc4_asc(native_mode==2)==0);resume_calls=0;
   uint16_t result;
   correction=123;use_single_shot_mode=false;
   for(self_test_word=0;self_test_word<=0x10;self_test_word+=0x10) {
@@ -156,6 +224,19 @@ int main(void) {
   assert(sensor_manager_measure_now()==-ENODEV && correction==123);
   assert(sensor_manager_self_test(&result)==-ENODEV && result==UINT16_MAX && !manual);
   assert(sensor_manager_self_test(NULL)==-EINVAL);
+
+  start_error=0;assert(sensor_manager_init()==0);
+  sensor_data_t fault_sample;
+  ambient_error=-EIO;assert(sensor_manager_measure_now()!=0);
+  sensor_manager_get_data(&fault_sample);assert(fault_sample.error_code==SENSOR_FAULT_AMBIENT && !fault_sample.valid);
+  ambient_error=0;pressure_error=-EIO;assert(sensor_manager_measure_now()!=0);
+  sensor_manager_get_data(&fault_sample);assert(fault_sample.error_code==SENSOR_FAULT_PRESSURE);
+  pressure_error=0;ambient_write_error=-EIO;assert(sensor_manager_measure_now()!=0);
+  sensor_manager_get_data(&fault_sample);assert(fault_sample.error_code==SENSOR_FAULT_COMPENSATION);
+  ambient_write_error=0;read_error=-EIO;assert(sensor_manager_measure_now()!=0);
+  sensor_manager_get_data(&fault_sample);assert(fault_sample.error_code==SENSOR_FAULT_CO2);
+  read_error=0;assert(sensor_manager_measure_now()==0);
+  sensor_manager_get_data(&fault_sample);assert(fault_sample.error_code==0 && fault_sample.valid);
 
   /* Continuous mode: 1 s compensation starts, one publication per 5 s.
    * I2C work costs 16 ms; scheduling must account for that execution time. */
@@ -213,7 +294,116 @@ int main(void) {
   assert(sensor_manager_change_power_mode(3)==-EIO && power==1 && use_single_shot_mode);
 }
 '''
+        if native:
+            tests = tests.replace('&& internal_paused', '&& !internal_paused')
+            tests = tests.replace('assert(internal_paused &&', 'assert(!internal_paused &&')
+            tests = tests.replace('diagnostic.status==0x0084', 'diagnostic.status==0')
+            tests = tests.replace('internal_paused=false;\n    assert(sensor_manager_measure_now()', 'internal_paused=true;\n    assert(sensor_manager_measure_now()')
+            tests = tests.replace('pause_calls==4 && resume_calls==0', 'pause_calls==4 && resume_calls==4')
+            tests = tests.replace('data_mutex==0 && resume_calls==0', 'data_mutex==0')
+            tests = tests[:tests.rfind('}')] + r'''
+  initialized=false;internal_paused=true;stale_policy_reads=2;
+  assert(sensor_manager_init()==0 && !internal_paused && stale_policy_reads==0);
+  initialized=false;force_paused_status=true;
+  assert(sensor_manager_init()==-EACCES && !initialized);
+  last_feed=now;check_watchdog=true;
+  assert(configure_stcc4_asc(true)==-EACCES);
+  check_watchdog=false;force_paused_status=false;
+  initialized=false;require_continuous=true;
+  assert(sensor_manager_init()==0 && !continuous);
+  initialized=false;start_error=-EIO;
+  assert(sensor_manager_init()==-EIO && !initialized);
+  start_error=0;initialized=false;stop_error=-EIO;
+  assert(sensor_manager_init()==-EIO && !initialized);
+  stop_error=0;require_continuous=false;
+  initialized=false;unknown_status_mapping=true;
+  assert(sensor_manager_init()==-EACCES && !initialized);
+  unknown_status_mapping=false;
+}
+'''
+
+        tests = tests[:tests.rfind('}')] + r'''
+  /* Native setting persists only after fresh hardware verification. */
+  start_error=stop_error=save_error=read_error=pause_error=0;
+  initialized=true;manual=false;unknown_status_mapping=false;force_paused_status=false;
+  require_continuous=false;stale_policy_reads=0;use_single_shot_mode=false;
+  correction=165;
+  assert(sensor_manager_change_native_asc(true)==0);
+  assert(native_mode==2 && continuous && !internal_paused && correction==165);
+  power=3; /* Reset restores the saved sampling mode. */
+  int erases_before=factory_resets;
+  assert(sensor_manager_reset_native_calibration()==0);
+  assert(factory_resets==erases_before+1 && native_mode==2 && continuous && !internal_paused && correction==0 && !manual);
+  assert(sensor_manager_perform_frc(426,NULL)==-EBUSY);
+  int previous_resumes=resume_calls;
+  assert(sensor_manager_change_native_asc(true)==0 && resume_calls==previous_resumes);
+  assert(sensor_manager_change_native_asc(false)==0);
+  assert(native_mode==1 && internal_paused && continuous && correction==0);
+  manual=true;assert(sensor_manager_change_native_asc(true)==-EBUSY);manual=false;
+  save_error=-EIO;
+  assert(sensor_manager_change_native_asc(true)==-EIO);
+  assert(native_mode==1 && internal_paused && continuous && initialized);
+  save_error=0;
+  save_error=-EBUSY;power=3;
+  assert(sensor_manager_reset_native_calibration()==-EBUSY && native_mode==1 && correction==0 && internal_paused && continuous && !manual);
+  save_error=0;
+  mock_raw_co2=-155;
+  assert(sensor_manager_measure_now()==-EIO);
+  sensor_manager_get_asc_diagnostic(&diagnostic);
+  assert(diagnostic.read.error==0 && diagnostic.read.raw_co2_ppm==-155);
+  assert(diagnostic.read.flags==3 && diagnostic.read.fault==SENSOR_FAULT_CO2);
+  uint32_t read_sequence=diagnostic.read.sequence;
+  read_error=-EIO;
+  assert(sensor_manager_measure_now()==-EIO);
+  sensor_manager_get_asc_diagnostic(&diagnostic);
+  assert(diagnostic.read.error==-EIO && !(diagnostic.read.flags&1));
+  assert(diagnostic.read.sequence==read_sequence+1);
+  read_error=0;mock_raw_co2=800;
+  assert(sensor_manager_measure_now()==0);
+  sensor_manager_get_asc_diagnostic(&diagnostic);
+  assert(diagnostic.read.flags==7 && diagnostic.read.fault==0);
+  pause_error=-EIO;
+  assert(sensor_manager_change_native_asc(true)==-EIO);
+  assert(native_mode==1 && !initialized && !latest_data.valid);
+}
+'''
+        if recovery:
+            tests = (ROOT / 'tests/automatic_recovery_cases.c').read_text()
+        if sleep:
+            tests = r'''
+int main(void) {
+ assert(!sensor_manager_init());
+ assert(!sensor_manager_set_power_mode(2));
+ int before=sleep_calls;
+ assert(!sensor_manager_measure_now()&&sleep_calls==before+1);
+ sleep_error=-EIO;assert(sensor_manager_measure_now()==-EIO&&!latest_data.valid);
+ sleep_error=0;read_error=-EIO;before=sleep_calls;
+ assert(sensor_manager_measure_now()==-EIO&&sleep_calls==before);
+ read_error=0;assert(!sensor_manager_set_power_mode(3));before=sleep_calls;
+ assert(!sensor_manager_measure_now()&&sleep_calls==before);
+ assert(!sensor_manager_set_power_mode(1));before=sleep_calls;
+ assert(!sensor_manager_measure_now()&&sleep_calls==before+1);
+ int16_t correction;assert(sensor_manager_perform_frc(400,&correction)==-EBUSY);
+ assert(!sensor_manager_set_power_mode(0));before=sleep_calls;
+ assert(!sensor_manager_measure_now()&&sleep_calls==before+1);
+}
+'''
         with tempfile.TemporaryDirectory() as directory:
             p=Path(directory);(p/'test.c').write_text(harness+source+tests)
-            subprocess.run(['cc','-std=c11','-fsanitize=address,undefined','-I',str(ROOT/'application/include'),str(p/'test.c'),'-o',str(p/'test')],check=True)
+            subprocess.run(['cc',*(['-DCONFIG_AIRSPOT_STCC4_SINGLE_SHOT_SLEEP=1'] if sleep else []),*(['-DCONFIG_AIRSPOT_STCC4_INTERNAL_ASC_EXPERIMENT=1'] if native else []),'-std=c11','-fsanitize=address,undefined','-I',str(ROOT/'application/include'),str(p/'test.c'),'-o',str(p/'test')],check=True)
             subprocess.run([str(p/'test')],check=True)
+
+    def test_startup_reset_and_measurement_policy(self):
+        self._run_policy()
+
+    def test_native_asc_startup_recovery_and_compensation(self):
+        self._run_policy(native=True)
+
+    def test_automatic_recovery_faults_backoff_and_shutdown(self):
+        self._run_policy(recovery=True)
+
+    def test_automatic_recovery_preserves_native_asc(self):
+        self._run_policy(native=True, recovery=True)
+
+    def test_sleep_candidate_modes_failures_and_frc_guard(self):
+        self._run_policy(sleep=True)

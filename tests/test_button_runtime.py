@@ -68,7 +68,7 @@ static int k_sem_take(int *sem,int timeout) {if(*sem){*sem=0;return 0;}return -E
                 p=root/'zephyr'/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_text(fake)
             source=root/'test.c'
             source.write_text('#include <assert.h>\n#include "'+str(ROOT/'application/src/drivers/button_driver.c')+'"\n'+'''
-static int events[32],count;
+static int events[128],count;
 static void event(button_event_t e) {events[count++]=e;}
 static void advance(uint32_t target) {
   for (;;) {
@@ -92,15 +92,30 @@ int main(void) {
   advance(6000);assert(count==2 && debounce_work.due==-1 && long_press_work.due==-1);
   edge(1,6100);advance(11120);assert(count==4 && events[3]==BUTTON_EVENT_LONG_PRESS);
   advance(16000);assert(count==4); /* one long press per hold */
-  edge(0,16100);advance(16120);assert(count==5);
+  edge(0,16050);advance(16070);assert(count==5);
   /* A held wake button must not cause a second off gesture. */
   level=1;atomic_set(&button_pressed,1);button_driver_register_callback(event);
   advance(22000);assert(count==5);
   edge(0,22100);advance(22120);assert(count==5);
   edge(1,22200);advance(22220);assert(count==6);
   level=-EIO;advance(27220);assert(count==6); /* no false long press on GPIO error */
+  level=0;edge(0,28000);advance(28020);
+  int base=count;
+  edge(1,30000);advance(40020);
+  assert(events[count-1]==BUTTON_EVENT_RECOVERY_WARNING);
+  advance(45020);assert(events[count-1]==BUTTON_EVENT_RECOVERY_READY);
+  edge(0,46000);advance(46020);
+  assert(events[count-2]==BUTTON_EVENT_RECOVERY_CONFIRMED);
+  assert(events[count-1]==BUTTON_EVENT_RELEASED);
+  edge(1,50000);advance(68020);
+  assert(events[count-1]==BUTTON_EVENT_RECOVERY_CANCELLED);
+  int trapped=count;advance(71000);assert(count==trapped);
+  edge(0,71000);advance(71020);
+  assert(events[count-2]==BUTTON_EVENT_RECOVERY_CANCELLED);
+  edge(1,72000);advance(87020);edge(0,87999);advance(88019);
+  assert(events[count-2]==BUTTON_EVENT_RECOVERY_CONFIRMED);
   assert(button_driver_prepare_wakeup()==0 && irq_mode==GPIO_INT_DISABLE);
-  edge(0,28000);advance(29000);assert(count==6 && debounce_work.due==-1);
+  int final_count=count;edge(0,90000);advance(91000);assert(count==final_count && debounce_work.due==-1);
 }
 ''')
             subprocess.run(['cc','-std=c11','-fsanitize=address,undefined','-I',str(root),'-I',str(ROOT/'application/include'),str(source),'-o',str(root/'test')],check=True)

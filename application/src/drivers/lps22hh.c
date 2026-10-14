@@ -16,6 +16,8 @@
 
 #include <drivers/i2c_bus.h>
 #include <drivers/lps22hh.h>
+#include <services/diagnostics.h>
+extern void watchdog_feed(void);
 
 LOG_MODULE_REGISTER(lps22hh, CONFIG_AIRSPOT_LOG_LEVEL);
 
@@ -57,6 +59,7 @@ LOG_MODULE_REGISTER(lps22hh, CONFIG_AIRSPOT_LOG_LEVEL);
 #define LPS22HH_CTRL2_SWRESET 0x04
 #define LPS22HH_CTRL2_IF_ADD_INC 0x10
 #define LPS22HH_CTRL2_BOOT 0x80
+#define LPS22HH_I3C_DISABLE 0x02
 
 static bool initialized = false;
 static bool startup_recovery_attempted;
@@ -97,24 +100,34 @@ static int wait_clear(uint8_t mask, int attempts) {
   return -ETIMEDOUT;
 }
 
-int lps22hh_init(void) {
+static uint8_t init_stage;
+static int lps22hh_init_once(void) {
   if (initialized) {
     return 0;
   }
 
+  init_stage = 1;
   if (!i2c_bus_is_ready()) {
     LOG_ERR("I2C bus not ready");
     return -ENODEV;
   }
 
+  init_stage = 2;
   /* Read WHO_AM_I */
   uint8_t id;
   int ret = lps22hh_read_id(&id);
+  /* Allow a briefly unavailable sensor to finish power-up, without unbounded
+   * retries or attempting register writes to an unreadable device. */
+  for (unsigned attempt = 1; ret && attempt < 3; ++attempt) {
+    k_msleep(50);
+    ret = lps22hh_read_id(&id);
+  }
   if (ret) {
     LOG_ERR("Failed to read LPS22HH ID: %d", ret);
     return ret;
   }
 
+  init_stage = 3;
   if (id != LPS22HH_WHO_AM_I_VALUE) {
     LOG_ERR("Invalid LPS22HH ID: 0x%02X (expected 0x%02X)", id,
             LPS22HH_WHO_AM_I_VALUE);
@@ -123,22 +136,63 @@ int lps22hh_init(void) {
 
   log_registers("before init");
   /* Enter power-down before changing LOW_NOISE_EN (datasheet section 9.7). */
+  init_stage = 4;
   ret = lps22hh_write_reg(LPS22HH_REG_CTRL_REG1, LPS22HH_CTRL1_BDU);
   if (ret) return ret;
   /* Reload factory trims; this does not modify the factory memory. */
+  init_stage = 5;
   ret = lps22hh_write_reg(LPS22HH_REG_CTRL_REG2, LPS22HH_CTRL2_BOOT);
   if (ret) return ret;
+  init_stage = 6;
   ret = wait_clear(LPS22HH_CTRL2_BOOT, 50);
   if (ret) return ret;
   k_msleep(50);
+  init_stage = 7;
   ret = lps22hh_write_reg(LPS22HH_REG_CTRL_REG2,
                           LPS22HH_CTRL2_IF_ADD_INC | LPS22HH_CTRL2_LOW_NOISE);
   if (ret) return ret;
+  /* ST recommends disabling I3C when using I2C (datasheet sections 7.5/9.4).
+   * Apply after BOOT and every volatile reset, and verify the interface write.
+   * This cannot recover a sensor already strapped into I3C-only at power-up. */
+  init_stage = 8;
+  ret = lps22hh_write_reg(LPS22HH_REG_IF_CTRL, LPS22HH_I3C_DISABLE);
+  if (ret) return ret;
+  uint8_t interface;
+  init_stage = 9;
+  ret = lps22hh_read_reg(LPS22HH_REG_IF_CTRL, &interface);
+  if (ret) return ret;
+  init_stage = 10;
+  if (interface != LPS22HH_I3C_DISABLE) return -EIO;
   log_registers("configured");
 
   initialized = true;
   LOG_INF("LPS22HH initialized (ID: 0x%02X)", id);
   return 0;
+}
+
+/* One bounded retry, only resetting a sensor whose identity is readable.
+ * Record the original failing stage before recovery; the NVS journal survives
+ * trial rollback and is readable using existing Bluetooth command 0x37.
+ * Detail: 0x50 marker, stage byte, absolute errno (16 bits).
+ */
+int lps22hh_init(void) {
+  int ret = lps22hh_init_once();
+  if (!ret) return 0;
+  diagnostics_record(DIAG_SENSOR_FAILED,
+      0x50000000U | ((uint32_t)init_stage << 16) | ((uint32_t)-ret & 0xffff));
+  if (init_stage == 1 || init_stage == 3) return ret;
+  watchdog_feed();
+  k_msleep(500);
+  uint8_t id = 0;
+  int probe = lps22hh_read_id(&id);
+  watchdog_feed();
+  if (probe || id != LPS22HH_WHO_AM_I_VALUE) return ret;
+  int reset = lps22hh_soft_reset();
+  watchdog_feed();
+  if (reset) return reset;
+  ret = lps22hh_init_once();
+  watchdog_feed();
+  return ret;
 }
 
 int lps22hh_read_id(uint8_t *id) {

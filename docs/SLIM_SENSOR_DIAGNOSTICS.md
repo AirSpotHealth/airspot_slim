@@ -1,5 +1,64 @@
 # Slim sensor diagnostics
 
+## Calibration correction investigation, 4 October 2026
+
+The supplied Engine (AirSpot-E368FD, 0.17.7) exports show manual calibration
+corrections of -30195, -31102 and -31610 ppm. Manual calibration saves
+`target - average raw CO2`; the 426 ppm target and -31610 ppm correction imply
+a raw average of 32036 ppm. From 12:32:16 to 14:16:16 the export contains 106
+consecutive 1157 ppm samples, exactly `32767 - 31610`. This strongly supports
+raw signed-output saturation masked by the host correction. It is not proof of
+cached BLE samples. Sensor reset on 3 October exposed roughly 30000 ppm output
+before another large correction was applied.
+
+An arithmetic audit checked calibration input before host correction, signed
+32-bit subtraction, bounded unsigned 32-bit sample accumulation, signed 16-bit
+storage and one-time output correction. At 11:04/11:05 Engine changed from
+1404 to 496 ppm while the correction changed from -30195 to -31102; the implied
+raw values are 31599 and 31598 ppm. At 12:05/12:06 it changed from 947 to 443 ppm
+with corrections -31102 and -31610; the implied raw values are 32049 and 32053.
+These transitions support one additive correction, not double application.
+The completion reply carries the correction delta; the correction query and
+history carry the saved total. No overflow or double-correction cause was
+reproduced in this audit. The inferred raw values are not direct I2C captures
+from Engine, and its exact installed binary has not been obtained.
+
+The Engine was reported mounted on a phone and heated in sunlight. Thermal
+gradients, environmental compensation and sensor-internal calibration state
+remain possible physical causes; the CO2-only exports cannot distinguish them.
+The affected device is with the user's boss and unavailable for probe testing.
+
+The connected J-Link board is AirSpot-81A9DC. Its installed application was
+matched byte-for-byte to `application/build_recovery/application/zephyr/airspot_slim.hex`
+over 270988 bytes; the local production image does not match. Two read-only RAM
+snapshots showed raw CO2 1030 then 1036 ppm, correction zero, software ASC off,
+status 0x0084, valid samples and timestamps advancing by 60000 ms. SHT40 and
+STCC4 compensation feedback matched (approximately 23.1 C / 54.7% RH), with
+1016 hPa pressure. This board did not reproduce the Engine failure. Buffered
+RTT messages are historical and must not be presented as current observations.
+No target settings, firmware or sensor calibration commands were changed.
+
+The source fix rejects a manual-calibration session if any raw sample exceeds
+5000 ppm, the upper end of the STCC4's specified accuracy range. The finish
+function also rejects an out-of-range average. Rejection preserves the previous
+correction, emits the existing calibration failure response and does not record
+a successful new correction. Normal live CO2 readings above 5000 ppm remain
+available; this is a calibration-input policy, not a live-value clamp. Existing
+large saved corrections are not silently cleared. This prevents calibration
+from concealing abnormal output; it does not establish or fix its physical cause.
+
+Regression coverage replays raw means of 31602, 32036 and 32767 ppm, checks the
+5000/5001 ppm boundary, rejects a spike whose average falls below the limit, and
+verifies a subsequent clean session succeeds. All 75 host tests pass with the
+Nordic SDK Python runtime, and the signed candidate builds and passes the
+production image/layout validator. The candidate has not been installed or
+qualified on the affected hardware. Diagnostic evidence and the isolated build
+are under `/private/tmp/slim-jlink-20261004/`.
+
+Sources: [STCC4 specifications](https://sensirion.com/products/catalog/STCC4),
+[reference signed CO2 decoder](https://sensirion.github.io/python-i2c-stcc4/_modules/sensirion_i2c_stcc4/commands.html),
+and [thermal design guidance](https://sensirion.com/resource/user_guide/stcc4/design-in).
+
 Firmware 0.16.2 adds a non-calibrating STCC4 self-test for investigation of the
 large disagreement between AirSpot-81A9DC and AirSpot-C58CC9. This is a diagnostic
 candidate, not an accuracy fix. The existing measurement algorithm is unchanged.
@@ -468,3 +527,431 @@ bit 3 low, and direction bit 3 clear. The diagnostic flash remains write-protect
 No ship-mode GPIO write has been made yet: user coordination is pending so they
 can perform the physical wake step. J-Link may also need disconnecting briefly
 after power-off to eliminate possible back-power through debug signals.
+
+## Four-device comparison, 4 October 2026
+
+The user placed F1D7C1, 2325D4, 81A9DC and Screen AF94D2 together in a box.
+Read-only BLE queries and simultaneous passive notifications collected 36
+samples per device across approximately three minutes. All four report mode 3,
+zero software correction and software auto-calibration disabled. Each stream's
+median sensor timestamp interval is five seconds. Slim ASC diagnostics report
+stage 5, errno 0 and status 0x0084.
+
+| Device | Firmware | Mean ppm | Range ppm | Reported temperature C | Reported RH % |
+| --- | --- | --- | --- | --- | --- |
+| Screen AF94D2 | 1.5.5 | 684.5 | 683–687 | Not captured | Not captured |
+| Slim 81A9DC | 0.17.7 | 1063.0 | 1055–1076 | 23.11–23.22 | 55.89–56.06 |
+| Slim 2325D4 | 0.17.1 | 1658.9 | 1632–1680 | 22.93–22.98 | 56.26–56.34 |
+| Slim F1D7C1 | 0.17.1 | 1793.3 | 1742–1842 | 23.36–23.40 | 55.56–55.73 |
+
+Slim pressure queries returned 1015–1016 hPa. F1D7C1 fell from 1838 to 1742 ppm;
+this is not a fully settled accuracy qualification. The disagreement exists
+with zero host correction, and the changing five-second samples exclude frozen
+output in this capture. Matching reported environmental inputs do not establish
+matching physical temperature at the gas sensing element. Screen is a comparison
+unit, not an independently calibrated reference. Firmware version alone cannot
+identify the cause without obtaining and comparing the installed binaries.
+
+After the passive capture, non-calibrating self-tests passed on 81A9DC and
+2325D4 (errno 0, flags 0x0010). F1D7C1 returned errno -5 and unavailable flags
+0xffff; this is a failed diagnostic transaction, not a decoded supply/memory
+fault. Its periodic stream subsequently stopped, requiring recovery checks.
+2325D4 briefly returned 813 ppm after measurement restart, then returned toward
+1500–1560 ppm. That transient is not a successful accuracy fix or evidence that
+calibration changed. No manual calibration, FRC, factory erase or firmware
+installation was performed during the comparison.
+
+Evidence: `/private/tmp/slim-jlink-20261004/box-state.jsonl`,
+`box-monitor.jsonl`, `box-summary.json`, `box-selftest.jsonl`, `box-post.jsonl`
+and `f1-recover.jsonl`. Raw logs include independently advancing device clocks;
+use host capture time for comparisons, not their absolute wall-clock alignment.
+
+F1D7C1 recovery query confirmed an invalid `ffff` reading with timestamp zero
+following its failed self-test. A controller-only command 0x27 rebooted the MCU;
+no sensor-reset, calibration or erase command was sent. After startup, BLE
+queries confirmed firmware 0.17.1, saved mode 3, correction zero and valid
+1569 ppm output (device uptime timestamp 66 seconds). Thus the failed self-test
+also exposed an operational recovery problem distinct from the preexisting CO2
+disagreement. Initial reconnect was too early during boot; the subsequent scan
+and connection succeeded. Follow-up evidence: `f1-check.jsonl` and
+`f1-periodic.jsonl`. Absolute device clock was unset by reboot, so host timestamps
+are necessary for the follow-up comparison.
+
+## Settled outdoor follow-up, 5 October 2026
+
+All four devices were reconnected after the user reported extended outdoor
+exposure in an open box. A simultaneous passive two-minute capture collected
+24 samples per device, with a median five-second timestamp interval. Settings
+queries confirmed mode 3, correction zero, and Slim ASC status 0x0084 / errno 0.
+No calibration, self-test, reset, firmware or settings writes were issued.
+
+| Device | Mean ppm | Range ppm | Temperature C | RH % |
+| --- | --- | --- | --- | --- |
+| AirSpot-AF94D2 | 470.7 | 469–476 | Not captured | Not captured |
+| AirSpot-81A9DC | 777.8 | 766–793 | 18.22–18.36 | 71.91–72.29 |
+| AirSpot-F1D7C1 | 675.5 | 671–681 | 18.29–18.42 | 71.99–72.39 |
+| AirSpot-2325D4 | 658.2 | 646–668 | 18.49–18.58 | 70.99–71.15 |
+
+The earlier 30-minute recording did capture 2325D4: the second discovery
+attempt succeeded. Final five-minute means were Screen 476.8, 81A9DC 793.5,
+F1D7C1 1017.0 and 2325D4 919.2 ppm. The fresh follow-up shows additional
+recovery of F1D7C1 and 2325D4 without changing their zero corrections. Thus the
+large initial disagreement was time/environment dependent, not explained by
+different saved additive corrections alone. Time, outdoor concentration,
+thermal equilibration and internal sensor state remain confounded; this does
+not prove which mechanism caused the recovery. Remaining deviations from Screen
+are approximately +187, +205 and +307 ppm. Screen accuracy has not been verified.
+The two 0.17.1 devices are now closer to each other than to 81A9DC (0.17.7);
+version correlation alone is not evidence of a firmware regression.
+
+Evidence under `/private/tmp/slim-jlink-20261004/`: `outdoor-monitor.jsonl`,
+`outdoor-2325.jsonl`, `outdoor-settled-state.jsonl`,
+`outdoor-settled-monitor.jsonl`, and `outdoor-settled-summary.json`.
+
+## Shared Slim over-reading audit, 5 October 2026
+
+The user identifies Screen AF94D2 as the comparison reference and prioritizes the
+shared Slim positive bias over the additional unit-to-unit spread. The source
+audit finds a shared calibration-policy risk, not a proved physical root cause:
+`pause_stcc4_asc()` enables testing mode at startup and verifies status bit 2.
+The STCC4 internal ASC remains paused regardless of the software ASC setting.
+App manual calibration accumulates raw samples and saves `target - raw_mean`
+as a host correction. `sensor_manager_perform_frc()` exists, but no application
+caller invokes it, including factory-test and manual-calibration paths. There
+is no driver disable-testing-mode path. This policy can retain a sensor-internal
+baseline error; it does not by itself explain the direction or magnitude of the
+observed positive bias. It may be intentional to avoid competing calibration
+algorithms, so it must not be changed blindly.
+
+Verified against the STCC4 datasheet: host RH input uses `(RH+6)*65535/125`,
+temperature uses `(T+45)*65535/175`, and pressure uses hPa*100/2. SHT40 decoding
+uses the corresponding correct output formulas. CO2 is already signed integer
+ppm, decoded big endian and sent with one host correction. The known 81A9DC
+installed image has startup conditioning enabled. Source high mode schedules
+compensation at one-second intervals and reporting at five-second intervals;
+the actual running cadence and received compensation must still be measured.
+
+Sensirion specifies initial operation up to 12 hours followed by fresh-air
+exposure, and warm-up up to one hour after long idle periods. Testing mode
+pauses ASC state updates. The software ASC three-minute guard is not a
+substitute for those sensor requirements; it also cannot explain current
+software-ASC-disabled, zero-correction positive values as a host adjustment.
+The design-in guide requires SHT4x and STCC4 to experience the same local
+conditions, which matching reported temperatures between devices do not prove.
+
+A read-only J-Link attempt found the probe but VTref 0.000 V; no target RAM
+was read and no reset/write was issued. The user was asked to reconnect 81A9DC
+with Screen beside it. Prepared read-only RAM capture commands are at
+`/private/tmp/slim-jlink-20261004/shared-overread/read-feedback.jlink`; these use
+addresses from the previously byte-verified 0.17.7 image, so identity/image must
+be rechecked before using them on a newly connected unit. They compare host
+SHT40 readings against temperature/RH echoed by STCC4, raw CO2, sample timestamps
+and actual measurement-mode flags. A match verifies delivery of inputs, not
+physical temperature equality at the gas sensing element or CO2 accuracy.
+
+Primary sources: [STCC4 datasheet](https://sensirion.com/resource/datasheet/STCC4),
+sections 1.1.2–1.1.4, 3.4.13–3.4.15 and 3.5;
+[design-in guidance](https://sensirion.com/resource/user_guide/stcc4/design-in),
+sections 1 and 3. No calibration-policy or firmware changes were made in this audit.
+
+## Native ASC OTA experiment — 2026-10-05
+
+User authorized an internal STCC4 ASC firmware experiment on 2325D4,
+F1D7C1 and 81A9DC, without host offset calibration. Added an opt-in native
+ASC policy, disable-testing command 0x3F3D, effective zero host correction,
+and disabled host software/manual calibration while preserving saved settings.
+All 79 host tests pass and signed artifact/layout validation passes.
+
+Physical 2325D4 trial 0.17.8 failed stage 4, errno -13, status 0x0004 and
+was confirmed to roll back to 0.17.1. Revised 0.17.9 drains old measurement
+buffers and retries fresh verification shots, but physical 2325D4 still
+returns stage 4, errno -13, status 0x0004. The image was not remotely confirmed.
+Both candidates are withdrawn; F1D7C1 and 81A9DC were not updated.
+
+Do not infer that ASC is active or that a baseline was saved from the app's
+ASC setting alone: it reports the requested policy. Sensor verification
+failed and must be resolved with physical command/response inspection.
+The current Sensirion driver documents testing status byte 10 value 4;
+the June 2025 datasheet describes the second most significant bit instead.
+The device's original diagnostic status was 0x0084 and candidate status
+0x0004. This discrepancy is recorded, not used to weaken the validity guard.
+
+Once activation is verified, mode 3 is preferred for initial baseline
+learning: continuous 1-second sensing, 5-second reporting. Datasheet first
+ASC save is after 1 hour continuous / 360 shots, subsequent saves at maximum
+2 hours continuous / 720 shots. Neither native baseline nor successful NVM
+save is exposed by this firmware. Accuracy and persistence require later
+matched-condition comparisons and an actual sensor power cycle.
+
+0.17.9 rollback verified over SMP: 2325D4 active confirmed 0.17.1
+(hash 44d7eff174e3aac57df502055524c57ee7d41b95a903b2d5853aaaa1aa9c0251);
+0.17.9 inactive, not pending and not confirmed. See the withdrawn release
+folder for installation, failed sensor verification and rollback evidence.
+
+## J-Link identifies the ASC-checker defect — 2026-10-05
+
+Connected unit identified as 2325D4 from RAM BLE name; VTref 3.154 V,
+prior confirmed firmware 0.17.1. Debug-buffer readback reproduces the
+0.17.9 rejection: disable-testing 0x3F3D accepted, fresh single-shot
+status remains 0x0004. Continuous verification also returns 0x0004.
+
+0.17.10 continuous verification could exceed the 5-second startup watchdog
+in its three-attempt path; replaced by bounded completed-step keepalives
+in 0.17.11, covered by a watchdog timing regression. 0.17.11 still rejected
+the same status. Both candidates are withdrawn, with no multi-unit rollout.
+
+0.17.12 fixes the production testing-mode mask to 0x0080 and adds a paired
+startup check: enable-testing must produce a freshly measured set flag,
+then disable-testing must clear it on fresh measurements. Unknown status
+mappings fail rather than accepting a coincidentally clear native value.
+On physical 2325D4, paused single-shot status is 0x0084, then native
+continuous status is 0x0004. Thus 0x0004 stays present in both states and
+the previous checker confused it with the testing flag. This is a proven
+ASC verification defect, not proof of the cause of all CO2 over-reading.
+
+2325D4 0.17.12 startup and fresh samples passed and MCUboot confirmation
+was independently verified over SMP. Effective settings: mode 3, ASC on,
+target 400, host correction zero. Four live CO2 samples 458/457/464/457 ppm
+at 5-second cadence. Image hash:
+9e27b01c182366cdc782bc3229d80859510bd59adbc4f0093ce987562acb4d65.
+All 79 host tests and signed artifact/production layout validation pass.
+
+Native ASC activation is now verified on 2325D4. Learned-baseline save,
+long-term accuracy and post-power-cycle persistence remain to be tested.
+
+Rollout completed: F1D7C1 and 81A9DC also independently verified active
+confirmed 0.17.12 with the same image hash, native status 0x0004, mode 3,
+effective correction zero and ASC on/target400. Their startup paired checks
+are required for confirmation, so the observed production mapping is verified
+on all three. F1 live samples: 402/402/406/397; 81: 441/412/410/414 ppm.
+Screen AF94D2 was not flashed. Values were collected at different times
+and are not yet a simultaneous accuracy comparison.
+
+Post-update simultaneous one-minute capture: 12 values/device, Screen 612.8
+ppm (612–613), 2325D4 485.7 (476–495), 81A9DC 406.8 (399–420), F1D7C1 393.0
+(391–397). User explicitly confirms all four are together indoors. Thus this
+is a startup comparison, not fresh-air baseline learning. Slims currently
+under-read the Screen; shared accuracy issue is not declared fixed. All three
+native ASC activations/firmware confirmations are verified, but settling,
+fresh-air learning and post-power-cycle baseline persistence remain. User
+advised shaded ventilated fresh air, uninterrupted mode 3 at least 2 hours,
+no manual calibration or resets during that experiment.
+
+## Native ASC follow-up — 2026-10-05 morning (Sydney)
+
+Read-only BLE state queries and passive captures. All three Slims report
+0.17.12, mode 3, native ASC requested/verified stage 5 errno 0 status 0x0004,
+effective host correction zero and target400. Battery reports: 2325D4 69%,
+F1D7C1 68%, 81A9DC 86%. Uptime timestamps approximately 28,400–28,900 seconds
+indicate about eight hours of MCU operation since OTA, with no reboot observed.
+This is consistent with normal sensor ASC save intervals, but actual NVM
+saving/persistence is not directly exposed or verified.
+
+Initial outdoor Slim means over 24 fresh samples: 2325D4 434.8 ppm, 81A9DC
+428.5 ppm, F1D7C1 454.0 ppm (25.5 ppm spread). Screen was unreachable because
+its battery had run out; user put it on charge. Its first 8 reads averaged
+537.9 ppm. The Screen's location relative to outdoor Slims was not verified
+then, so those reads are not used as an outdoor same-air reference.
+
+User then explicitly moved all four together indoors. Passive transition
+and five-minute captures show all responding to the higher indoor CO2.
+Final-minute means: Screen 622 ppm; 2325D4 544.2;
+81A9DC 518.1; F1D7C1 542.2 ppm.
+See followup-2026-10-05/indoor-summary.json for ranges and gaps.
+The large shared Slim over-reading is absent in this check, and Slims are
+much closer to each other. A common indoor under-reading relative to the
+Screen remains; accuracy is not declared fixed. Reference had recently
+restarted and charged, and Slim temperatures changed after relocation.
+No calibration, power-mode change, MCU reboot or sensor reset was sent.
+Screen power-on/charging was done by the user. Comparisons use host receive
+timestamps; Slim packets carry uptime and Screen packets carry its RTC.
+
+## 2026-10-05 — App-controlled native ASC candidate 0.18.0
+
+User requested an app/firmware native ASC setting with manual calibration hidden
+when enabled. Implemented distinct BLE command 0x38 (read/set) with sensor-verified
+state, signed operation error and production testing flag; the old software ASC
+command 0x11 is not relabelled as native ASC. Firmware supports runtime enabling
+and pausing, verifies fresh measurements before publishing/persisting policy,
+restores hardware on storage failure, and invalidates the pipeline if restoration
+fails. A shared calibration lease prevents concurrent manual and native changes.
+Duplicate verified requests do not interrupt measurement/learning.
+
+ON bypasses saved host offsets, disables host software learning, and rejects
+manual target/start and FRC. OFF after ON pauses ASC while retaining the sensor
+baseline and bypassing historical host offsets. Only successful deliberate manual
+calibration commits a new host correction. The app hides manual target/start and
+reset while ON, unconfirmed, loading, disconnected or failed. Firmware capability
+is gated at 0.18.0; fixed experimental 0.17.12 remains locked against manual use.
+The app refreshes native state on reconnect and after manual completion. Screen
+calibration behavior is unchanged. No optimistic native preference is stored.
+
+Saved native policy uses tagged reserved bytes in the same 49-byte CRC snapshot.
+The packaged native experiment build defaults ON for the three existing 0.17.12
+units until a policy is explicitly saved; an ordinary build without the overlay
+defaults OFF/manual. Stored host offsets and sensor calibration history are
+preserved by the toggle. Native NVM baseline/event readout remains unavailable;
+this verifies learning policy, not calibration completion.
+
+Validation: 80 firmware host tests (including runtime sensor/write rollback,
+unknown flag mapping, watchdog bounds, manual/FRC rejection, persisted mode,
+manual correction transition, malformed BLE requests), 19 Flutter protocol/widget
+tests, clean changed-file static analysis, signed image/production layout checks.
+Signed candidate and exact patch against pre-feature dirty files are in
+releases/v0.18.0-native-asc-controls. Not installed/published during this request;
+physical toggle/persistence checks and app installation remain pending. No BLE
+settings, calibration, reset or firmware mutations were issued during this feature
+implementation. Existing live devices remain on their previous firmware/settings.
+
+## 2026-10-05 — Authorized 0.18.0 OTA rollout and hardware control test
+
+User authorized updating all four Slims while running the modified phone app.
+2325D4, F1D7C1, 81A9DC and BE56FF now report 0.18.0 and the exact active,
+self-confirmed signed image hash
+974053a2550cb986e0bf659408c18b7b4ce69d35c1223e412f41b2274ec210c8.
+Native 0x38 state is verified ON on all four, effective host offset is zero,
+and each provided fresh CO2 samples. First three retain five-second reporting;
+BE56FF retains one-minute reporting. Screen AF94D2 was not updated.
+
+BE56FF's +165 ppm previous correction was recorded before OTA and is preserved
+in storage, bypassed in native mode. Initial scan missed it; retry uploaded
+the complete signed image. Reset disconnected before its SMP reply, followed
+by successful new-version, hash, confirmation and sensor-state verification.
+
+2325D4 physical test: verified ON, wrote OFF, verified paused sensor status,
+restarted the MCU, confirmed OFF survived, restored ON and verified sensor
+status. No manual calibration, FRC or history erase was sent. This proves
+policy persistence across an MCU restart, not sensor baseline save/completion.
+Phone app installation and live UI are user-managed and not independently
+verified in this rollout. No firmware server publication was performed.
+Evidence: releases/v0.18.0-native-asc-controls/rollout-2026-10-05/.
+
+## 2026-10-05 15:05–15:09 Sydney — Outdoor follow-up after 0.18.0
+
+User confirmed all four Slims and Screen remained outdoors together in shade.
+Read-only BLE capture found Screen AF94D2 and Slims 2325D4, 81A9DC; a second
+scan reached F1D7C1. All three reached Slims report 0.18.0, five-second mode,
+verified native ASC ON (mode 2, status 0x0004, no operation error), and effective
+host correction zero. Fresh packets arrived throughout approximately two-minute
+captures. No calibration, reset, firmware update or setting change was sent.
+
+Screen mean 428.3 ppm; 2325D4 mean 410.4 ppm; 81A9DC mean 420.1 ppm.
+F1D7C1's exact mean/range is recorded in the linked summary. The captures partly
+overlap; device packet timestamps are RTC-like after phone synchronization, so
+comparisons use host receive times. This is an encouraging outdoor agreement
+check, not proof of baseline adjustment/save or indoor accuracy. BE56FF was
+unreachable on repeated scans and direct lookup; its current result is unknown.
+Evidence: releases/v0.18.0-native-asc-controls/outdoor-followup-2026-10-05/.
+
+## 2026-10-05 16:18–16:24 Sydney — Settled indoor check and ASC pause
+
+User requested another indoor check after settling. Three reachable Slims
+remained native ASC ON: user confirmed they had not changed any settings.
+Read-only approximately two-minute captures gave Screen AF94D2 mean 598.9 ppm
+(range 593–604), 81A9DC 579.7 (572–591), F1D7C1 576.9 (559–586),
+2325D4 539.0 (525–556). Captures partly overlap. Slims report 0.18.0,
+five-second reporting and effective host correction zero. Temperatures near
+25.2–25.3 C do not establish a compensation fault. Large shared over-reading
+is absent in this run; 2325D4 remains approximately 60 ppm below the Screen.
+
+For the ongoing indoor baseline-hold experiment, native ASC was then paused
+sequentially on 81A9DC, F1D7C1 and 2325D4. Each readback verified mode 1,
+operation error zero and sensor status 0x0084 (testing/paused flag set),
+with effective host offset still zero. Short fresh samples were captured after
+pausing. No manual calibration, FRC, reset or history erase was issued.
+The main numerical comparison precedes pausing; it is not described as an
+ASC-OFF controlled comparison. BE56FF was intermittently detected but either
+missing from scans or disconnected during connection; no pause verified and
+no new valid measurement. Its current state is unknown.
+Evidence: releases/v0.18.0-native-asc-controls/indoor-settled-2026-10-05/.
+
+### Later ASC-OFF capture, approximately 16:25–16:26 Sydney
+
+After pausing and allowing the immediate restart transient to pass, a new
+one-minute capture verified all three reachable Slims remained native mode 1
+with sensor status 0x0084, host offset zero, five-second reporting and no
+operation error. Exact readings are in summary.json/later_asc_off_samples.
+F1D7C1 remained substantially lower than its previous ASC-ON capture (roughly
+504 vs 577 ppm), while Screen declined only roughly 599 to 585 ppm. This
+change is observed but not explained; different time windows and sensor restart
+effects prevent a causal conclusion about baseline handling. Do not declare
+the shared accuracy issue fixed or assume ASC OFF had no measurement effect.
+BE56FF remains unreachable and no policy change was verified on it.
+
+### 16:28–16:29 Sydney — BE56FF retry succeeded
+
+User requested another retry. BE56FF connected and reported 0.18.0, native
+ASC ON, one-minute reporting, effective host correction zero, battery 84%.
+Native ASC was paused and verified mode 1, errno zero, status 0x0084; host
+correction remained zero. One fresh subsequent sample was 618 ppm, 25.89 C,
+53.16% RH. One-minute reporting was preserved. This single later sample is
+not directly compared with the earlier one-minute Screen/other Slim averages.
+All four Slims now have verified native ASC OFF. No manual/FRC/reset was sent.
+Evidence: indoor-settled-2026-10-05/be-retry.jsonl and summary.json.
+
+### BE56FF five-second mode change — abnormal low raw readings
+
+User explicitly requested five-second reporting on BE56FF. Command 0x05 mode 3
+was sent; an old asynchronous 0x08 state notification caused the first helper
+to assert before fresh readback. Reconnection showed mode 3 already applied.
+Delayed fresh readback and sensor timestamp increments confirmed five-second
+reporting. Native ASC remained verified OFF, mode 1/status 0x0084.
+
+After the change, raw sensor packets gave 175, 170, 159, 158 ppm at five-second
+intervals. These are abnormal for the indoor comparison and do not validate
+accuracy; the helper passed only mode/policy/cadence checks. The previous
+one-minute sample was 618 ppm. Cause of the mode-associated drop is not proven.
+No offset, manual calibration, FRC or reset was applied. Final mode remains
+five seconds, as requested; all four Slims now use five-second mode and ASC OFF.
+Evidence: indoor-settled-2026-10-05/be-five-second-verified.jsonl.
+
+## 2026-10-05 23:10 Sydney — Later status check
+
+User requested current readings. F1D7C1 and BE56FF connected, both report
+0.18.0, five-second mode, verified native ASC OFF (mode 1/status 0x0084),
+effective host correction zero. F1D7C1 provided valid fresh measurements; exact
+mean/range is in late-indoor-check-2026-10-05/summary.json. BE56FF repeatedly
+sent ffaa010a44000000ffff00000000f6: fault byte 0x44 SENSOR_FAULT_CO2,
+CO2 0xffff invalid sentinel, no valid RHT. This is an error frame, not
+65,535 ppm or a zero-temperature/humidity observation. Battery reports 80%.
+The specific driver error and cause are not exposed in this packet; ASC status
+query success does not prove the current CO2 pipeline is healthy.
+
+Screen AF94D2, 2325D4 and 81A9DC were not found on initial or follow-up scan.
+User was asked to confirm same location and disconnect/move devices nearby;
+no response during capture. No calibration, recovery, reset, power-mode change
+or firmware update was sent. Current all-device agreement cannot be assessed.
+
+### 23:15–23:16 Sydney — Remaining units reached on retry
+
+A 40-second scan and fresh BLE connections reached Screen AF94D2, 81A9DC
+and 2325D4. One-minute averages: Screen 534.9 ppm (531–539), 81A9DC 504.9
+(496–513), 2325D4 404.6 (400–412), 12 packets each. Both Slims retain verified
+native ASC OFF, five-second mode and effective host correction zero. All three
+provide valid fresh measurements. Agreement remains incomplete: 2325D4 is
+about 130 ppm below the contemporaneous Screen. Earlier F1D7C1 and BE56FF
+captures were in a separate time window. No setting changes or recovery sent.
+Evidence: late-indoor-check-2026-10-05/others-retry.jsonl and summary.json.
+
+## 2026-10-05 — User-requested BE56FF sensor reset/offset clear attempt
+
+User requested setting calibration offset to zero and a sensor reset. Effective
+software offset already read zero because native-paused mode bypasses stored
+corrections. Command 0x24 returned failure (ffaa2401ffcd). Error packets 0x44
+continued. The command combines sensor recovery, stored correction clear,
+and a fresh measurement; its failure reply does not reveal which stage failed.
+The saved software offset clear cannot therefore be independently confirmed.
+
+Non-calibrating 0x34 self-test returned errno 0, flags 0x0010, a successful
+STCC4 self-test per datasheet section 3.4.12. Bit 4 indicates the SHT4x is not
+connected through the dedicated STCC4 controller interface, consistent with
+our host-supplied compensation path. This does not validate CO2 accuracy or
+exclude a bad signed reading or integration/compensation issue.
+
+A bounded controller-only 0x27 restart and one 0x24 retry also returned failure.
+Approximately 90 seconds of post-reset observation did not recover valid CO2.
+Final settings read five-second mode, native ASC OFF, effective offset zero.
+No sensor factory reset, FRC or native ASC-history erase was sent. Native
+calibration history remains; MCU restart is not a verified sensor power cycle.
+Evidence: releases/v0.18.0-native-asc-controls/be56ff-reset-2026-10-05/.
+Source: https://sensirion.com/resource/datasheet/STCC4.

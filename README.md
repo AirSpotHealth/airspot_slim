@@ -1,5 +1,15 @@
 # AirSpot Slim firmware
 
+Current source: **0.19.2 candidate**, not a customer release. Includes automatic
+sensor recovery, settling guidance, and a full factory reset that clears settings,
+readings and calibration before electronic power-off. On 81A9DC, erasure and
+0 V power-off were verified; button-wake and post-reset history/settling checks
+remain pending. See [factory reset test status](docs/SLIM_FACTORY_RESET_POWER_OFF.md).
+
+Signing private keys, local device backups, and current bench captures are not
+included. Obtain the authorized product signing key separately to build signed
+firmware; never commit it.
+
 Production hardware: nRF54L15 AirSpot Slim, STCC4 CO₂, SHT40 temperature/humidity,
 LPS22HH pressure, AT25XE161D history storage and Qi charging.
 The hardware source of truth is the [board schematic](docs/datasheets/AH-013-0001-SCH%20CO2%20Monitor%20%28Standard%20Build%29%20PWA%20Schematics%20Rev3A.PDF).

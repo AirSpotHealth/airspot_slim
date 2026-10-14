@@ -24,6 +24,17 @@
 extern "C" {
 #endif
 
+/* Slim fault codes do not overlap Screen's 0x01-0x0c codes. Wire byte 5
+ * remains zero: Slim does not claim Screen's three-attempt recovery policy. */
+enum sensor_fault {
+  SENSOR_FAULT_STARTING = 0x40,
+  SENSOR_FAULT_I2C = 0x41,
+  SENSOR_FAULT_AMBIENT = 0x42,
+  SENSOR_FAULT_PRESSURE = 0x43,
+  SENSOR_FAULT_CO2 = 0x44,
+  SENSOR_FAULT_COMPENSATION = 0x45,
+};
+
 /* Sensor data structure - all current readings */
 typedef struct {
   /* Environmental */
@@ -40,6 +51,7 @@ typedef struct {
   bool battery_critical;   /* <5% */
 
   /* Status */
+  uint8_t error_code;    /* enum sensor_fault, zero for a valid sample */
   bool valid;            /* All sensors read successfully */
   uint32_t timestamp_ms; /* Uptime when measured */
 } sensor_data_t;
@@ -57,10 +69,33 @@ typedef void (*sensor_data_callback_t)(const sensor_data_t *data);
  */
 int sensor_manager_init(void);
 
+/* Enabled after boot setup; stop() cancels recovery before sleeping sensors. */
+void sensor_manager_start_recovery(void);
+typedef struct {
+  uint32_t total_attempts;
+  uint16_t consecutive_attempts, retry_in_seconds;
+  int16_t error;
+  uint8_t stage; /* 0=no attempt, 1=running, 2=fresh sample verified, 3=failed */
+  uint8_t fault; /* Fault which triggered the last attempt. */
+} sensor_recovery_diagnostic_t;
+void sensor_manager_get_recovery_diagnostic(sensor_recovery_diagnostic_t *out);
+
 /* Last ASC-pause verification: stage 0=not attempted, 1=stop, 2=pause,
  * 3=single shot, 4=read/status, 5=verified, 6=ambient. Error is negative errno.
  * Status is the CRC-checked sensor word when available; otherwise zero. */
-typedef struct { uint8_t stage; int16_t error; uint16_t status; } sensor_asc_diagnostic_t;
+/* Snapshot of the last normal measurement attempt. Reading it never triggers
+ * sensing or changes calibration. Raw/status are meaningful only with flag 1. */
+typedef struct {
+  uint32_t sequence, uptime_ms;
+  int16_t error, raw_co2_ppm, temperature_centi;
+  uint16_t status, humidity_centi, pressure_hpa;
+  uint8_t flags; /* 1=CRC-checked raw, 2=driver policy valid, 4=accepted sample */
+  uint8_t fault;
+} sensor_co2_diagnostic_t;
+typedef struct {
+  uint8_t stage; int16_t error; uint16_t status;
+  sensor_co2_diagnostic_t read;
+} sensor_asc_diagnostic_t;
 void sensor_manager_get_asc_diagnostic(sensor_asc_diagnostic_t *diagnostic);
 
 /* Run the sensor's non-calibrating self-test, restoring its measurement mode.
@@ -68,6 +103,9 @@ void sensor_manager_get_asc_diagnostic(sensor_asc_diagnostic_t *diagnostic);
  * 0x0000 and 0x0010 are passes (external SHT40 is on the host bus).
  * No settings or sensor calibration history are written. */
 int sensor_manager_self_test(uint16_t *result);
+
+/* Native ASC learning toggle; hardware verification + persistent transaction. */
+int sensor_manager_change_native_asc(bool enabled);
 
 /**
  * @brief Start periodic measurements
@@ -128,6 +166,11 @@ bool sensor_manager_is_ready(void);
  */
 int sensor_manager_reset_co2_sensor(void);
 
+/** Explicit native FRC/ASC erase; retains selected ASC policy and power mode. */
+int sensor_manager_reset_native_calibration(void);
+/* Full factory reset: stop sampling and erase STCC4 without requiring LPS22HH. */
+int sensor_manager_factory_erase_calibration(void);
+
 /**
  * @brief Perform hardware forced recalibration (FRC) of the STCC4.
  *
@@ -140,6 +183,17 @@ int sensor_manager_reset_co2_sensor(void);
  * @return 0 on success; -EIO if the sensor rejected FRC; negative errno otherwise.
  */
 int sensor_manager_perform_frc(uint16_t target_ppm, int16_t *applied_correction);
+
+
+/* Last explicit native reset: stage 0 none, 1 pressure, 2 stop, 3 erase,
+ * 4 ASC verification, 5 settings, 6 sampling, 7 complete.
+ * Erase stage/result follow stcc4_reset_diagnostic_t. Errors are signed errno. */
+typedef struct {
+  uint8_t stage, erase_stage;
+  uint16_t sensor_result;
+  int16_t error, recovery_error;
+} sensor_reset_diagnostic_t;
+void sensor_manager_get_reset_diagnostic(sensor_reset_diagnostic_t *diagnostic);
 
 #ifdef __cplusplus
 }

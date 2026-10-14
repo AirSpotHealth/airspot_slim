@@ -6,7 +6,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 
 class SensorCallbackTests(unittest.TestCase):
-    def test_invalid_sample_still_protects_battery(self):
+    def test_invalid_sample_is_not_calibrated_or_logged(self):
         text = (ROOT / 'application/src/main.c').read_text()
         start = text.index('static void sensor_data_callback(const sensor_data_t *data) {')
         end = text.index('\n}', start) + 2
@@ -19,8 +19,8 @@ class SensorCallbackTests(unittest.TestCase):
 #define LOG_INF(...)
 #define LOG_WRN(...)
 #define LOG_DBG(...)
-static bool low_battery_lockout_requested;
-static int calibrated, automatic, sent;
+static int calibrated, automatic, sent, queued;
+static void queue_co2_data(const sensor_data_t *data) { queued++; }
 static void software_asc_process_measurement(uint16_t co2) { automatic++; }
 static void ota_service_observe_sample(const sensor_data_t *s) {}
 static bool led_indicator_is_active(void) { return false; }
@@ -32,18 +32,17 @@ static void protocol_send_realtime_co2(void) { sent++; }
 int main(void) {
   sensor_data_t sample = {.co2_ppm=999, .valid=false, .battery_low=true};
   sensor_data_callback(&sample);
-  assert(low_battery_lockout_requested);
-  assert(calibrated == 0 && automatic == 0 && sent == 1);
-  low_battery_lockout_requested = false;
+  assert(calibrated == 0 && automatic == 0 && sent == 1 && queued == 0);
   sample.is_charging = true;
   sensor_data_callback(&sample);
-  assert(!low_battery_lockout_requested);
   assert(calibrated == 0);
   sample.valid = true;
   sensor_data_callback(&sample);
-  assert(calibrated == 1 && automatic == 1 && sent == 3);
+  assert(calibrated == 1 && automatic == 1 && sent == 3 && queued == 1);
+  sensor_data_callback(&sample);
+  assert(queued == 2); /* Every fresh valid sample, including manual samples. */
   sensor_data_callback(NULL);
-  assert(calibrated == 1);
+  assert(calibrated == 2 && queued == 2);
 }
 ''')
             subprocess.run(['cc', '-std=c11', '-fsanitize=address,undefined', '-I', str(ROOT / 'application/include'), str(path/'test.c'), '-o', str(path/'test')], check=True)

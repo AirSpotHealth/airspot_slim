@@ -54,6 +54,12 @@ extern "C" {
 #define CMD_GET_ASC_DIAGNOSTIC 0x33 /* Read-only pause verification diagnostics */
 #define CMD_SENSOR_SELF_TEST 0x34 /* Non-calibrating STCC4 diagnostic */
 /* 0x35-0x36 reserved: retired regulator and timing experiments. */
+#define CMD_RESET_NATIVE_CALIBRATION 0x3A /* Explicit RST payload; erases FRC/ASC history */
+#define CMD_CO2_READ_DIAGNOSTIC 0x39 /* Read-only last signed CO2/driver outcome */
+#define CMD_SENSOR_RECOVERY_DIAGNOSTIC 0x3B /* Read-only automatic recovery status */
+#define CMD_SETTLING 0x3C /* Read guidance; guarded fresh-air actions */
+#define CMD_RESET_PREFERENCES 0x3D /* Preserve sensor calibration and readings */
+#define CMD_NATIVE_ASC 0x38 /* Get/set STCC4 native learning policy */
 #define CMD_GET_FAULT_EVENTS 0x37 /* Read-only versioned fault journal */
 #define CMD_GET_SENSOR_DETAILS 0x30  /* Get sensor details */
 #define CMD_SET_CO2_SCALE_FACTOR 0x31 /* Set CO2 scale factor (stub) */
@@ -99,7 +105,7 @@ void protocol_send_realtime_co2(void);
 /**
  * @brief Send battery level
  */
-void protocol_send_battery_level(void);
+int protocol_send_battery_level(void);
 
 /**
  * @brief Notify the app that the device is entering low-battery lockout.
@@ -152,6 +158,7 @@ void protocol_send_erase_done(void);
  * Handles reading from flash and sending history data.
  */
 void protocol_process_history(void);
+void protocol_process_factory_reset(void);
 
 
 #ifdef __cplusplus

@@ -2,6 +2,7 @@
 import re
 import unittest
 from native_support import ROOT, BYTEORDER, CRC, run_c
+from history_support import STUBS
 
 SHIMS = r'''
 #include <assert.h>
@@ -85,7 +86,22 @@ class DiagnosticsRuntime(unittest.TestCase):
     def execute(self, body):
         code = (ROOT / 'application/src/services/diagnostics.c').read_text()
         code = re.sub(r'^#include <(?:zephyr/|airspot/)[^>]+>\n', '', code, flags=re.M)
-        run_c(SHIMS + BYTEORDER + CRC + code + BOUNDARIES + '\nint main(void) {\n' + body + '\nreturn 0;}')
+        code = code.replace("#include <services/history_events.h>\n", "")
+        run_c(SHIMS + STUBS + BYTEORDER + CRC + code + BOUNDARIES + '\nint main(void) {\n' + body + '\nreturn 0;}')
+
+    def test_screen_event_mirrors_keep_full_detail_in_journal(self):
+        self.execute(r'''
+        reset_fixture();history_count=0;
+        diagnostics_record(DIAG_STARTUP_FAILED, (11U<<16)|5);
+        diagnostics_record(DIAG_STARTUP_FAILED, (12U<<16)|6);
+        assert(history_count==1 && history_records[0].type==RECORD_TYPE_SDK_ERROR && history_records[0].value==5);
+        diagnostics_watchdog(9);
+        assert(history_count==2 && history_records[1].type==RECORD_TYPE_FAULT_RESET && history_records[1].value==9);
+        diagnostics_record(DIAG_OTA_REJECTED,1);
+        assert(history_count==3 && history_records[2].type==RECORD_TYPE_DFU_FAIL);
+        diagnostics_record(DIAG_STORAGE_FAILED,5);
+        assert(history_count==3); /* No recursive history/storage failure loop. */
+        ''')
 
     def test_ring_wrap_persists_order_and_snapshot_consistency(self):
         self.execute(r'''
@@ -157,6 +173,20 @@ class DiagnosticsRuntime(unittest.TestCase):
         retained.inverse^=1;boot(RESET_WATCHDOG);assert(head==1);
         diagnostics_reboot_event(DIAG_WATCHDOG,5);boot(0);assert(head==2);
         diagnostics_reboot_event(DIAG_SENSOR_FAILED,5);boot(RESET_SOFTWARE);assert(head==3);
+        ''')
+
+    def test_sensor_evidence_is_bounded_and_survives_reboot(self):
+        self.execute(r'''
+        reset_fixture();boot(0);
+        for(int i=0;i<100;i++) diagnostics_record(DIAG_I2C_FAILED,0x6402fffb);
+        diagnostics_record(DIAG_SAMPLE_FAILED,0x4402ffb6);
+        diagnostics_record(DIAG_CO2_CONTEXT,0x0084ffff);
+        diagnostics_record(DIAG_SENSOR_POWER,3700U<<16);
+        diagnostics_record(DIAG_RECOVERY_RESULT,0x44020000);
+        if(!setjmp(drained))journal_thread(NULL,NULL,NULL);assert(head==6);
+        boot(RESET_SOFTWARE);assert(head==7);
+        uint8_t out[36];assert(diagnostics_read(5,7,out)==36);
+        assert(out[9]==DIAG_I2C_FAILED && sys_get_be32(out+24)==0x6402fffb);
         ''')
 
 if __name__ == '__main__':

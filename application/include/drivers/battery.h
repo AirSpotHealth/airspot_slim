@@ -32,10 +32,11 @@ extern "C" {
  *  - Below LOCKOUT while discharging (not on charger): tear down BLE/sensors
  *    and enter the low-power charging lockout.
  *  - Stay locked out until charged back above RECOVER, then clean-reboot.
- * Mirrors the screen device's 3.4 V / 3.71 V hysteresis (battery.c reference).
+ * Recovery requires ten continuous seconds of valid readings on charge.
  */
-#define BATTERY_LOCKOUT_MV 3300 /* ~15% — matches battery_is_low() */
-#define BATTERY_RECOVER_MV 3700 /* ~60% — enough headroom to run a while */
+#define BATTERY_LOCKOUT_MV 3300
+#define BATTERY_RECOVER_MV 3400
+#define BATTERY_RECOVER_STABLE_MS 10000
 
 /**
  * @brief Initialize battery ADC driver
@@ -61,10 +62,8 @@ int battery_get_ota_voltage(uint16_t *mv);
 /**
  * @brief Get battery percentage
  *
- * Based on LiPo discharge curve:
- * - 4.2V = 100%
- * - 3.7V = ~50%
- * - 3.0V = 0%
+ * Approximate usable charge, linearly scaled from the 3.3 V operating cutoff
+ * (1%) to 4.2 V (100%). This is not a measured state-of-charge curve.
  *
  * @return Battery percentage (0-100)
  */
@@ -73,7 +72,7 @@ uint8_t battery_get_percentage(void);
 /**
  * @brief Check if battery is low
  *
- * @return true if battery < 3.3V (~15%)
+ * @return true if battery < 3.3V (operating cutoff)
  */
 bool battery_is_low(void);
 

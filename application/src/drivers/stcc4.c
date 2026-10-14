@@ -19,6 +19,13 @@
 #include <drivers/sht40.h>
 #include <drivers/stcc4.h>
 
+#if defined(CONFIG_AIRSPOT_STCC4_INTERNAL_ASC_EXPERIMENT)
+bool stcc4_native_asc_expected = true;
+#else
+bool stcc4_native_asc_expected;
+#endif
+void stcc4_set_asc_policy(bool enabled) { stcc4_native_asc_expected = enabled; }
+
 LOG_MODULE_REGISTER(stcc4, CONFIG_AIRSPOT_LOG_LEVEL);
 
 /* STCC4 I2C Commands (from Sensirion STCC4 datasheet and working minimal uart
@@ -76,6 +83,7 @@ static bool initialized = false;
 static stcc4_data_t last_data = {.co2_ppm = 0, .valid = false};
 static stcc4_mode_t current_mode = STCC4_MODE_SINGLE_SHOT;
 static int64_t continuous_start_ms = 0;
+static bool sleeping;
 
 /* CRC-8 calculation (same as SHT40) */
 static uint8_t stcc4_crc8(const uint8_t *data, size_t len) {
@@ -94,9 +102,24 @@ static uint8_t stcc4_crc8(const uint8_t *data, size_t len) {
   return crc;
 }
 
+/* All commands, including compensation/settings, must wake a sleeping sensor.
+ * The wake byte can NACK; the following command supplies the ACK/error check. */
+static int stcc4_write(const uint8_t *data, size_t len) {
+  if (sleeping) {
+    int ret = stcc4_exit_sleep_mode();
+    if (ret) return ret;
+  }
+  int ret = i2c_bus_write(I2C_ADDR_STCC4, data, len);
+  /* A bus error does not prove the sleep command was rejected. Wake before
+   * the next command in either case so a lost ACK cannot strand the sensor. */
+  if (len == 2 && data[0] == 0x36 && data[1] == 0x50)
+    sleeping = true;
+  return ret;
+}
+
 static int stcc4_write_cmd(uint8_t msb, uint8_t lsb) {
   uint8_t cmd[2] = {msb, lsb};
-  return i2c_bus_write(I2C_ADDR_STCC4, cmd, 2);
+  return stcc4_write(cmd, sizeof(cmd));
 }
 
 int stcc4_init(void) {
@@ -140,6 +163,34 @@ int stcc4_reset(void) {
   current_mode = STCC4_MODE_SINGLE_SHOT;
 
   LOG_INF("STCC4 reset (sleep/wake cycle)");
+  return 0;
+}
+
+static stcc4_reset_diagnostic_t reset_diagnostic;
+void stcc4_get_reset_diagnostic(stcc4_reset_diagnostic_t *diagnostic) {
+  if (diagnostic) *diagnostic = reset_diagnostic;
+}
+
+/* Caller must stop measurement before explicitly erasing native history. */
+int stcc4_factory_reset(void) {
+  reset_diagnostic = (stcc4_reset_diagnostic_t){.stage = 1};
+  if (!initialized) return -ENODEV;
+  int ret = stcc4_write_cmd(0x36, 0x32);
+  if (ret) return ret;
+  k_msleep(90);
+  uint8_t result[3];
+  reset_diagnostic.stage = 2;
+  ret = i2c_bus_read(I2C_ADDR_STCC4, result, sizeof(result));
+  if (ret) return ret;
+  reset_diagnostic.stage = 3;
+  if (stcc4_crc8(result, 2) != result[2]) return -EIO;
+  reset_diagnostic.stage = 4;
+  reset_diagnostic.result = ((uint16_t)result[0] << 8) | result[1];
+  if (reset_diagnostic.result) return -EIO;
+  reset_diagnostic.stage = 5;
+  last_data = (stcc4_data_t){0};
+  current_mode = STCC4_MODE_SINGLE_SHOT;
+  continuous_start_ms = 0;
   return 0;
 }
 
@@ -210,6 +261,7 @@ int stcc4_trigger_single_shot(void) {
 }
 
 int stcc4_read(stcc4_data_t *data) {
+  if (data) *data = (stcc4_data_t){0};
   if (!initialized) {
     return -ENODEV;
   }
@@ -242,16 +294,16 @@ int stcc4_read(stcc4_data_t *data) {
       /* Verify CRC for each word */
       if (stcc4_crc8(&raw[0], 2) != raw[2]) {
         LOG_WRN("STCC4 CO2 CRC mismatch");
-        ret = -EIO;
+        ret = -EBADMSG;
       } else if (stcc4_crc8(&raw[3], 2) != raw[5]) {
         LOG_WRN("STCC4 temperature CRC mismatch");
-        ret = -EIO;
+        ret = -EBADMSG;
       } else if (stcc4_crc8(&raw[6], 2) != raw[8]) {
         LOG_WRN("STCC4 humidity CRC mismatch");
-        ret = -EIO;
+        ret = -EBADMSG;
       } else if (stcc4_crc8(&raw[9], 2) != raw[11]) {
         LOG_WRN("STCC4 status CRC mismatch");
-        ret = -EIO;
+        ret = -EBADMSG;
       }
 
       if (ret == 0) {
@@ -275,19 +327,20 @@ int stcc4_read(stcc4_data_t *data) {
   uint16_t rh_raw = (raw[6] << 8) | raw[7];
   uint16_t status_raw = (raw[9] << 8) | raw[10];
 
+  data->raw_co2_ppm = co2_signed;
+  data->has_raw_co2 = true;
+
   /* CO2 ppm cannot be physically negative - clamp noise around zero. */
   data->co2_ppm = (co2_signed < 0) ? 0 : (uint16_t)co2_signed;
   data->temperature = -45.0f + 175.0f * ((float)temp_raw / 65535.0f);
   data->humidity = -6.0f + 125.0f * ((float)rh_raw / 65535.0f);
   data->status = status_raw;
-  /* Sensirion's current STCC4 driver (model 3.5.1) documents byte 10 value 4
-   * for testing mode. This supersedes the June 2025 PDF's bit-6 wording.
-   * Check only the testing flag; other status bits can coexist (e.g. 0x0084).
-   * Never expose a sample taken with the sensor's own ASC active. */
-  data->valid = (status_raw & STCC4_STATUS_TESTING_MODE) != 0;
+  /* Check the production sensor flag verified by paired testing-mode
+   * commands; the native experiment also verifies that transition at boot. */
+  data->valid = stcc4_status_matches_asc_policy(status_raw);
   if (!data->valid) {
     memset(&last_data, 0, sizeof(last_data));
-    LOG_ERR("STCC4 internal ASC active: status=0x%04x", status_raw);
+    LOG_ERR("STCC4 ASC policy mismatch: status=0x%04x", status_raw);
     return -EACCES;
   }
 
@@ -335,7 +388,7 @@ int stcc4_set_ambient(float temperature, float humidity) {
   cmd[6] = hum_raw & 0xFF;
   cmd[7] = stcc4_crc8(&cmd[5], 2);
 
-  int ret = i2c_bus_write(I2C_ADDR_STCC4, cmd, 8);
+  int ret = stcc4_write(cmd, sizeof(cmd));
   if (ret != 0) {
     LOG_DBG("STCC4 set_rht_compensation failed: %d", ret);
     return ret;
@@ -382,7 +435,7 @@ int stcc4_set_pressure(uint16_t pressure_hpa) {
   cmd[3] = pressure_input & 0xFF;        /* Pressure LSB */
   cmd[4] = stcc4_crc8(&cmd[2], 2);       /* CRC of pressure bytes */
 
-  int ret = i2c_bus_write(I2C_ADDR_STCC4, cmd, 5);
+  int ret = stcc4_write(cmd, sizeof(cmd));
   if (ret != 0) {
     LOG_DBG("STCC4 set_pressure_compensation failed: %d", ret);
     return ret;
@@ -404,6 +457,15 @@ bool stcc4_data_ready(void) {
 }
 
 stcc4_mode_t stcc4_get_mode(void) { return current_mode; }
+
+int stcc4_sleep_after_sample(void) {
+  if (!initialized) return -ENODEV;
+  if (current_mode != STCC4_MODE_SINGLE_SHOT) return -EBUSY;
+  if (sleeping) return 0;
+  int ret = stcc4_write_cmd(STCC4_CMD_ENTER_SLEEP_MSB, STCC4_CMD_ENTER_SLEEP_LSB);
+  if (!ret) k_msleep(STCC4_SLEEP_ENTER_TIME_MS);
+  return ret;
+}
 
 int stcc4_enter_sleep_mode(void) {
   if (!initialized) {
@@ -437,6 +499,7 @@ int stcc4_exit_sleep_mode(void) {
   /* Note: Sensor may NACK this command, which is expected behavior */
   /* Wait for sensor to wake up regardless of return value */
   k_msleep(STCC4_SLEEP_EXIT_TIME_MS);
+  sleeping = false;
 
   LOG_INF("STCC4 exited sleep mode");
   return 0; /* Always return success as NACK is expected */
@@ -489,6 +552,13 @@ int stcc4_enable_testing_mode(void) {
   return ret;
 }
 
+int stcc4_disable_testing_mode(void) {
+  if (!initialized) return -ENODEV;
+  int ret = stcc4_write_cmd(0x3F, 0x3D);
+  if (!ret) LOG_INF("STCC4 testing mode disabled (native ASC active)");
+  return ret;
+}
+
 int stcc4_perform_forced_recalibration(uint16_t target_ppm,
                                        int16_t *applied_correction) {
   if (!initialized) {
@@ -511,7 +581,9 @@ int stcc4_perform_forced_recalibration(uint16_t target_ppm,
   cmd[3] = target_ppm & 0xFF;
   cmd[4] = stcc4_crc8(&cmd[2], 2);
 
-  int ret = i2c_bus_write(I2C_ADDR_STCC4, cmd, sizeof(cmd));
+  /* FRC requires the preceding measurements to end in idle, without sleep. */
+  if (sleeping) return -EBUSY;
+  int ret = stcc4_write(cmd, sizeof(cmd));
   if (ret != 0) {
     LOG_ERR("STCC4 FRC write failed: %d", ret);
     return ret;

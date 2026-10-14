@@ -38,9 +38,8 @@ LOG_MODULE_REGISTER(battery, CONFIG_AIRSPOT_LOG_LEVEL);
 /* LiPo voltage thresholds (mV) */
 #define BATT_VOLTAGE_FULL 4200
 #define BATT_VOLTAGE_NOMINAL 3700
-#define BATT_VOLTAGE_LOW 3300      /* ~15% */
+#define BATT_VOLTAGE_LOW BATTERY_LOCKOUT_MV
 #define BATT_VOLTAGE_CRITICAL 3000 /* ~5% */
-#define BATT_VOLTAGE_EMPTY 2800
 
 /* ============================================================================
  * ADC Filtering Configuration
@@ -324,15 +323,14 @@ uint8_t battery_get_percentage(void) {
   if (mv >= BATT_VOLTAGE_FULL) {
     return 100;
   }
-  if (mv <= BATT_VOLTAGE_EMPTY) {
-    return 0;
+  if (mv <= BATTERY_LOCKOUT_MV) {
+    return 1;
   }
 
-  /* Linear approximation between empty and full */
-  uint32_t range = BATT_VOLTAGE_FULL - BATT_VOLTAGE_EMPTY;
-  uint32_t level = mv - BATT_VOLTAGE_EMPTY;
-
-  return (uint8_t)((level * 100) / range);
+  /* Display usable operating range, not charge below the shutdown cutoff. */
+  uint32_t range = BATT_VOLTAGE_FULL - BATTERY_LOCKOUT_MV;
+  uint32_t level = mv - BATTERY_LOCKOUT_MV;
+  return (uint8_t)(1 + (level * 99) / range);
 }
 
 bool battery_is_low(void) {

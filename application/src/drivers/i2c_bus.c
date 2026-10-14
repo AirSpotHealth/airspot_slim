@@ -13,6 +13,7 @@
 #include <zephyr/logging/log.h>
 
 #include <drivers/i2c_bus.h>
+#include <services/diagnostics.h>
 
 LOG_MODULE_REGISTER(i2c_bus, CONFIG_AIRSPOT_LOG_LEVEL);
 
@@ -48,27 +49,26 @@ int i2c_bus_init(void) {
 
 bool i2c_bus_is_ready(void) { return initialized && device_is_ready(i2c_dev); }
 
+/* First bus failure per boot: address, operation, signed errno. Scan NACKs
+ * bypass this path; a recorded transient does not prove a permanent fault. */
+static int record_result(uint8_t addr, uint8_t operation, int ret) {
+  if (ret) diagnostics_record(DIAG_I2C_FAILED,
+      ((uint32_t)addr << 24) | ((uint32_t)operation << 16) | (uint16_t)ret);
+  return ret;
+}
+
 int i2c_bus_write(uint8_t addr, const uint8_t *data, size_t len) {
-  if (!initialized) {
-    return -ENODEV;
-  }
-  return i2c_write(i2c_dev, data, len, addr);
+  return record_result(addr, 1, initialized ? i2c_write(i2c_dev, data, len, addr) : -ENODEV);
 }
 
 int i2c_bus_read(uint8_t addr, uint8_t *data, size_t len) {
-  if (!initialized) {
-    return -ENODEV;
-  }
-  return i2c_read(i2c_dev, data, len, addr);
+  return record_result(addr, 2, initialized ? i2c_read(i2c_dev, data, len, addr) : -ENODEV);
 }
 
 int i2c_bus_write_read(uint8_t addr, const uint8_t *write_data,
                        size_t write_len, uint8_t *read_data, size_t read_len) {
-  if (!initialized) {
-    return -ENODEV;
-  }
-  return i2c_write_read(i2c_dev, addr, write_data, write_len, read_data,
-                        read_len);
+  return record_result(addr, 3, initialized ?
+      i2c_write_read(i2c_dev, addr, write_data, write_len, read_data, read_len) : -ENODEV);
 }
 
 void i2c_bus_scan(void) {

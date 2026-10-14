@@ -3,6 +3,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from history_support import STUBS
 ROOT=Path(__file__).resolve().parents[1]
 class CalibrationProtocolTests(unittest.TestCase):
     def test_software_toggle_and_reset_ack(self):
@@ -10,6 +11,8 @@ class CalibrationProtocolTests(unittest.TestCase):
         def case(start,end): return source[source.index('  case '+start+':'):source.index('  case '+end+':')]
         cases=(case('CMD_GET_ASC_DIAGNOSTIC','CMD_GET_SENSOR_DETAILS')+case('CMD_SET_SELF_CALIB','CMD_GET_ASC_COUNT')+
                case('CMD_RESET_SENSOR','CMD_FIND_MY_AIRSPOT')+
+               case('CMD_SET_TIMEBASE','CMD_RESET_DEVICE')+
+               case('CMD_SET_BUZZER_STATE','CMD_SET_POWER_MODE')+
                case('CMD_SET_ASC_CHECK_DURATION','CMD_GET_SENSOR_VARIANT'))
         harness=r'''
 #include <assert.h>
@@ -21,6 +24,8 @@ class CalibrationProtocolTests(unittest.TestCase):
 #define ARRAY_SIZE(a) (sizeof(a)/sizeof((a)[0]))
 #define LOG_INF(...)
 #define LOG_WRN(...)
+static int time_syncs;static uint32_t sync_time;
+static void history_time_sync(uint32_t t) {time_syncs++;sync_time=t;}
 static int self_test_error;static uint16_t self_test_word;
 static int save_error, reset_error, measure_error, enabled, mode_commands, state_reads, duration;
 static uint8_t reply[32];static uint16_t reply_len;
@@ -52,9 +57,20 @@ int main(void) {
   handle(f,6);assert(enabled==1 && reply[4]==2 && reply_len==6 && state_reads==1);
   save_error=-1;f[4]=0;handle(f,6);assert(enabled==1 && reply[4]==255 && state_reads==2);
   save_error=0;handle(f,6);assert(enabled==0 && reply[4]==2);
-  f[2]=CMD_RESET_SENSOR;handle(f,6);assert(reply[4]==1 && enabled==0);
-  reset_error=-1;handle(f,6);assert(reply[4]==255);
-  reset_error=0;measure_error=-1;handle(f,6);assert(reply[4]==255);
+  f[2]=CMD_RESET_SENSOR;handle(f,6);assert(reply[4]==1 && enabled==0 && history_count==1);
+  assert(history_records[0].type==RECORD_TYPE_SENSOR_USER_FACTORY_RESET && history_records[0].value==1);
+  reset_error=-1;handle(f,6);assert(reply[4]==255 && history_count==1);
+  reset_error=0;measure_error=-1;handle(f,6);assert(reply[4]==255 && history_count==2);
+  uint8_t sync[9]={255,170,CMD_SET_TIMEBASE,4,0x6a,0xa0,0,0,0};
+  handle(sync,8);assert(time_syncs==0);
+  handle(sync,9);assert(time_syncs==1 && sync_time==0x6aa00000);
+  unsigned old_count=history_count;
+  int old_states=state_reads;
+  const uint8_t unsupported[]={CMD_SET_FLIGHT_MODE,CMD_SET_BUZZER_STATE,CMD_SET_VIBRATOR_STATE,CMD_SET_DND};
+  for(unsigned i=0;i<sizeof(unsupported);i++) {
+    f[2]=unsupported[i];f[4]=1;handle(f,6);
+    assert(history_count==old_count && state_reads==old_states+(int)i+1);
+  }
   f[2]=CMD_SET_ASC_CHECK_DURATION;f[3]=2;f[4]=1;f[5]=2;
   handle(f,6);assert(duration==0);handle(f,7);assert(duration==258);
   f[2]=CMD_GET_ASC_DAY_COUNT;handle(f,5);assert(reply[4]==4 && reply_len==6);
@@ -63,6 +79,6 @@ int main(void) {
         # Header declares protocol_send_device_state externally; use matching linkage.
         harness=harness.replace('static void protocol_send_device_state','void protocol_send_device_state')
         with tempfile.TemporaryDirectory() as directory:
-            p=Path(directory);(p/'test.c').write_text(harness+cases+tests)
+            p=Path(directory);(p/'test.c').write_text(harness.replace("static void handle(", STUBS+"\nstatic void handle(")+cases+tests)
             subprocess.run(['cc','-std=c11','-fsanitize=address,undefined','-I',str(ROOT/'application/include'),str(p/'test.c'),'-o',str(p/'test')],check=True)
             subprocess.run([str(p/'test')],check=True)

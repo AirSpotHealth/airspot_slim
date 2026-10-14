@@ -3,6 +3,9 @@
 #define SOFTWARE_ASC_H
 #include <stdbool.h>
 #include <stdint.h>
+/* STCC4 accuracy is specified through 5000 ppm. A host offset must not
+ * conceal out-of-range raw output, including signed-output saturation. */
+#define SOFTWARE_CALIBRATION_MAX_RAW_PPM 5000u
 void software_asc_init(void);
 /* Exclude the first 3 minutes after boot/reset from automatic observations.
  * Live readings and explicitly requested manual calibration are unaffected. */
@@ -15,6 +18,7 @@ void software_asc_process_measurement(uint16_t raw_ppm);
 void software_asc_tick(void);
 /* Manual calibration owns the correction until finish; no sensor calls here. */
 int software_asc_begin_manual(void);
+int software_asc_begin_calibration(void);
 int software_asc_finish_manual(uint16_t target, uint16_t average, bool have_samples,
                                int16_t *delta);
 void software_asc_end_manual(void);

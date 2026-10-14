@@ -1,4 +1,5 @@
 /* Bounded fault journal. No sensor history addresses or settings keys reused. */
+#include <services/history_events.h>
 #include <string.h>
 #include <stdio.h>
 #include <zephyr/kernel.h>
@@ -10,8 +11,8 @@
 #include <services/diagnostics.h>
 
 #define CAPACITY 16
-#define RECORD_SIZE 28
-static uint8_t records[CAPACITY][RECORD_SIZE];
+#define DIAG_RECORD_SIZE 28
+static uint8_t records[CAPACITY][DIAG_RECORD_SIZE];
 static uint32_t head;
 static uint32_t seen;
 static bool ready;
@@ -26,7 +27,7 @@ static uint32_t reset_reason;
 static bool valid(const uint8_t *record)
 {
     return record[0] == 1 && record[1] >= DIAG_BOOT &&
-        record[1] <= DIAG_STORAGE_FAILED && sys_get_be32(record + 8) != 0 &&
+        record[1] <= DIAG_SENSOR_POWER && sys_get_be32(record + 8) != 0 &&
         crc32_ieee(record, 24) == sys_get_be32(record + 24);
 }
 static int load(const char *name, size_t len, settings_read_cb read_cb, void *arg)
@@ -35,7 +36,7 @@ static int load(const char *name, size_t len, settings_read_cb read_cb, void *ar
     if (strlen(name) != 2 || name[0] < '0' || name[0] > '1' ||
         name[1] < '0' || name[1] > '9') return 0;
     index = (name[0] - '0') * 10 + name[1] - '0';
-    uint8_t record[RECORD_SIZE];
+    uint8_t record[DIAG_RECORD_SIZE];
     /* Diagnostic corruption must never fail application settings startup. */
     if (index >= CAPACITY || len != sizeof(record) ||
         read_cb(arg, record, sizeof(record)) != sizeof(record) || !valid(record)) return 0;
@@ -51,13 +52,22 @@ SETTINGS_STATIC_HANDLER_DEFINE(diagnostics, "diag", NULL, load, NULL, NULL);
 
 void diagnostics_record(enum diagnostic_event event, uint32_t detail)
 {
-    if (event < DIAG_BOOT || event > DIAG_STORAGE_FAILED) return;
+    if (event < DIAG_BOOT || event > DIAG_SENSOR_POWER) return;
     struct event item = {event, detail, k_uptime_get_32() / 1000};
     /* At most one of each event per boot; no periodic telemetry flash writes. */
     k_spinlock_key_t key = k_spin_lock(&lock);
     uint32_t bit = 1U << event;
-    if (!(seen & bit) && k_msgq_put(&events, &item, K_NO_WAIT) == 0) seen |= bit;
+    bool accepted = !(seen & bit) && k_msgq_put(&events, &item, K_NO_WAIT) == 0;
+    if (accepted) seen |= bit;
     k_spin_unlock(&lock, key);
+    if (accepted) {
+        if (event == DIAG_STARTUP_FAILED)
+            (void)history_event_record((uint16_t)detail, RECORD_TYPE_SDK_ERROR);
+        else if (event == DIAG_ROLLBACK_REQUESTED || event == DIAG_OTA_REJECTED)
+            (void)history_event_record(0, RECORD_TYPE_DFU_FAIL);
+        else if (event == DIAG_WATCHDOG)
+            (void)history_event_record((uint16_t)detail, RECORD_TYPE_FAULT_RESET);
+    }
 }
 void diagnostics_reboot_event(enum diagnostic_event event, uint32_t detail)
 {
@@ -96,7 +106,7 @@ static void journal_thread(void *a, void *b, void *c)
     struct event item;
     while (true) {
         k_msgq_get(&events, &item, K_FOREVER);
-        uint8_t record[RECORD_SIZE] = {1, item.code,
+        uint8_t record[DIAG_RECORD_SIZE] = {1, item.code,
             AIRSPOT_FIRMWARE_VERSION_MAJOR, AIRSPOT_FIRMWARE_VERSION_MINOR};
         sys_put_be16(AIRSPOT_FIRMWARE_VERSION_PATCH, record + 4);
         key = k_spin_lock(&lock);
@@ -134,7 +144,7 @@ size_t diagnostics_read(uint8_t index, uint32_t expected_head, uint8_t *out)
     else {
         uint8_t *record = records[(head - index - 1) % CAPACITY];
         if (!valid(record) || sys_get_be32(record + 8) != head - index) out[1] = 4;
-        else { memcpy(out + 8, record, RECORD_SIZE); size += RECORD_SIZE; }
+        else { memcpy(out + 8, record, DIAG_RECORD_SIZE); size += DIAG_RECORD_SIZE; }
     }
     k_spin_unlock(&lock, key);
     return size;

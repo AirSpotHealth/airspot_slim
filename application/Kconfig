@@ -7,6 +7,23 @@ source "Kconfig.zephyr"
 # AirSpot-specific configuration
 menu "AirSpot Configuration"
 
+config AIRSPOT_STCC4_SINGLE_SHOT_SLEEP
+	bool "Sleep STCC4 between single shots (qualification build)"
+	default n
+	help
+	  Follow the datasheet wake/compensate/measure/read/sleep sequence.
+	  Compare readings and current on real Slim hardware before enabling
+	  in the production configuration. Continuous mode remains awake.
+
+config AIRSPOT_STCC4_INTERNAL_ASC_EXPERIMENT
+	bool "Legacy native ASC diagnostic overlay (deprecated)"
+	default n
+	help
+	  Retained for compatibility with local diagnostic overlays. This must
+	  not enable native ASC in user settings: new and legacy devices use
+	  host calibration until the user explicitly enables native ASC. Saved
+	  native preferences remain authoritative in every build.
+
 config AIRSPOT_LOG_LEVEL
 	int "AirSpot log level"
 	default 3
@@ -59,6 +76,8 @@ config AIRSPOT_POWER_OFF_ENABLED
 
 	  The production button is P0.02, which supports GPIO SENSE wake.
 	  Enable after qualification of release-before-off and charger/hold wake.
-	  Wake requires the existing five-second hold while on the Qi charger.
+	  Normal wake requires a five-second hold on Qi, followed by release.
+	  Emergency wake: hold until the 15-second cue, release before 18 seconds,
+	  regardless of Qi detection. Holding beyond the window cancels.
 
 endmenu

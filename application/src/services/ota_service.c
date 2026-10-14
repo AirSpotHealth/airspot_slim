@@ -1,4 +1,5 @@
 /* Signed Bluetooth updates with device-controlled startup confirmation. */
+#include <services/history_events.h>
 #include <zephyr/kernel.h>
 #include <zephyr/dfu/mcuboot.h>
 #include <zephyr/logging/log.h>
@@ -64,12 +65,30 @@ static struct mgmt_callback command_callback = {
     .event_id = MGMT_EVT_OP_CMD_RECV | MGMT_EVT_OP_CMD_DONE,
 };
 
+static enum mgmt_cb_return image_event(uint32_t event,
+    enum mgmt_cb_return previous, int32_t *rc, uint16_t *group,
+    bool *abort_more, void *data, size_t size)
+{
+    ARG_UNUSED(rc); ARG_UNUSED(group); ARG_UNUSED(abort_more);
+    ARG_UNUSED(data); ARG_UNUSED(size);
+    if (event == MGMT_EVT_OP_IMG_MGMT_DFU_STARTED)
+        (void)history_event_record(1, RECORD_TYPE_DFU);
+    else if (event == MGMT_EVT_OP_IMG_MGMT_DFU_STOPPED)
+        (void)history_event_record(0, RECORD_TYPE_DFU_FAIL);
+    return previous;
+}
+static struct mgmt_callback image_callback = {
+    .callback = image_event,
+    .event_id = MGMT_EVT_OP_IMG_MGMT_DFU_STARTED | MGMT_EVT_OP_IMG_MGMT_DFU_STOPPED,
+};
+
 void ota_service_init(void)
 {
     needs_confirmation = !boot_is_img_confirmed();
     deadline = k_uptime_get() + 120000;
     if (needs_confirmation) diagnostics_record(DIAG_TRIAL, 0);
     mgmt_callback_register(&command_callback);
+    mgmt_callback_register(&image_callback);
     LOG_INF("Bluetooth OTA enabled; image %s",
             needs_confirmation ? "awaiting startup checks" : "confirmed");
 }
@@ -85,10 +104,16 @@ void ota_service_startup_complete(bool healthy)
 
 void ota_service_observe_sample(const sensor_data_t *data)
 {
+    static bool sensor_failed;
     if (data->valid) {
+        sensor_failed = false;
         atomic_set(&sample_healthy, 1);
     } else {
-        diagnostics_record(DIAG_SENSOR_FAILED, 0);
+        if (!sensor_failed) (void)history_event_record(1, RECORD_TYPE_SENSOR_ERROR);
+        sensor_failed = true;
+        /* 0x53 marker + fault byte; retained journal survives a later reboot. */
+        diagnostics_record(DIAG_SENSOR_FAILED,
+            0x53000000U | ((uint32_t)data->error_code << 16));
     }
 }
 

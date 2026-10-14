@@ -6,6 +6,8 @@
  * Calibration Service - Legacy math-based calibration
  */
 
+#include <services/history_events.h>
+#include <errno.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 
@@ -27,6 +29,7 @@ static bool calib_active = false;
 static uint16_t calib_target_ppm = 426;
 static uint32_t calib_sum = 0;
 static uint16_t calib_count = 0;
+static bool calib_out_of_range = false;
 static uint16_t calib_remaining_sec = 0;
 static uint8_t calib_prev_power_mode = 0;
 static bool calib_power_mode_changed = false;
@@ -43,8 +46,18 @@ static void calibration_complete(void) {
 
   if (calib_count > 0) avg = (uint16_t)(calib_sum / calib_count);
   int16_t correction_delta = 0;
-  int rc = software_asc_finish_manual(calib_target_ppm, avg, calib_count > 0,
-                                     &correction_delta);
+  int rc;
+  if (calib_out_of_range) {
+    /* Reject the whole session: omitting bad samples or averaging them away
+     * could make a saturated/unstable sensor look successfully calibrated. */
+    rc = -ERANGE;
+    software_asc_end_manual();
+    LOG_ERR("Calibration rejected: raw CO2 exceeded %u ppm",
+            SOFTWARE_CALIBRATION_MAX_RAW_PPM);
+  } else {
+    rc = software_asc_finish_manual(calib_target_ppm, avg, calib_count > 0,
+                                    &correction_delta);
+  }
   new_correction = user_settings_get_co2_correction();
 
   LOG_INF(
@@ -52,19 +65,14 @@ static void calibration_complete(void) {
       calib_target_ppm, avg, calib_count, old_correction, new_correction,
       correction_delta);
 
-  /* Log correction record */
-  uint32_t timestamp = user_settings_is_time_set()
-                           ? user_settings_get_time_now()
-                           : (k_uptime_get_32() / 1000);
-  if (!rc) (void)data_log_store_record(timestamp,
-                              (uint16_t)(new_correction < 0 ? -new_correction
-                                                            : new_correction),
-                              RECORD_TYPE_CALIBRATION_CORRECTION);
+  if (!rc) (void)history_event_record((uint16_t)new_correction,
+                                       RECORD_TYPE_CALIBRATION_CORRECTION);
 
   bool restore_mode = calib_power_mode_changed;
   uint8_t previous_mode = calib_prev_power_mode;
   calib_sum = 0;
   calib_count = 0;
+  calib_out_of_range = false;
   calib_remaining_sec = 0;
   calib_power_mode_changed = false;
   k_mutex_unlock(&calib_mutex);
@@ -95,6 +103,7 @@ void calibration_service_init(const calibration_callbacks_t *cb) {
 }
 
 int calibration_service_start(uint16_t target_ppm) {
+  if (user_settings_get_native_asc_mode() == 2) return -EBUSY;
   k_mutex_lock(&calib_mutex, K_FOREVER);
   if (calib_active) {
     k_mutex_unlock(&calib_mutex);
@@ -108,18 +117,12 @@ int calibration_service_start(uint16_t target_ppm) {
     if (rc) { k_mutex_unlock(&calib_mutex); return rc; }
   }
 
-  int rc = software_asc_begin_manual();
+  int rc = software_asc_begin_calibration();
   if (rc) { k_mutex_unlock(&calib_mutex); return rc; }
-
-  {
-    uint32_t ts = user_settings_is_time_set() ? user_settings_get_time_now()
-                                             : (k_uptime_get_32() / 1000);
-    (void)data_log_store_record(ts, target_ppm,
-                                RECORD_TYPE_MANUAL_CALIB_START);
-  }
 
   calib_sum = 0;
   calib_count = 0;
+  calib_out_of_range = false;
 
   uint8_t power_mode = user_settings_get_power_mode();
   calib_prev_power_mode = power_mode;
@@ -150,6 +153,13 @@ int calibration_service_start(uint16_t target_ppm) {
     }
   }
 
+  const struct history_event events[] = {
+    {1, RECORD_TYPE_MANUAL_CALIB_START},
+    {(uint16_t)user_settings_get_co2_correction(), RECORD_TYPE_CALIBRATION_CORRECTION_OLD},
+    {target_ppm, RECORD_TYPE_CALIB_TARGET},
+  };
+  (void)history_event_batch(events, ARRAY_SIZE(events));
+
   LOG_INF("Calibration started: target=%u duration=%us mode=%u", target_ppm,
           remaining, power_mode);
 
@@ -166,6 +176,9 @@ int calibration_service_start(uint16_t target_ppm) {
 
 void calibration_service_process_measurement(uint16_t co2_ppm) {
   k_mutex_lock(&calib_mutex, K_FOREVER);
+  if (calib_active && co2_ppm > SOFTWARE_CALIBRATION_MAX_RAW_PPM) {
+    calib_out_of_range = true;
+  }
   if (calib_active && co2_ppm > 0 && calib_count < UINT16_MAX &&
       calib_sum <= UINT32_MAX - co2_ppm) {
     calib_sum += co2_ppm;

@@ -1,4 +1,5 @@
 /* AirSpot software ASC; mirrors Screen's three-sample / seven-day policy. */
+#include <services/history_events.h>
 #include <errno.h>
 #include <limits.h>
 #include <string.h>
@@ -28,14 +29,12 @@ static void restart_locked(void) {
   asc.last_check_ms = k_uptime_get();
 }
 static void log_record(int32_t value, record_type_t type) {
-  uint32_t ts = user_settings_is_time_set() ? user_settings_get_time_now()
-                                           : (uint32_t)(k_uptime_get() / 1000);
-  /* Match legacy history's magnitude encoding for correction events. */
-  (void)data_log_store_record(ts, (uint16_t)(value < 0 ? -value : value), type);
+  /* Preserve signed corrections as their original 16-bit Screen payload. */
+  (void)history_event_record((uint16_t)value, type);
 }
 static int commit_correction(int32_t value) {
   if (value < INT16_MIN || value > INT16_MAX) return -ERANGE;
-  int rc = user_settings_set_co2_correction((int16_t)value);
+  int rc = user_settings_commit_manual_correction((int16_t)value);
   if (rc) LOG_ERR("Software calibration storage failed: %d", rc);
   return rc;
 }
@@ -57,6 +56,10 @@ static bool sensor_settling(void) {
 }
 int software_asc_set_enabled(uint8_t enabled) {
   k_mutex_lock(&asc_mutex, K_FOREVER);
+  if (asc.manual || user_settings_get_native_asc_mode()) {
+    k_mutex_unlock(&asc_mutex);
+    return -EBUSY;
+  }
   int rc = user_settings_set_auto_calibrate(enabled);
   if (!rc) {
     restart_locked();
@@ -67,7 +70,7 @@ int software_asc_set_enabled(uint8_t enabled) {
 }
 int software_asc_set_target(uint16_t target) {
   k_mutex_lock(&asc_mutex, K_FOREVER);
-  if (asc.manual) {
+  if (asc.manual || user_settings_get_native_asc_mode() == 2) {
     k_mutex_unlock(&asc_mutex);
     return -EBUSY;
   }
@@ -96,8 +99,9 @@ uint8_t software_asc_get_day_count(void) {
   return days;
 }
 void software_asc_process_measurement(uint16_t raw_ppm) {
+  if (user_settings_get_native_asc_mode()) return;
   k_mutex_lock(&asc_mutex, K_FOREVER);
-  if (!user_settings_get_auto_calibrate() || asc.manual || sensor_settling() || raw_ppm == 0) goto done;
+  if (user_settings_get_native_asc_mode() || !user_settings_get_auto_calibrate() || asc.manual || sensor_settling() || raw_ppm == 0) goto done;
   int32_t corrected = (int32_t)raw_ppm + user_settings_get_co2_correction();
   uint16_t ppm = (uint16_t)CLAMP(corrected, 0, UINT16_MAX);
   if (asc.records < UINT32_MAX) asc.records++;
@@ -108,7 +112,7 @@ void software_asc_process_measurement(uint16_t raw_ppm) {
   if (asc.count < 3) goto done;
   uint32_t average = ((uint32_t)asc.samples[0] + asc.samples[1] + asc.samples[2]) / 3;
   if (average < asc.lowest) asc.lowest = average;
-  if (asc.lowest < 420 && !user_settings_get_flight_mode()) {
+  if (asc.lowest < 420) {
     int32_t adjustment = 420 - (int32_t)asc.lowest;
     int32_t next = (int32_t)user_settings_get_co2_correction() + adjustment;
     if (!commit_correction(next)) {
@@ -122,8 +126,9 @@ done:
   k_mutex_unlock(&asc_mutex);
 }
 void software_asc_tick(void) {
+  if (user_settings_get_native_asc_mode()) return;
   k_mutex_lock(&asc_mutex, K_FOREVER);
-  if (!user_settings_get_auto_calibrate() || asc.manual || sensor_settling()) goto done;
+  if (user_settings_get_native_asc_mode() || !user_settings_get_auto_calibrate() || asc.manual || sensor_settling()) goto done;
   if (asc.check_seconds) {
     int64_t now = k_uptime_get();
     if (user_settings_get_power_mode() == 0 ||
@@ -148,15 +153,25 @@ void software_asc_tick(void) {
     int32_t target = user_settings_get_calib_target();
     int32_t next = old + target - (int32_t)asc.lowest;
     if (!commit_correction(next)) {
-      log_record(target, RECORD_TYPE_CALIB_TARGET);
-      log_record(asc.lowest, RECORD_TYPE_ASC_LOWEST);
-      log_record(old, RECORD_TYPE_CALIBRATION_CORRECTION_OLD);
-      log_record(next, RECORD_TYPE_CALIBRATION_CORRECTION);
+      const struct history_event events[] = {
+        {target, RECORD_TYPE_CALIB_TARGET},
+        {(uint16_t)asc.lowest, RECORD_TYPE_ASC_LOWEST},
+        {(uint16_t)old, RECORD_TYPE_CALIBRATION_CORRECTION_OLD},
+        {(uint16_t)next, RECORD_TYPE_CALIBRATION_CORRECTION},
+      };
+      (void)history_event_batch(events, ARRAY_SIZE(events));
       restart_locked();
     }
   }
 done:
   k_mutex_unlock(&asc_mutex);
+}
+int software_asc_begin_calibration(void) {
+  k_mutex_lock(&asc_mutex, K_FOREVER);
+  int rc = (asc.manual || user_settings_get_native_asc_mode() == 2) ? -EBUSY : 0;
+  if (!rc) asc.manual = true;
+  k_mutex_unlock(&asc_mutex);
+  return rc;
 }
 int software_asc_begin_manual(void) {
   k_mutex_lock(&asc_mutex, K_FOREVER);
@@ -172,6 +187,7 @@ int software_asc_finish_manual(uint16_t target, uint16_t average, bool have_samp
   int32_t difference = next - user_settings_get_co2_correction();
   int rc;
   if (!have_samples) rc = -ENODATA;
+  else if (average > SOFTWARE_CALIBRATION_MAX_RAW_PPM) rc = -ERANGE;
   else if (difference < INT16_MIN || difference > INT16_MAX) rc = -ERANGE;
   else rc = commit_correction(next);
   if (!rc) *delta = (int16_t)difference;

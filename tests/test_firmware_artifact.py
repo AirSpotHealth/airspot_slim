@@ -1,6 +1,7 @@
 """Exercise real generated artifacts and migration safety without touching hardware."""
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import sys
@@ -16,7 +17,7 @@ import provision
 class FirmwareArtifactTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.source = ROOT / 'application/build_production'
+        cls.source = Path(os.environ.get('AIRSPOT_TEST_BUILD_DIR', ROOT / 'application/build_production'))
         if not (cls.source / 'firmware-artifact.json').exists():
             raise RuntimeError('Build production firmware before running artifact tests')
 

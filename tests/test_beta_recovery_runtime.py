@@ -2,6 +2,7 @@
 import re
 import unittest
 from native_support import ROOT, run_c
+from history_support import STUBS
 
 def implementation(name):
     return re.sub(r'^#include .*$', '', (ROOT/'application/src/services'/name).read_text(), flags=re.M)
@@ -15,7 +16,7 @@ class RecoveryTests(unittest.TestCase):
 #include <stddef.h>
 #include <services/health_service.h>
 #include <services/diagnostics.h>
-typedef struct {bool valid;} sensor_data_t;
+typedef struct {bool valid; uint8_t error_code;} sensor_data_t;
 typedef int atomic_t;
 #define atomic_get(p) (*(p))
 #define atomic_set(p,v) (*(p)=(v))
@@ -26,6 +27,8 @@ typedef int atomic_t;
 #define MGMT_EVT_OP_CMD_DONE 2
 #define MGMT_EVT_OP_CMD_RECV 1
 #define MGMT_OP_WRITE 2
+#define MGMT_EVT_OP_IMG_MGMT_DFU_STARTED 4
+#define MGMT_EVT_OP_IMG_MGMT_DFU_STOPPED 8
 #define MGMT_GROUP_ID_IMAGE 1
 #define MGMT_GROUP_ID_OS 0
 #define MGMT_ERR_EBUSY 10
@@ -47,7 +50,7 @@ void health_progress(enum health_worker w,uint32_t ms) {}
 uint32_t health_failed(void) {return 0;}
 void diagnostics_record(enum diagnostic_event e,uint32_t d) {}
 void diagnostics_reboot_event(enum diagnostic_event e,uint32_t d) {}
-''' + implementation('ota_service.c') + r'''
+''' + STUBS + implementation('ota_service.c') + r'''
 int main(void) {
  int32_t rc=0;uint16_t group=0;bool abort=false;
  struct mgmt_evt_op_cmd_arg cmd={1,1,MGMT_OP_WRITE};
@@ -63,10 +66,20 @@ int main(void) {
  cmd.op=0;
  assert(command_check(1,MGMT_CB_OK,&rc,&group,&abort,&cmd,sizeof(cmd))==MGMT_CB_OK);
  now=120001;ota_service_poll();assert(reboots==1 && confirms==0);
+ unsigned failures=history_count;
+ image_event(MGMT_EVT_OP_IMG_MGMT_DFU_STARTED,MGMT_CB_OK,&rc,&group,&abort,NULL,0);
+ image_event(MGMT_EVT_OP_IMG_MGMT_DFU_STOPPED,MGMT_CB_OK,&rc,&group,&abort,NULL,0);
+ assert(history_records[failures].type==RECORD_TYPE_DFU && history_records[failures].value==1);
+ assert(history_records[failures+1].type==RECORD_TYPE_DFU_FAIL && history_records[failures+1].value==0);
  now=0;ota_service_init();ota_service_startup_complete(true);
  ota_service_poll();assert(confirms==0);
  sensor_data_t good={true};ota_service_observe_sample(&good);ota_service_poll();
  assert(confirms==1);
+ unsigned before=history_count;
+ ota_service_observe_sample(&bad);ota_service_observe_sample(&bad);
+ assert(history_count==before+1 && history_records[before].type==RECORD_TYPE_SENSOR_ERROR);
+ ota_service_observe_sample(&good);ota_service_observe_sample(&bad);
+ assert(history_count==before+2);
 }
 ''')
 

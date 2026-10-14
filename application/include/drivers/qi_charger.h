@@ -4,11 +4,12 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Qi Charger Detection Driver
- * GPIO-based charging status detection
+ * GPIO-based Qi receiver status detection. This indicates pad presence, not
+ * the nPM battery-charge/complete/fault state.
  *
  * Hardware Configuration:
  * - Pin: P0.00 (NRF_QI_nCHG)
- * - Active LOW: 0 = charging, 1 = not charging
+ * - Active LOW: 0 = Qi pad detected, 1 = not detected
  */
 
 #ifndef QI_CHARGER_H
@@ -25,7 +26,7 @@ extern "C"
     /**
      * @brief Callback for charging status changes
      *
-     * @param is_charging true if device is charging
+     * @param is_charging true if the Qi receiver reports a pad
      */
     typedef void (*qi_charger_callback_t)(bool is_charging);
 

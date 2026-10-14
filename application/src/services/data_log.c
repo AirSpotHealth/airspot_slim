@@ -873,7 +873,16 @@ int data_log_erase_all(void) {
   if (wake_rc) { k_mutex_unlock(&data_log_mutex); return wake_rc; }
   k_usleep(50);
 
-  /* Erase all sectors */
+  /* Invalidate the durable cursor before touching history. An interrupted
+   * erase must never restore a cursor pointing into already erased pages. */
+  int rc = spi_flash_erase_sector(FLASH_METADATA_OFFSET);
+  if (rc) {
+    (void)spi_flash_power_down();
+    k_mutex_unlock(&data_log_mutex);
+    return rc;
+  }
+
+  /* Erase all history sectors; the DFU partition is untouched. */
   for (uint16_t sector = 0; sector < FLASH_SECTOR_COUNT; sector++) {
     int ret = spi_flash_erase_sector(FLASH_ADDR_OF_SECTOR(sector));
     if (ret != 0) {
@@ -883,14 +892,10 @@ int data_log_erase_all(void) {
       return ret;
     }
 
-    /* Feed watchdog and yield periodically during long erase
-     * Each sector erase takes ~50-100ms, and we have many sectors.
-     * With 5s WDT timeout, feed every 32 sectors (~3s max)
-     */
-    if (sector % 32 == 0) {
-      watchdog_feed();
-      k_yield();
-    }
+    /* A sector may take up to 300 ms. Renew after each completed sector,
+     * not every 32 (which could exceed the 5 s watchdog on slow flash). */
+    watchdog_feed();
+    k_yield();
   }
 
   /* Reset state */
@@ -902,6 +907,11 @@ int data_log_erase_all(void) {
   cur_store_area.count = 0;
   memset(&rec_page, 0, sizeof(rec_page));
   memset(&cur_record, 0, sizeof(cur_record));
+  total_records_count = 0;
+  metadata_seq_num = 0;
+  metadata_dirty = true;
+  /* Persist the empty cursor before reporting success to the app. */
+  rc = metadata_write(0);
 
 
   /* Put flash back to sleep */
@@ -909,8 +919,8 @@ int data_log_erase_all(void) {
 
   k_mutex_unlock(&data_log_mutex);
 
-  LOG_INF("All data log erased");
-  return 0;
+  if (!rc) LOG_INF("All data log erased");
+  return rc;
 }
 
 /*
