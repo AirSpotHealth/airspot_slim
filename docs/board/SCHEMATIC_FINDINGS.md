@@ -1,5 +1,9 @@
 # Key Findings from Schematic Analysis
 
+> **Historical Rev1A reference.** For current Slim Rev3A wiring, use the
+> [production board reference](PRODUCTION_BOARD.md). The pin assignments here
+> must not be used to connect the current board.
+
 **Schematic**: AH-013-0001-SCH CO2 Monitor (Standard Build) PWA Schematics Rev1A  
 **Date**: 2025-01-XX
 

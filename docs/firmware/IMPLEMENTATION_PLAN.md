@@ -1,5 +1,8 @@
 # AirSpot Slim Firmware Implementation Plan
 
+> **Historical migration plan.** The current target is nRF54L15 Slim Rev3A.
+> See [setup](../GETTING_STARTED.md) and [test status](../STATUS.md) for current work.
+
 ## Executive Summary
 
 This document outlines the migration plan from the existing nRF52832-based firmware (using nRF5 SDK v17.1.0) to a new nRF54L05-based firmware (using nRF Connect SDK with Zephyr RTOS) for the AirSpot Slim device.

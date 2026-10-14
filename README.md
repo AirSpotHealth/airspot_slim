@@ -1,61 +1,121 @@
-# AirSpot Slim firmware
+![AirSpot Slim firmware](docs/assets/slim-header.svg)
 
-Current source: **0.19.2 candidate**, not a customer release. Includes automatic
-sensor recovery, settling guidance, and a full factory reset that clears settings,
-readings and calibration before electronic power-off. On 81A9DC, erasure and
-0 V power-off were verified; button-wake and post-reset history/settling checks
-remain pending. See [factory reset test status](docs/SLIM_FACTORY_RESET_POWER_OFF.md).
+Firmware for the **AirSpot Slim** air quality monitor. It reads CO₂, temperature,
+humidity and pressure, saves measurements on the device, and connects to the
+AirSpot app over Bluetooth.
 
-Signing private keys, local device backups, and current bench captures are not
-included. Obtain the authorized product signing key separately to build signed
-firmware; never commit it.
+[Get started](docs/GETTING_STARTED.md) · [Hardware](docs/board/PRODUCTION_BOARD.md) · [BLE protocol](application/docs/protocol_commands.md) · [Test status](docs/STATUS.md)
 
-Production hardware: nRF54L15 AirSpot Slim, STCC4 CO₂, SHT40 temperature/humidity,
-LPS22HH pressure, AT25XE161D history storage and Qi charging.
-The hardware source of truth is the [board schematic](docs/datasheets/AH-013-0001-SCH%20CO2%20Monitor%20%28Standard%20Build%29%20PWA%20Schematics%20Rev3A.PDF).
+> **Current work: 0.19.2 candidate.** The latest source is on `main`. It is still
+> being tested on hardware and has not been released to customers.
 
-Uses the pinned nRF Connect SDK workspace and one configuration: MCUboot,
-signed Bluetooth OTA, the existing AirSpot BLE protocol, and SEGGER RTT logs.
+## The board
+
+| Part | What it does |
+| :--- | :--- |
+| Nordic **nRF54L15** | Runs the firmware and Bluetooth |
+| Sensirion **STCC4** | Measures CO₂ |
+| Sensirion **SHT40** | Measures temperature and humidity |
+| ST **LPS22HH** | Measures pressure for CO₂ compensation |
+| **AT25XE161D**, 2 MiB | Stores measurement history |
+| Nordic **nPM1100** + Qi receiver | Battery power and wireless charging |
+
+Built with **C, Zephyr and nRF Connect SDK v3.2.1**. The board configuration,
+bootloader and dependencies are pinned in this repository.
+
+## Build, flash, read the logs
+
+On a configured development machine, from the repository root:
 
 ```sh
 source scripts/airspot
 airspot build
 airspot check
-airspot flash    # Install firmware; back up memory and preserve settings bytes.
+airspot flash
 airspot logs
 ```
 
-`airspot` shows a styled command guide; `airspot menu` opens the interactive menu.
-Use `airspot devices` (or `info`), `reset`, `version`, `memory`, and `ports` to inspect
-and control devices. `airspot bf` builds and flashes; `airspot bfl` also opens logs.
-`airspot erase` confirms before removing internal firmware, bootloader, settings and
-UICR; `-y` skips confirmation. External history flash is not erased. Reinstall with
-`airspot flash`. Styling respects `NO_COLOR` and is disabled when output is redirected.
+**New checkout?** Start with the [setup guide](docs/GETTING_STARTED.md). You need
+the Nordic toolchain and the product signing key; the private key is not in Git.
+The current helpers are configured for the team's macOS toolchain installation.
 
-Flash and logs list connected J-Link probes, automatically use a single probe, and
-prompt for a selection when several are connected. Use `--serial SERIAL` to select
-a probe explicitly (required for noninteractive use with multiple probes). No serial
-environment export is needed. Logs stream in the terminal until Ctrl-C and are also
-saved to `application/build_production/rtt.log`. `airspot logs rtt` remains supported.
+`flash` checks the image, backs up device memory and preserves the current
+settings partition. With more than one J-Link connected, select a probe with
+`--serial SERIAL`. Nothing is flashed by `build` or `check`.
 
-Flashing does not require a recognized bootloader or local build history. It preserves
-36 KiB at `0x15c000` by default. Use `airspot flash --reset-settings` for fresh settings,
-or `airspot flash --settings-source 0x74000` to migrate a device known to use that
-older settings address. Arbitrary legacy layouts are not detected automatically.
+| Command | Use it to… |
+| :--- | :--- |
+| `airspot devices` | Find connected J-Link probes |
+| `airspot build` | Build MCUboot and signed firmware |
+| `airspot check` | Check signatures, memory layout and board configuration |
+| `airspot flash` | Install over J-Link, with backup and readback verification |
+| `airspot logs` | Stream device logs over RTT |
+| `airspot reset` | Reboot the connected MCU |
+| `airspot version` | Print the source version |
 
-For subsequent wired updates, use `airspot flash` for a checked wired reinstall, or upload
-`application/build_production/airspot_slim_dfu.zip` through the mobile app's Slim
-updater. The raw OTA file is
-`application/build_production/application/zephyr/airspot_slim.signed.bin`.
-Keep the same product signing key for subsequent builds; set `AIRSPOT_SIGNING_KEY`
-if it is stored outside the ignored `application/keys/` directory.
+## What the firmware handles
 
-- [Current firmware status](docs/STATUS.md)
-- [Archived investigations and qualification records](docs/archive/README.md)
-- [Wireless updates, recovery and signing](docs/OTA.md)
-- [Board wiring and qualification](docs/board/PRODUCTION_BOARD.md)
+- **Measurements:** continuous and single-shot sampling, sensor compensation,
+  and explicit error reporting when a reading fails.
+- **History:** readings stored in external flash and downloaded over Bluetooth.
+- **Calibration:** manual correction, automatic calibration controls, and
+  settling guidance after calibration is erased.
+- **Recovery:** bounded sensor retries, watchdog supervision and retained fault
+  records for diagnosis.
+- **Updates:** signed Bluetooth OTA through MCUboot. A new image must pass
+  startup checks and produce a valid sample before it confirms itself.
 
-Build success is not hardware qualification. The qualification record distinguishes
-observed behavior from checks still needing a phone, charger or extended testing.
-Historical release packages and older design notes describe earlier hardware and
-must not be used to program this product.
+[Update and rollback details →](docs/OTA.md)
+
+### Restart is not factory reset
+
+These are the Slim behaviors in the current candidate. The Screen firmware is
+maintained separately.
+
+| Action | Result |
+| :--- | :--- |
+| **Restart device** | Reboots the MCU. Keeps settings, readings and calibration. |
+| **Erase sensor calibration** | Clears learned calibration and manual correction, then starts settling guidance. Keeps saved readings and unrelated preferences. |
+| **Factory reset** | Clears settings, readings, saved history pointers and calibration, then cuts power. Remove it from the charger first; press the button to wake it afterward. |
+
+[Factory reset implementation and device test →](docs/SLIM_FACTORY_RESET_POWER_OFF.md)
+
+## Finding your way around
+
+```text
+application/
+  src/drivers/       Sensor, flash, battery, button and LED drivers
+  src/services/      Sampling, Bluetooth, history, calibration and updates
+  boards/            Slim board configuration
+  boot_support/      MCUboot support for this board
+  west.yml           Pinned SDK dependency manifest
+scripts/             Build, programming and diagnostic tools
+tests/               Host regression tests and hardware test fixtures
+docs/                Hardware notes, protocol details and test records
+```
+
+| If you're working on… | Start here |
+| :--- | :--- |
+| Board wiring or a hardware fault | [Production board](docs/board/PRODUCTION_BOARD.md) |
+| App communication | [BLE commands](application/docs/protocol_commands.md) |
+| Firmware installation or signing | [OTA and wired installation](docs/OTA.md) |
+| Sensor recovery | [Automatic recovery](docs/SLIM_AUTOMATIC_RECOVERY.md) |
+| Calibration after a reset | [Settling guidance](docs/SLIM_SETTLING_GUIDANCE.md) |
+| What has actually been tested | [Current status](docs/STATUS.md) |
+| Earlier investigations | [Archive](docs/archive/README.md) |
+
+## Before changing firmware
+
+Run the host tests in the configured SDK environment:
+
+```sh
+/opt/nordic/ncs/toolchains/322ac893fe/bin/python3 -m unittest discover -s tests
+```
+
+Then run `airspot build` and `airspot check`. Changes to sensor timing, charging,
+buttons or power need a real-device test too. Record the device, firmware version
+and result so the next person knows what was checked.
+
+Keep private signing keys and device backups out of commits. Old packages under
+`releases/` are historical artifacts; check their hardware target and test notes
+before using them.

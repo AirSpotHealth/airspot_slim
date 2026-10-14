@@ -1,48 +1,63 @@
-# AirSpot Slim status
+# Firmware status
 
-Updated 13 September 2026. Target: production nRF54L15 Slim, pinned NCS v3.2.1.
-The local source reports 0.17.1; this cleanup is not a published release or a
-hardware-validated replacement for the previously tested 0.17.1 image.
+**0.19.2 candidate · updated 14 October 2026**
 
-## Current firmware
+`main` contains the latest Slim development work. There is no customer release
+for this candidate yet. The supported hardware is the nRF54L15 Slim Rev3A board;
+the SDK is pinned to nRF Connect SDK v3.2.1.
 
-The production configuration provides CO2, temperature/humidity and pressure
-sensing, external-flash history, existing AirSpot BLE commands, persistent
-settings, software ASC, Qi/button/LED handling, signed MCUboot OTA and rollback,
-worker watchdog supervision, factory tests, and persistent fault reporting.
-Use [the workspace commands](../README.md) to build and verify it. Memory figures
-are in [the memory report](../application/MEMORY_USAGE.md).
+## Checked so far
 
-## Experiment cleanup
+| Check | Result |
+| :--- | :--- |
+| Host regression suite | 108 tests passed on 14 October |
+| Firmware build | MCUboot and application built successfully |
+| Artifact checks | Signatures, board configuration and memory layout passed |
+| 81A9DC update | Final 0.19.2 image booted and confirmed after startup and live sensor checks |
+| 81A9DC factory reset | Erasures acknowledged; history erase logged; J-Link measured 0.000 V after power-off |
+| Button wake after that factory reset | Pending |
+| History pointer and settling state after that wake | Pending |
 
-Removed qualification stack/heap reporting, adaptive BLE tuning, forensic flash
-capture and write blocking, regulator PWM control, and compensation timing
-telemetry. Removed their build options, hooks and dedicated experiment tests.
-Diagnostic command IDs 0x35 and 0x36 remain reserved and use the existing unknown
-command behavior; they must not be reassigned to another operation.
-Production BLE parameters, compensation cadence, flash wake recovery, calibration,
-self-tests, fault reporting, settings format and OTA layout remain unchanged.
+The first factory-reset device test, on 0.19.1, hit a watchdog reset. The fix
+moves the operation to the main thread and feeds the watchdog after each erased
+flash sector. The final 0.19.2 test completed without that restart.
 
-Automated host regression tests remain under `tests/`. The older qualification
-plans and results are [archived](archive/README.md); they are not an active work
-queue. No benchmarking, Mesh implementation, device flashing or rollout is part
-of this cleanup. Mesh remains disabled as before.
+[Factory-reset implementation and test record](SLIM_FACTORY_RESET_POWER_OFF.md)
 
-## Known limitations
+## What changed
 
-The [last hardware record](archive/BETA_HARDWARE_CHECK.md) documents signed OTA,
-rollback, watchdog recovery and focused iPhone checks. A pressure-sensor failure
-after supply interruption cleared following a longer cold start, but its cause
-and automatic recovery remain unresolved; see the [investigation](PRESSURE_RECOVERY_INVESTIGATION.md).
-Comprehensive Android/phone interruption coverage, all-mode soak, runtime stack/heap
-peaks and battery measurements remain unproven. Archiving the plans does not
-mark those checks as passed.
+- Sensor faults have bounded recovery attempts. A fresh complete measurement is
+  required before a fault clears.
+- Calibration erasure starts persistent settling guidance. Ordinary restarts
+  retain calibration; full factory reset deliberately erases it.
+- History erasure clears the saved flash cursor as well as the RAM cursor, so
+  startup cannot reload an old page position after a successful erase.
+- Full factory reset clears settings, readings and calibration, then disconnects
+  battery power electronically. The user presses the button to wake the device.
 
-## Cleanup verification
+[Recovery](SLIM_AUTOMATIC_RECOVERY.md) · [Settling](SLIM_SETTLING_GUIDANCE.md) · [History erase](SLIM_HISTORY_ERASE_FIX.md)
 
-The pinned-toolchain production build and signed artifact/wiring checks passed.
-All 60 remaining host tests passed (62 before retirement; two tests existed solely
-for the removed supply and forensic experiments). Compensation cadence, flash
-wake timing, OTA recovery and production fault handling retain regression coverage.
-Whitespace checks and current documentation entry-point links passed. No device
-was flashed and no firmware was published.
+## Still open
+
+**Pressure sensor fault.** 81A9DC previously remained stuck during LPS22HH boot.
+Removing battery power recovered it. Electronic power-off and button wake were
+subsequently demonstrated on a healthy sensor, but the original fault has not
+been reproduced and cleared by that method. Its trigger is still unknown.
+
+**CO₂ agreement.** The differences between the Slims and the nearby Screen have
+not been fully explained. A working driver and valid CRC do not establish
+measurement accuracy, and the Screen has not been established as a calibrated
+reference for these tests.
+
+**Field qualification.** Broader phone/update interruption testing, extended
+runs in every sampling mode, and battery/current measurements remain open.
+Sleeping STCC4 between single shots is an optional qualification build and is
+disabled by default.
+
+**Update access.** Firmware is signed, but the existing BLE management flow is
+unpaired. See the [access boundaries](OTA.md#signing-and-access) before making
+security claims about deployment.
+
+Older test results remain in the [archive](archive/README.md). Their firmware
+versions and hardware conditions matter; they are not blanket approval of the
+current source.

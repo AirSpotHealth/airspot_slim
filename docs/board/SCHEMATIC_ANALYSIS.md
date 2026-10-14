@@ -1,5 +1,9 @@
 # Schematic Analysis - AirSpot Slim
 
+> **Historical Rev1A reference.** For current Slim Rev3A wiring, use the
+> [production board reference](PRODUCTION_BOARD.md). The pin assignments here
+> must not be used to connect the current board.
+
 **Schematic File**: AH-013-0001-SCH CO2 Monitor (Standard Build) PWA Schematics Rev1A.PDF  
 **Revision**: 1A  
 **Date**: 29-Oct-2025  

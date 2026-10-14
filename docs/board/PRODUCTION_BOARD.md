@@ -22,7 +22,7 @@ Source: AH-013-0001-SCH Rev3A, approved 25-Jun-2026. MCU is nRF54L15-QFAA.
 | UART | TX=P1.02, RX=P1.03 | Unused; diagnostics use RTT; NFC disabled |
 | Qi status | P0.00, active low | External R19 pull-up; receiver status, not proof of battery charging |
 | nPM ERR / CHG | P0.01 / P1.08 | Not yet monitored |
-| nPM MODE / SHPACT | P1.09 / P2.03 | Leave schematic pull-down defaults; no shipping command |
+| nPM MODE / SHPACT | P1.09 / P2.03 | MODE retains its pull-down default; full factory reset drives SHPACT to cut battery power |
 | Qi EN1 / EN2 | P1.12 / P1.13 | Leave internal pull-down defaults (enabled with handshake) |
 
 The historical `main.c` override of P1.11/P1.13 was removed. P1.13 is now Qi

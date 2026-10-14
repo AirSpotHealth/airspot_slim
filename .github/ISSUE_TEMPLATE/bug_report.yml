@@ -1,0 +1,37 @@
+name: Device or firmware problem
+description: Report a reproducible fault or unexpected device behavior.
+body:
+  - type: input
+    id: firmware
+    attributes:
+      label: Firmware version
+      placeholder: "For example: 0.19.2"
+    validations:
+      required: true
+  - type: input
+    id: hardware
+    attributes:
+      label: Device and board
+      description: Device ID and board revision, if known.
+  - type: dropdown
+    id: power
+    attributes:
+      label: Power source
+      options:
+        - Battery, off the charging pad
+        - On the charging pad
+        - Bench supply
+        - Unknown
+  - type: textarea
+    id: steps
+    attributes:
+      label: What happened?
+      description: Include the steps, what you expected, and what you observed.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Measurements or logs
+      description: Include relevant RTT lines or measurements. Remove credentials and customer data.
+      render: text

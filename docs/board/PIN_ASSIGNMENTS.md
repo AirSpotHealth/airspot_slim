@@ -1,5 +1,9 @@
 # Complete Pin Assignments - AirSpot Slim
 
+> **Historical Rev1A reference.** For current Slim Rev3A wiring, use the
+> [production board reference](PRODUCTION_BOARD.md). The pin assignments here
+> must not be used to connect the current board.
+
 **Source**: AH-013-0001-SCH CO2 Monitor (Standard Build) PWA Schematics Rev1A, Sheet 5 (nRF54L05)  
 **Verified**: Based on working firmware configuration (application)  
 **Last Updated**: 2026-01-19
