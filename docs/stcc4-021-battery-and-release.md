@@ -81,3 +81,15 @@ Sixteen obsolete original-checkout build directories were selected for reversibl
 - 13 focused Flutter tests passed; analysis of all seven changed app/test files reported no issues. UI was widget-tested, not exercised on a physical phone.
 - Obsolete build cleanup removed 947,131,528 bytes of original files, preserved a 221,377,378-byte recovery archive, and reclaimed 725,754,150 bytes net before the new compiler cache. Archive contents were fully read back before deletion.
 - No device was flashed; provisioning messages in the host tests come from temporary fixtures. No release was published and the Basecamp card remains open.
+
+## 0.21.1 startup correction
+
+The 0.21.1 candidate supersedes 0.21.0 for testing. Sensirion datasheet §1.1.4 describes an initial bypass output of 390 ppm for 20 seconds in continuous mode (two single-shot measurements). It can restart during the initial learning period or after factory reset. Because the host cannot establish the sensor's saved ASC history with certainty, this build conservatively withholds readings until more than 20 seconds after every successful continuous-mode start. It never filters a reading solely because its value is 390 ppm.
+
+Compensation and acquisition continue during bypass. Reports carry startup status rather than a valid CO2 value; those samples cannot confirm OTA health or trigger a sensor-recovery loop. Actual compensation and sensor failures remain faults. Periodic modes publish the first valid post-bypass sample promptly; Now remains request-driven. Double-press LED readout uses white for unavailable samples, never a default green zone.
+
+Conditioning remains enabled **conditionally** after long idle or unknown idle history, as in this candidate's evaluation baseline. The 22-second conditioning command, the 20-second bypass guard and the 12-hour recovery procedure are separate operations. Passing the short guard is not evidence of full warm-up or accuracy.
+
+The updated app shows a neutral “Preparing sensor…” notice on device cards and the current-reading view, with unavailable values in neutral colour. Real errors retain recovery/report controls. The notice clears when a valid report arrives; in Now mode request a fresh reading to update it.
+
+Read-only Nordic probe scan found zero supported devices. No firmware was installed. Battery/current, physical OTA/Bluetooth, 12-hour endurance and reference-meter accuracy qualification remain outstanding.

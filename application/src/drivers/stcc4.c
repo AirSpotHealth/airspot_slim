@@ -226,6 +226,11 @@ int stcc4_start_continuous(void) {
   return ret;
 }
 
+bool stcc4_is_starting(void) {
+  return current_mode == STCC4_MODE_CONTINUOUS &&
+      k_uptime_get() - continuous_start_ms <= 20000;
+}
+
 int stcc4_stop(void) {
   if (!initialized) {
     return -ENODEV;

@@ -11,6 +11,9 @@ class SensorCallbackTests(unittest.TestCase):
         start = text.index('static void sensor_data_callback(const sensor_data_t *data) {')
         end = text.index('\n}', start) + 2
         callback = text[start:end]
+        init_start = text.index('static int initial_measurement_result(')
+        init_end = text.index('\n}', init_start) + 2
+        callback = text[init_start:init_end] + '\n' + callback
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)
             (path / 'test.c').write_text('''#include <assert.h>
@@ -20,6 +23,8 @@ class SensorCallbackTests(unittest.TestCase):
 #define LOG_WRN(...)
 #define LOG_DBG(...)
 static int calibrated, automatic, sent, queued;
+static sensor_data_t latest;
+int sensor_manager_get_data(sensor_data_t *s) {*s=latest;return 0;}
 static void queue_co2_data(const sensor_data_t *data) { queued++; }
 static void software_asc_process_measurement(uint16_t co2) { automatic++; }
 static void ota_service_observe_sample(const sensor_data_t *s) {}
@@ -30,6 +35,10 @@ static bool ble_service_is_connected(void) { return true; }
 static void protocol_send_realtime_co2(void) { sent++; }
 ''' + callback + '''
 int main(void) {
+  latest=(sensor_data_t){.valid=false,.error_code=SENSOR_FAULT_STARTING};
+  assert(initial_measurement_result(-5)==0);
+  latest.error_code=SENSOR_FAULT_CO2;assert(initial_measurement_result(-5)==-5);
+  assert(initial_measurement_result(0)==0);
   sensor_data_t sample = {.co2_ppm=999, .valid=false, .battery_low=true};
   sensor_data_callback(&sample);
   assert(calibrated == 0 && automatic == 0 && sent == 1 && queued == 1);

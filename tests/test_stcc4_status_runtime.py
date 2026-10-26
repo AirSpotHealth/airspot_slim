@@ -44,6 +44,11 @@ static void sample(uint16_t status) {
 }
 int main(void) {
   assert(stcc4_init()==0);
+  now=0;assert(!stcc4_start_continuous() && stcc4_is_starting());
+  now=20000;assert(stcc4_is_starting());now=20001;assert(!stcc4_is_starting());
+  assert(!stcc4_stop() && !stcc4_is_starting());
+  assert(!stcc4_start_continuous() && stcc4_is_starting());
+  now+=20001;assert(!stcc4_is_starting());assert(!stcc4_stop());
   assert(stcc4_enable_testing_mode()==0 && last_command==0x3fbc);
   stcc4_data_t d;
   sample(0x0004);assert(stcc4_read(&d)==-EACCES && !d.valid);
@@ -83,6 +88,11 @@ static void sample(uint16_t status) {
 }
 int main(void) {
   assert(stcc4_init()==0);
+  now=0;assert(!stcc4_start_continuous() && stcc4_is_starting());
+  now=20000;assert(stcc4_is_starting());now=20001;assert(!stcc4_is_starting());
+  assert(!stcc4_stop() && !stcc4_is_starting());
+  assert(!stcc4_start_continuous() && stcc4_is_starting());
+  now+=20001;assert(!stcc4_is_starting());assert(!stcc4_stop());
   assert(stcc4_disable_testing_mode()==0 && last_command==0x3f3d);
   stcc4_data_t d;
   sample(0x0004);assert(stcc4_read(&d)==0 && d.valid && d.co2_ppm==800);

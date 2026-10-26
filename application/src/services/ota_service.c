@@ -105,6 +105,7 @@ void ota_service_startup_complete(bool healthy)
 void ota_service_observe_sample(const sensor_data_t *data)
 {
     static bool sensor_failed;
+    if (!data->valid && data->error_code == SENSOR_FAULT_STARTING) return;
     if (data->valid) {
         sensor_failed = false;
         atomic_set(&sample_healthy, 1);

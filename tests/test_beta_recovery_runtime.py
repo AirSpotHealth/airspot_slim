@@ -16,6 +16,7 @@ class RecoveryTests(unittest.TestCase):
 #include <stddef.h>
 #include <services/health_service.h>
 #include <services/diagnostics.h>
+#define SENSOR_FAULT_STARTING 0x40
 typedef struct {bool valid; uint8_t error_code;} sensor_data_t;
 typedef int atomic_t;
 #define atomic_get(p) (*(p))
@@ -73,6 +74,10 @@ int main(void) {
  assert(history_records[failures+1].type==RECORD_TYPE_DFU_FAIL && history_records[failures+1].value==0);
  now=0;ota_service_init();ota_service_startup_complete(true);
  ota_service_poll();assert(confirms==0);
+ unsigned startup_events=history_count;
+ sensor_data_t starting={false,SENSOR_FAULT_STARTING};
+ ota_service_observe_sample(&starting);ota_service_poll();
+ assert(confirms==0 && history_count==startup_events);
  sensor_data_t good={true};ota_service_observe_sample(&good);ota_service_poll();
  assert(confirms==1);
  unsigned before=history_count;

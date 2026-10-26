@@ -69,6 +69,7 @@ static bool initialized = false;
  * acquisition cadence. The battery driver separately gates OTA with fresh data. */
 static int64_t battery_due_ms;
 static uint16_t sampled_battery_mv;
+static bool pending_startup_report;
 #endif
 static bool use_single_shot_mode =
     false; /* Track if using single-shot for STCC4 */
@@ -162,7 +163,7 @@ int sensor_manager_self_test(uint16_t *result)
  * failed read; the report is invalid until all compensation writes succeed. */
 static void set_sensor_fault(uint8_t code)
 {
-  recovery_observe(false);
+  if (code != SENSOR_FAULT_STARTING) recovery_observe(false);
   k_mutex_lock(&data_mutex, K_FOREVER);
   latest_data.valid = false;
   latest_data.error_code = code;
@@ -563,6 +564,19 @@ static int do_acquisition_locked(bool publish)
   }
 #endif
 
+  bool starting = false;
+#if defined(CONFIG_AIRSPOT_CONTINUOUS_ALL_MODES)
+  /* Status checks remain usable during bypass, but placeholder measurements
+   * must not reach history, alerts, LED zones, recovery or OTA health as valid. */
+  starting = all_ok && !ret && stcc_data.valid && stcc4_is_starting();
+  if (starting) {
+    all_ok = false;
+    data.error_code = SENSOR_FAULT_STARTING;
+    data.co2_ppm = 0;
+    pending_startup_report = true;
+  }
+#endif
+
   /* 5. Read battery */
 #if defined(CONFIG_AIRSPOT_CONTINUOUS_ALL_MODES)
   if (!sampled_battery_mv || k_uptime_get() >= battery_due_ms) {
@@ -586,7 +600,7 @@ static int do_acquisition_locked(bool publish)
 
   data.valid = all_ok;
   if (!all_ok && !data.error_code) data.error_code = SENSOR_FAULT_CO2;
-  if (!data.valid) {
+  if (!data.valid && !starting) {
     int sample_error = ret ? ret : (!stcc_data.valid ? -EACCES :
         (stcc_data.co2_ppm == 0 ? -ERANGE : 0));
     diagnostics_record(DIAG_SAMPLE_FAILED,
@@ -600,7 +614,7 @@ static int do_acquisition_locked(bool publish)
 #if IS_ENABLED(CONFIG_AIRSPOT_STCC4_CONDITION_ON_BOOT)
   if (stcc_data.valid) conditioning_observe();
 #endif
-  recovery_observe(data.valid);
+  if (!starting) recovery_observe(data.valid);
   settling_observe(data.valid && !use_single_shot_mode &&
                    user_settings_get_native_asc_mode() == 2);
 
@@ -638,6 +652,17 @@ static int do_acquisition_locked(bool publish)
   ota_service_observe_sample(&data);
 #endif
 
+#if defined(CONFIG_AIRSPOT_CONTINUOUS_ALL_MODES)
+  if (data.valid && pending_startup_report) {
+    pending_startup_report = false;
+    /* Clear the startup notice promptly in periodic modes. Now still waits
+     * for an explicit report request. */
+    if (measurement_interval_ms != 0) {
+      publish = true;
+      next_report_ms = k_uptime_get() + measurement_interval_ms;
+    }
+  }
+#endif
   /* Notify callback */
   if (publish && user_callback)
   {
@@ -1064,7 +1089,8 @@ void sensor_manager_get_recovery_diagnostic(sensor_recovery_diagnostic_t *out)
 
 static bool recovery_due(void)
 {
-  return recovery_enabled && failed_since >= 0 &&
+  return recovery_enabled && latest_data.error_code != SENSOR_FAULT_STARTING &&
+      failed_since >= 0 &&
       k_uptime_get() - failed_since >= 30000 && k_uptime_get() >= recovery_after;
 }
 

@@ -328,8 +328,8 @@ static void co2_readout_work_handler(struct k_work *work) {
 
   /* Phase 1: flash the LAST reading's color for the full readout window as
    * immediate feedback while a fresh measurement is taken. */
-  led_color_t last_color = LED_COLOR_GREEN;
-  if (sensor_manager_get_data(&data) == 0) {
+  led_color_t last_color = LED_COLOR_WHITE;
+  if (sensor_manager_get_data(&data) == 0 && data.valid) {
     last_color = led_indicator_get_co2_color(
         user_settings_apply_co2_correction(data.co2_ppm));
   }
@@ -342,8 +342,8 @@ static void co2_readout_work_handler(struct k_work *work) {
    * button queue or the system queue that animates the flash. */
   sensor_manager_measure_now();
 
-  led_color_t new_color = last_color;
-  if (sensor_manager_get_data(&data) == 0) {
+  led_color_t new_color = LED_COLOR_WHITE;
+  if (sensor_manager_get_data(&data) == 0 && data.valid) {
     uint16_t corrected = user_settings_apply_co2_correction(data.co2_ppm);
     new_color = led_indicator_get_co2_color(corrected);
     LOG_INF("Double tap: new reading CO2 %u ppm", corrected);
@@ -515,6 +515,15 @@ static void queue_co2_data(const sensor_data_t *data) {
   SAMPLE(data->is_charging, RECORD_TYPE_SAMPLE_QI);
   (void)history_event_batch(events, n);
 #undef SAMPLE
+}
+
+/* Pending bypass is not failed initialization. OTA still requires a valid
+ * post-bypass sample before it can confirm the trial image. */
+static int initial_measurement_result(int result) {
+  sensor_data_t data;
+  if (result && sensor_manager_get_data(&data) == 0 && !data.valid &&
+      data.error_code == SENSOR_FAULT_STARTING) return 0;
+  return result;
 }
 
 /* Sensor data callback - called when new measurement is available */
@@ -1043,7 +1052,7 @@ int main(void) {
     LOG_INF("Sensor mode: ON DEMAND (manual measurements only)");
     /* Do one initial measurement */
     ret = sensor_manager_measure_now();
-    startup_healthy &= startup_check(14, ret);
+    startup_healthy &= startup_check(14, initial_measurement_result(ret));
   } else {
     ret = sensor_manager_start(interval_ms);
     startup_healthy &= startup_check(15, ret);

@@ -18,6 +18,8 @@ static uint8_t user_settings_get_power_mode(void){return saved;}
 static int sensor_manager_measure_now(void){measurements++;return 0;}
 static int sensor_manager_start(uint32_t ms){interval=ms;return 0;}
 static int sensor_manager_set_power_mode(uint8_t mode){applied=mode;return 0;}
+/* Startup-result semantics are exercised with real code in test_sensor_callback. */
+static int initial_measurement_result(int rc){return rc;}
 static bool startup_check(uint16_t subsystem,int rc){return rc==0;}
 static void boot(void){int ret;bool startup_healthy=true;
 '''+s[a:b]+r'''

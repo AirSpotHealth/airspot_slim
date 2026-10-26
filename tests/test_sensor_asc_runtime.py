@@ -54,6 +54,8 @@ static uint16_t self_test_word;
 static int stale_policy_reads;static bool force_paused_status, unknown_status_mapping;
 static int64_t now=1,last_feed;static bool check_watchdog;
 static bool internal_paused, manual, callback_valid, continuous, require_continuous;
+static bool bypass_active;
+bool stcc4_is_starting(void) {return bypass_active;}
 static int ota_samples;
 void ota_service_observe_sample(const sensor_data_t *d) {if(d->valid)ota_samples++;}
 static uint8_t auto_flag, power=2;
@@ -449,11 +451,29 @@ int main(void) {
   count=callbacks;assert(!sensor_manager_measure_now());assert(callbacks==count+1);
  }
  assert(!sensor_manager_set_power_mode(0));
+ bypass_active=true;mock_raw_co2=390;
+ int os=ota_samples, aw=ambient_writes, pw=pressure_writes;
+ for(int i=0;i<22;i++) {
+  now+=1000;sensor_work_handler(NULL);
+  assert(!latest_data.valid && latest_data.error_code==SENSOR_FAULT_STARTING);
+  assert(latest_data.co2_ppm==0 && continuous);
+ }
+ assert(ambient_writes==aw+22 && pressure_writes==pw+22 && ota_samples==os);
+ assert(sensor_manager_measure_now()!=0 && !callback_valid);
+ bypass_active=false;now+=1000;sensor_work_handler(NULL);
+ assert(latest_data.valid && latest_data.co2_ppm==390); /* Real 390 remains valid. */
  int count=callbacks;ambient_error=-EIO;now+=1000;sensor_work_handler(NULL);
  assert(!latest_data.valid && latest_data.error_code==SENSOR_FAULT_AMBIENT && callbacks==count);
  ambient_error=0;now+=1000;sensor_work_handler(NULL);assert(latest_data.valid);
  assert(!sensor_manager_set_power_mode(2));
  assert(continuous && running);
+ bypass_active=true;count=callbacks;now+=1000;sensor_work_handler(NULL);
+ assert(!latest_data.valid && callbacks==count && !recovery_due());
+ ambient_error=-EIO;now+=1000;sensor_work_handler(NULL);
+ assert(latest_data.error_code==SENSOR_FAULT_AMBIENT); /* Do not hide real faults. */
+ ambient_error=0;now+=1000;sensor_work_handler(NULL);
+ bypass_active=false;now+=1000;sensor_work_handler(NULL);
+ assert(latest_data.valid && callbacks==count+1); /* Prompt ready report in slow mode. */
  sensor_manager_stop();assert(!running);
 }
 '''

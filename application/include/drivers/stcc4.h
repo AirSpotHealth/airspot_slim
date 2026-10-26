@@ -60,6 +60,10 @@ typedef struct {
  */
 int stcc4_init(void);
 
+/* Conservative bypass guard after every successful continuous-mode start.
+ * It does not filter by ppm or replace the longer initial/idle warm-up. */
+bool stcc4_is_starting(void);
+
 /**
  * @brief Reset the sensor's measurement state via a sleep/wake cycle.
  *
