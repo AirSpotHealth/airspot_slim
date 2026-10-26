@@ -9,9 +9,9 @@
  * Provides fade, flash, and solid patterns with timed durations.
  *
  * LED Color Mapping (RGB LED):
- * - Red:   LED 0
- * - Green: LED 1
- * - Blue:  LED 2
+ * - Red:   LED 1
+ * - Green: LED 2
+ * - Blue:  LED 0
  * - White: All LEDs
  * - Amber: Red + Green
  */

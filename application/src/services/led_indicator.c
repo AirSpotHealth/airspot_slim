@@ -76,7 +76,7 @@ static void stop_pattern_internal(void) {
   state.pattern = LED_PATTERN_OFF;
   state.continuous = false;
   state.sequence_phase = 0;
-  led_driver_all_off();
+  set_color(LED_COLOR_OFF, 0);
 }
 
 bool led_indicator_is_active(void) { return state.pattern != LED_PATTERN_OFF; }
@@ -85,8 +85,44 @@ bool led_indicator_is_active(void) { return state.pattern != LED_PATTERN_OFF; }
  * Color Helper Functions
  * ======================================== */
 
+/* Rev3A LEDs are on P2, outside PWM20/21/22's P1 routing. Use a
+ * short timer interrupt to halve green's duty only while amber is visible.
+ * No busy-wait or workqueue dependency; stop it during flash gaps and off. */
+static struct k_spinlock color_lock;
+static bool amber_pwm_active;
+static bool amber_green_on;
+
+static void amber_pwm_tick(struct k_timer *timer) {
+  ARG_UNUSED(timer);
+  k_spinlock_key_t key = k_spin_lock(&color_lock);
+  if (amber_pwm_active) {
+    amber_green_on = !amber_green_on;
+    led_driver_set_brightness(LED_GREEN, amber_green_on ? 100 : 0);
+  }
+  k_spin_unlock(&color_lock, key);
+}
+
+K_TIMER_DEFINE(amber_pwm_timer, amber_pwm_tick, NULL);
+
 static void set_color(led_color_t color, uint8_t brightness) {
-  /* Turn off all LEDs first */
+  k_spinlock_key_t key = k_spin_lock(&color_lock);
+  bool amber = color == LED_COLOR_AMBER && brightness > 0;
+  if (amber) {
+    led_driver_set_brightness(LED_RED, brightness);
+    led_driver_set_brightness(LED_BLUE, 0);
+    if (!amber_pwm_active) {
+      amber_pwm_active = true;
+      amber_green_on = true;
+      led_driver_set_brightness(LED_GREEN, 100);
+      /* 1 ms on + 1 ms off = 500 Hz, 50% green duty. */
+      k_timer_start(&amber_pwm_timer, K_MSEC(1), K_MSEC(1));
+    }
+    k_spin_unlock(&color_lock, key);
+    return;
+  }
+
+  amber_pwm_active = false;
+  k_timer_stop(&amber_pwm_timer);
   led_driver_set_brightness(LED_RED, 0);
   led_driver_set_brightness(LED_GREEN, 0);
   led_driver_set_brightness(LED_BLUE, 0);
@@ -106,16 +142,10 @@ static void set_color(led_color_t color, uint8_t brightness) {
     led_driver_set_brightness(LED_GREEN, brightness);
     led_driver_set_brightness(LED_BLUE, brightness);
     break;
-  case LED_COLOR_AMBER:
-    /* Amber = Red + Green (orange-ish) */
-    led_driver_set_brightness(LED_RED, brightness);
-    led_driver_set_brightness(LED_GREEN, brightness / 2); /* Less green */
-    break;
-  case LED_COLOR_OFF:
   default:
-    /* Already off */
     break;
   }
+  k_spin_unlock(&color_lock, key);
 }
 
 /* ========================================
@@ -377,7 +407,7 @@ static void start_pattern(led_pattern_t pattern, led_color_t color,
 
   /* Stop any existing pattern */
   k_work_cancel_delayable(&pattern_work);
-  led_driver_all_off();
+  set_color(LED_COLOR_OFF, 0);
 
   /* Set new pattern state */
   state.pattern = pattern;
@@ -435,7 +465,7 @@ void led_indicator_start_flash_pulse(led_color_t color, uint32_t period_ms,
 
   /* Stop any existing pattern */
   k_work_cancel_delayable(&pattern_work);
-  led_driver_all_off();
+  set_color(LED_COLOR_OFF, 0);
 
   /* Set new pattern state */
   state.pattern = LED_PATTERN_FLASH;
@@ -470,7 +500,7 @@ void led_indicator_start_fade_pulse(led_color_t color, uint32_t period_ms,
 
   /* Stop any existing pattern */
   k_work_cancel_delayable(&pattern_work);
-  led_driver_all_off();
+  set_color(LED_COLOR_OFF, 0);
 
   /* Set new pattern state. flash_on_ms carries the fade in+out window. */
   state.pattern = LED_PATTERN_FADE_PULSE;
@@ -523,7 +553,7 @@ void led_indicator_show_charging_normal(bool device_on, uint16_t co2_ppm) {
 
   /* Stop any existing pattern */
   k_work_cancel_delayable(&pattern_work);
-  led_driver_all_off();
+  set_color(LED_COLOR_OFF, 0);
 
   /* Set up two-phase sequence */
   state.pattern = LED_PATTERN_SOLID;
@@ -559,7 +589,7 @@ void led_indicator_show_connected(uint16_t co2_ppm) {
 
   /* Stop any existing pattern */
   k_work_cancel_delayable(&pattern_work);
-  led_driver_all_off();
+  set_color(LED_COLOR_OFF, 0);
 
   /* Set up two-phase sequence: white then CO2 color */
   state.pattern = LED_PATTERN_SOLID;
