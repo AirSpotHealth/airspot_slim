@@ -486,11 +486,35 @@ static void button_event_handler(button_event_t event) {
 }
 
 static void queue_co2_data(const sensor_data_t *data) {
-  if (!data || !data->valid) {
-    return;
+  if (!data) return;
+  /* One timestamp and all-or-nothing enqueue; diagnostics can cross BLE pages.
+   * Keep the eight-byte legacy record layout and all existing type IDs. */
+  struct history_event events[12];
+  size_t n = 0;
+#define SAMPLE(value_, type_) \
+  events[n++] = (struct history_event){(uint16_t)(value_), type_}
+  SAMPLE(data->sample_flags, RECORD_TYPE_SAMPLE_FLAGS);
+  if (data->sample_flags & 1) {
+    SAMPLE(data->raw_co2_ppm, RECORD_TYPE_RAW_CO2);
+    SAMPLE(data->sensor_status, RECORD_TYPE_SAMPLE_STATUS);
   }
-  (void)history_event_record(user_settings_apply_co2_correction(data->co2_ppm),
-                             RECORD_TYPE_CO2);
+  if (data->valid) {
+    SAMPLE(user_settings_apply_co2_correction(data->co2_ppm), RECORD_TYPE_CO2);
+    SAMPLE(user_settings_get_co2_correction(), RECORD_TYPE_SAMPLE_CORRECTION);
+    SAMPLE((int16_t)(data->temperature_c * 100.0f), RECORD_TYPE_SAMPLE_TEMPERATURE);
+    SAMPLE(data->humidity_rh * 100.0f, RECORD_TYPE_SAMPLE_HUMIDITY);
+    SAMPLE(data->pressure_hpa, RECORD_TYPE_SAMPLE_PRESSURE);
+  }
+  if (data->battery_mv) {
+    SAMPLE(data->battery_percent, RECORD_TYPE_SAMPLE_BATTERY_PERCENT);
+    SAMPLE(data->battery_mv, RECORD_TYPE_SAMPLE_BATTERY_MV);
+  }
+  /* 0=software disabled, 1=software enabled, 2=native paused, 3=native learning. */
+  uint8_t native = user_settings_get_native_asc_mode();
+  SAMPLE(native ? native + 1 : !!user_settings_get_auto_calibrate(), RECORD_TYPE_SAMPLE_ASC_MODE);
+  SAMPLE(data->is_charging, RECORD_TYPE_SAMPLE_QI);
+  (void)history_event_batch(events, n);
+#undef SAMPLE
 }
 
 /* Sensor data callback - called when new measurement is available */
@@ -502,6 +526,7 @@ static void sensor_data_callback(const sensor_data_t *data) {
   ota_service_observe_sample(data);
 
   if (!data->valid) {
+    queue_co2_data(data);
     if (ble_service_is_connected()) protocol_send_realtime_co2();
     return;
   }

@@ -7,6 +7,13 @@ source "Kconfig.zephyr"
 # AirSpot-specific configuration
 menu "AirSpot Configuration"
 
+config AIRSPOT_SENSOR_NATIVE_ONLY
+	bool "Rob evaluation: native ASC and FRC only"
+	default n
+	help
+	  Bypass host offsets and use STCC4 FRC for app manual calibration.
+	  Default legacy host policies to native ASC on; retain native off.
+
 config AIRSPOT_STCC4_SINGLE_SHOT_SLEEP
 	bool "Sleep STCC4 between single shots (qualification build)"
 	default n
@@ -44,15 +51,13 @@ config AIRSPOT_BUTTON_LONG_PRESS_TIMEOUT_MS
 	  Timeout in milliseconds for detecting long button press.
 
 config AIRSPOT_STCC4_CONDITION_ON_BOOT
-	bool "Run STCC4 conditioning at startup"
+	bool "Condition STCC4 after long idle or missing timestamp"
 	default y
 	help
-	  Perform the STCC4 conditioning command (~22s) once during sensor
-	  init. Sensirion recommends conditioning whenever the sensor has not
-	  measured for >3 hours (i.e. after a cold boot) before the first
-	  measurement, otherwise the thermal-conductivity reading is biased
-	  (typically reads high). Adds ~24s to a cold boot; disable only if a
-	  fast boot is more important than first-reading accuracy.
+	  Missing clean-shutdown timestamp: condition once at startup.
+	  Otherwise wait for app time and condition only if the pre-startup
+	  idle gap exceeded 3 hours. Track longer single-shot idle periods
+	  with uptime. Unexpected power loss invalidates the timestamp.
 
 config AIRSPOT_BOOT_LED_SELFTEST
 	bool "Run the LED self-test (color sweep) at boot"

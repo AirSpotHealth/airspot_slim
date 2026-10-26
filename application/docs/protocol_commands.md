@@ -435,3 +435,101 @@ only at erase stage 4/5. The report is volatile and is retained across ordinary
 sensor restarts, but not MCU reboots. A failed erase still attempts to restore
 ASC policy and sampling; the original error is preserved even after recovery.
 A successful recovery does not mean calibration history was erased.
+
+## Per-measurement diagnostic history (unreleased)
+
+The eight-byte history record and existing type IDs are unchanged. Type 23
+remains reserved for the mobile app's persisted `empty` sentinel. New types are:
+
+| ID | Value |
+| --- | --- |
+| 24 | Raw CRC-checked STCC4 CO2, signed int16 ppm |
+| 25 | Applied software correction, signed int16 ppm |
+| 26 | SHT40 temperature, signed int16 hundredths of Celsius |
+| 27 | SHT40 humidity, unsigned hundredths of %RH |
+| 28 | LPS22HH pressure, integer hPa |
+| 29 | Display battery estimate, percent |
+| 30 | Filtered battery voltage, mV |
+| 31 | ASC policy: 0 software off, 1 software on, 2 native paused, 3 native learning |
+| 32 | CRC-checked STCC4 status word, unsigned |
+| 33 | Flags: bit 0 raw present, bit 1 driver accepted, bit 2 full sample accepted, bit 3 conditioning completed, bit 4 continuous operation, bit 5 selected mode present, bits 6–7 selected mode (0 on-demand / 1 low / 2 mid / 3 high) |
+| 34 | Qi receiver active, 0/1 (not proof of battery charging) |
+| 35 | Successful measurement mode change: 0 on-demand / 1 low / 2 mid / 3 high |
+
+Each attempt is enqueued as a batch with one timestamp. Accepted samples include
+the existing type-0 final CO2 record. Rejected attempts contain flags, policy,
+power information and raw/status if CRC checked; they never contain a fabricated
+valid CO2 reading or compensation inputs presented as fresh. Unknown battery
+voltage (zero) omits both battery fields. Battery is the existing filtered display
+estimate; the driver can retain its prior estimate following an ADC read failure.
+Native sensor-internal calibration offsets are not exposed by these records.
+Native paused means learning is paused, not that its learned baseline is erased.
+Conditioning complete is the firmware startup state, not an accuracy or ASC
+learning-completion guarantee. Reset/fault events retain their existing IDs.
+
+The mobile CSV consolidates diagnostic records into columns on one row per
+measurement. It starts with DateTime, Type and CO2 (ppm); event values/details
+have separate columns, so calibration and mode changes cannot be mistaken for
+CO2 measurements. Failed attempts and partial groups each produce one labelled
+row. Native ASC policy changes without an explicit event are labelled with the
+first reading where the change was observed, not an invented switch time.
+The app joins by device and timestamp across pages, never carrying present-day
+battery or settings into old readings. Conflicting same-second records leave
+ambiguous diagnostic columns blank. Older firmware leaves unavailable fields
+blank. Import reconstructs the measurement records from the new columns and
+continues to support legacy CSVs. No firmware reflash or Isar/cloud schema change
+is needed for the consolidated layout; the 0.20.0 wire format is unchanged.
+
+A complete accepted sample uses 12 records / 96 bytes, compared with 8 bytes before.
+The ~1.6 MiB history partition holds roughly 17,500 complete samples (about 36 days
+at three minutes, or 24 hours at five seconds), less with other events. Downloads
+and flash writes increase accordingly. The queue accepts/rejects each batch as a
+unit and reserves space for events, but flash persistence is still record-by-record;
+a power loss can leave a partial group, whose missing CSV fields remain blank.
+
+For a continuous comparison use the existing High power mode (STCC4 continuous,
+five-second reporting). Low mode uses three-minute single shots. Calibration policy
+is separately recorded and should be held constant during comparisons. No new mode
+command or automatic change to calibration policy is introduced.
+
+Before release: install the updated app and firmware on a test Slim; compare CSV
+raw/final/correction, mode changes and battery with live diagnostics; download
+across page boundaries; exercise reconnect/power interruption and a sensor fault.
+These checks require hardware and have not been established by host tests.
+
+The CSV's `Measurement Mode` column names the selected cadence on each reading
+and on timestamped `Measurement Mode Change` event rows. Failed requests and
+requests for the already selected mode do not emit change events. `Sensor
+Operation` separately describes continuous versus single-shot acquisition. Mode
+bits are captured from the active sensor schedule under its measurement lock;
+older flag records without bit 5 leave the selected-mode column blank.
+
+
+### Native evaluation build 0.20.2: idle conditioning
+
+With `CONFIG_AIRSPOT_STCC4_CONDITION_ON_BOOT=y`, this option now selects the
+idle policy rather than unconditional conditioning at every boot. A missing or
+corrupt clean-shutdown timestamp causes one startup conditioning cycle. Otherwise
+normal sensing starts while the saved timestamp is held in RAM; `CMD_SET_TIMEBASE`
+resolves the pre-startup idle gap using the app epoch and monotonic startup time.
+Only a gap strictly greater than 10,800 seconds schedules conditioning. A delayed
+connection does not count time already spent measuring as idle. Invalid/backward
+clock values leave the decision pending. Subsequent time syncs do not repeat it.
+
+The asynchronous transaction shares the native-calibration lease, stops sensing,
+conditions for 22 seconds, restores the selected measurement mode, and publishes
+a fresh reading. It does not send FRC or factory reset and does not change ASC.
+Known single-shot/on-demand idle gaps are tracked with monotonic uptime; an unused
+on-demand device is conditioned when another measurement is requested, rather than
+repeatedly every three hours. Failed conditioning is retried with a 30-second delay.
+
+The separate CRC-protected `conditioning/last` NVS key is invalidated before
+startup measurements and written with the last successful sensor-read timestamp
+on clean shutdown, provided valid app time was received and the decision resolved.
+Unexpected power loss/reboot therefore becomes a missing timestamp on next start,
+not a stale inferred idle gap. No per-reading flash writes are required. A build
+upgrade has no such timestamp initially and conditions once. Pending/failed time
+synchronization never silently substitutes an uptime value for Unix time.
+
+This policy does not certify STCC4 accuracy. The separate 12-hour settling tracker
+is customer guidance after an explicit erase; it is not an internal ASC-ready flag.

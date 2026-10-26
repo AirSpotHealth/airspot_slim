@@ -26,7 +26,11 @@ K_MUTEX_DEFINE(settings_mutex);
 /* Native ASC is opt-in, including upgrades from pre-native settings.
  * A build overlay must never change an existing device calibration policy.
  * Magic-tagged native preferences are restored unchanged by decode_settings. */
+#if defined(CONFIG_AIRSPOT_SENSOR_NATIVE_ONLY)
+#define DEFAULT_NATIVE_ASC_MODE 2
+#else
 #define DEFAULT_NATIVE_ASC_MODE 0
+#endif
 
 /* Default settings */
 static user_settings_t settings = {
@@ -227,6 +231,14 @@ int user_settings_init(void)
     LOG_ERR("Settings load failed: %d", rc);
     return rc;
   }
+
+#if defined(CONFIG_AIRSPOT_SENSOR_NATIVE_ONLY)
+  /* Explicit evaluation build: never revive host learning or a saved offset.
+   * A saved native OFF preference remains OFF. No sensor history is erased. */
+  if (!settings.native_asc_mode) settings.native_asc_mode = 2;
+  settings.auto_calibrate = 0;
+  settings.co2_correction = 0;
+#endif
 
   /* Migrate only after every legacy key has been loaded, independent of order. */
   if (!snapshot_loaded) {

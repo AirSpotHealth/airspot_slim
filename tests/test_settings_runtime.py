@@ -8,7 +8,7 @@ from native_support import BYTEORDER, CRC
 ROOT = Path(__file__).resolve().parents[1]
 
 class SettingsRuntimeTests(unittest.TestCase):
-    def _run_settings(self, native=False, experiment=False):
+    def _run_settings(self, native=False, experiment=False, rob=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             headers = {
@@ -209,7 +209,27 @@ int main(void) {
   assert(settings.native_asc_mode==2 && settings.power_mode==3 && settings.co2_correction==0);
 """ + text[at:]
             source.write_text(text)
-            subprocess.run(['cc', *(['-DCONFIG_AIRSPOT_STCC4_INTERNAL_ASC_EXPERIMENT=1'] if experiment else []), '-std=c11', '-fsanitize=address,undefined',
+            if rob:
+                text=source.read_text().split('int main(void) {')[0]+r'''
+int main(void) {
+ assert(settings.native_asc_mode==2);
+ settings.native_asc_mode=0;settings.co2_correction=-350;settings.auto_calibrate=1;
+ settings.power_mode=2;
+ assert(!user_settings_init());
+ assert(settings.native_asc_mode==2 && settings.power_mode==2);
+ assert(user_settings_apply_co2_correction(800)==800 && !settings.co2_correction);
+ assert(!settings.auto_calibrate && user_settings_get_auto_calibrate()==1);
+ assert(!user_settings_set_native_asc_mode(1));
+ initialized=false;assert(!user_settings_init());
+ assert(settings.native_asc_mode==1 && user_settings_apply_co2_correction(800)==800);
+ assert(!user_settings_get_auto_calibrate());
+ assert(!user_settings_set_native_asc_mode(2));
+ assert(user_settings_apply_co2_correction(800)==800);
+ return 0;
+}
+'''
+                source.write_text(text)
+            subprocess.run(['cc', *(['-DCONFIG_AIRSPOT_SENSOR_NATIVE_ONLY=1'] if rob else []), *(['-DCONFIG_AIRSPOT_STCC4_INTERNAL_ASC_EXPERIMENT=1'] if experiment else []), '-std=c11', '-fsanitize=address,undefined',
                             '-I', str(root), '-I', str(ROOT / 'application/include'),
                             str(source), '-o', str(root / 'test')], check=True)
             subprocess.run([str(root / 'test')], check=True)
@@ -223,3 +243,6 @@ int main(void) {
     def test_experiment_overlay_cannot_enable_native_asc_during_legacy_upgrade(self):
         self._run_settings(experiment=True)
         self._run_settings(native=True, experiment=True)
+
+    def test_rob_defaults_bypass_offsets_and_retain_native_off(self):
+        self._run_settings(rob=True)

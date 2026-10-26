@@ -114,9 +114,15 @@ void software_asc_process_measurement(uint16_t raw_ppm) {
   if (average < asc.lowest) asc.lowest = average;
   if (asc.lowest < 420) {
     int32_t adjustment = 420 - (int32_t)asc.lowest;
-    int32_t next = (int32_t)user_settings_get_co2_correction() + adjustment;
+    int16_t old = user_settings_get_co2_correction();
+    int32_t next = (int32_t)old + adjustment;
     if (!commit_correction(next)) {
-      log_record(adjustment, RECORD_TYPE_ASC_ADJUSTMENT);
+      const struct history_event events[] = {
+        {(uint16_t)old, RECORD_TYPE_CALIBRATION_CORRECTION_OLD},
+        {(uint16_t)next, RECORD_TYPE_CALIBRATION_CORRECTION},
+        {(uint16_t)adjustment, RECORD_TYPE_ASC_ADJUSTMENT},
+      };
+      (void)history_event_batch(events, ARRAY_SIZE(events));
       asc.lowest = 420;
       /* Old samples used the old correction; do not correct them twice. */
       asc.count = 0;

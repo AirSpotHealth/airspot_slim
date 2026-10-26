@@ -14,6 +14,9 @@ SHIMS = r'''
 #include <services/diagnostics.h>
 #define K_MUTEX_DEFINE(n) static int n
 #define K_FOREVER -1
+#define IS_ENABLED(x) 1
+static unsigned conditioning_syncs;
+static void conditioning_time_sync(uint32_t t){conditioning_syncs++;}
 #define __noinit
 #define LOG_MODULE_REGISTER(...)
 #define LOG_ERR(...)
@@ -62,6 +65,7 @@ class HistoryEventsTests(unittest.TestCase):
         assert(history_event_batch(group,3)==0);
         history_time_sync(1789600010); /* Only one first-sync marker per boot. */
         assert(history_event_record(600,RECORD_TYPE_CO2)==0);
+        assert(conditioning_syncs==2);
         storage_error=-EIO;assert(history_events_process()==-EIO);
         assert(count==7 && stored_count==0 && diag_count==1);
         storage_error=0;history_events_flush();assert(count==0 && stored_count==7);

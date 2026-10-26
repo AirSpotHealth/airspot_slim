@@ -43,6 +43,13 @@ typedef struct {
   uint16_t co2_ppm;    /* ppm from STCC4 */
   float pressure_hpa;  /* hPa from LPS22HH */
 
+  /* Diagnostic evidence from this attempt; raw/status require flag bit 0. */
+  int16_t raw_co2_ppm;
+  uint16_t sensor_status;
+  uint8_t sample_flags; /* 1=raw valid, 2=driver valid, 4=accepted,
+                          8=conditioning complete, 16=continuous mode,
+                          32=mode present, bits 6-7=selected mode (0..3) */
+
   /* Power */
   uint16_t battery_mv;     /* mV */
   uint8_t battery_percent; /* 0-100% */

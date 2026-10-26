@@ -728,7 +728,12 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len)
   case CMD_SET_POWER_MODE:
     if (len >= 6)
     {
+#if defined(CONFIG_AIRSPOT_SENSOR_NATIVE_ONLY)
+      int rc = calibration_service_is_active() ? -EBUSY :
+          sensor_manager_change_power_mode(frame[4]);
+#else
       int rc = sensor_manager_change_power_mode(frame[4]);
+#endif
       if (rc) LOG_WRN("Power mode change failed: %d", rc);
     }
     protocol_send_device_state();

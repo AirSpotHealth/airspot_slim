@@ -6,7 +6,7 @@ class ConditioningRecoveryTests(unittest.TestCase):
  def test_success_busy_recovery_and_permanent_failure(self):
   source=(ROOT/'application/src/services/sensor_manager.c').read_text()
   begin=source.index('  LOG_INF("STCC4 conditioning (~22s, one time)...");')
-  end=source.index('\n#endif',begin)
+  end=source.index('\n  }\n#endif',begin)
   code='''
 #include <assert.h>
 #include <errno.h>
@@ -23,6 +23,7 @@ static int stcc4_exit_sleep_mode(void){wakes++;return 0;}
 static int stcc4_stop(void){sensor_stops++;return stop_error;}
 static bool boot_attempt=true, stcc4_conditioned;
 static void conditioning_keepalive(void){feeds++;}
+static void conditioning_completed(void){}
 static void k_msleep(int ms){assert(ms<=2000);elapsed+=ms;}
 static void led_indicator_start_flash_pulse(int a,int b,int c){}
 static void led_indicator_stop(void){stops++;}

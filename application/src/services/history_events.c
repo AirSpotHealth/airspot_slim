@@ -3,6 +3,7 @@
 #include <zephyr/drivers/hwinfo.h>
 #include <zephyr/logging/log.h>
 #include <services/history_events.h>
+#include <services/conditioning.h>
 #include <services/user_settings.h>
 #include <services/diagnostics.h>
 
@@ -36,9 +37,9 @@ static int enqueue(const struct history_event *events, size_t length, uint32_t t
   if (!events || !length || length > HISTORY_QUEUE_SIZE) return -EINVAL;
   unsigned limit = HISTORY_QUEUE_SIZE;
   for (size_t i = 0; i < length; i++) {
-    if (events[i].type < RECORD_TYPE_CO2 || events[i].type > RECORD_TYPE_FAULT_RESET)
+    if (events[i].type < RECORD_TYPE_CO2 || events[i].type > RECORD_TYPE_MEASUREMENT_MODE_CHANGE || events[i].type == 23)
       return -EINVAL;
-    if (events[i].type == RECORD_TYPE_CO2) limit = HISTORY_QUEUE_SIZE - EVENT_RESERVE;
+    if (events[i].type == RECORD_TYPE_CO2 || (events[i].type >= RECORD_TYPE_RAW_CO2 && events[i].type <= RECORD_TYPE_SAMPLE_QI)) limit = HISTORY_QUEUE_SIZE - EVENT_RESERVE;
   }
   if (count + length > limit) return -ENOSPC;
   for (size_t i = 0; i < length; i++) {
@@ -78,6 +79,9 @@ void history_time_sync(uint32_t time)
   int rc = first ? enqueue(&event, 1, time) : 0;
   k_mutex_unlock(&history_mutex);
   if (rc) diagnostics_record(DIAG_STORAGE_FAILED, (uint32_t)-rc);
+#if IS_ENABLED(CONFIG_AIRSPOT_STCC4_CONDITION_ON_BOOT)
+  conditioning_time_sync(time);
+#endif
 }
 
 int history_events_process(void)

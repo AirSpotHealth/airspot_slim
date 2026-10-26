@@ -102,6 +102,9 @@ int main(void) {
   assert(software_asc_set_enabled(1)==0);
   feed(2, 300); assert(correction==0);
   feed(1, 300); assert(correction==120);
+  assert(captured[logs-3].type==RECORD_TYPE_CALIBRATION_CORRECTION_OLD && captured[logs-3].value==0);
+  assert(captured[logs-2].type==RECORD_TYPE_CALIBRATION_CORRECTION && captured[logs-2].value==120);
+  assert(captured[logs-1].type==RECORD_TYPE_ASC_ADJUSTMENT && captured[logs-1].value==120);
   feed(3, 300); assert(correction==120); /* old window never applies twice */
   fresh(); enabled=1; feed(3, 300); assert(correction==120);
   fresh(); enabled=1; storage_error=-EIO; feed(3, 300);

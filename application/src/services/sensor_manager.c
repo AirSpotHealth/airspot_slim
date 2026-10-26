@@ -1,4 +1,6 @@
 #include <services/settling.h>
+#include <services/conditioning.h>
+#include <services/history_events.h>
 #include <services/diagnostics.h>
 /*
  * Copyright (c) 2025 AirSpot
@@ -84,6 +86,9 @@ static void recovery_work_handler(struct k_work *work);
 static struct k_work_delayable recovery_work;
 static bool work_initialized, recovery_enabled;
 static bool stcc4_conditioned;
+#if IS_ENABLED(CONFIG_AIRSPOT_STCC4_CONDITION_ON_BOOT)
+static bool conditioning_requested;
+#endif
 static int64_t failed_since = -1, recovery_after;
 static sensor_recovery_diagnostic_t recovery_diagnostic;
 
@@ -193,6 +198,14 @@ static int configure_stcc4_asc(bool enabled)
   asc_diagnostic = (sensor_asc_diagnostic_t){.stage = 1};
   int ret = stcc4_stop();
   conditioning_keepalive();
+#if defined(CONFIG_AIRSPOT_SENSOR_NATIVE_ONLY)
+  /* Apply only the requested native policy; no opposite-policy test cycle. */
+  if (!ret) {
+    stcc4_set_asc_policy(enabled);
+    asc_diagnostic.stage = 2;
+    ret = enabled ? stcc4_disable_testing_mode() : stcc4_enable_testing_mode();
+  }
+#else
   if (!ret) {
     stcc4_data_t discarded = {0};
     (void)stcc4_read(&discarded);
@@ -217,6 +230,7 @@ static int configure_stcc4_asc(bool enabled)
     }
     if (!ret) ret = stcc4_disable_testing_mode();
   }
+#endif
   if (!ret) {
     asc_diagnostic.stage = 6;
     sensor_data_t ambient = {0};
@@ -353,11 +367,11 @@ static int sensor_manager_init_locked(void)
 
   /* Automatic retries repair communication/measurement state. Repeat conditioning only if it has
    * not yet succeeded this boot; normal runtime faults need a volatile reset. */
-  if (recovery_diagnostic.stage != 1 || !stcc4_conditioned) {
 #if IS_ENABLED(CONFIG_AIRSPOT_STCC4_CONDITION_ON_BOOT)
-  /* Condition the STCC4 before the first measurement. Sensirion recommends
-   * this whenever the sensor has been idle >3h (i.e. a cold boot); skipping it
-   * leaves the thermal-conductivity reading biased high. ~22s + 2s settle. */
+  ret = conditioning_begin();
+  if (ret) { set_sensor_fault(SENSOR_FAULT_CO2); return ret; }
+  if (conditioning_due(false)) {
+  /* Missing timestamp: condition once. A saved timestamp waits for app time. */
   LOG_INF("STCC4 conditioning (~22s, one time)...");
   /* Pulsing white = "starting up / warming up", distinct from the idle-blue and
    * the R/Y/G air-quality colors. Runs while conditioning blocks; the main loop's
@@ -399,11 +413,12 @@ static int sensor_manager_init_locked(void)
     k_msleep(2000); /* recommended settling time after conditioning */
     conditioning_keepalive();
     stcc4_conditioned = true;
+    conditioning_completed();
     LOG_INF("STCC4 conditioning complete");
   }
   led_indicator_stop();
-#endif
   }
+#endif
 
   /* 4. Initialize LPS22HH pressure sensor */
   ret = lps22hh_init();
@@ -464,6 +479,13 @@ static int do_measurement_locked(void)
   stcc4_data_t stcc_data = {0};
   int ret;
   data.timestamp_ms = k_uptime_get_32();
+#if IS_ENABLED(CONFIG_AIRSPOT_STCC4_CONDITION_ON_BOOT)
+  if (conditioning_due(use_single_shot_mode)) {
+    conditioning_requested = true;
+    set_sensor_fault(SENSOR_FAULT_STARTING);
+    return -EAGAIN; /* Recovery worker performs it under the calibration lease. */
+  }
+#endif
   bool all_ok = update_compensation(&data) == 0;
   all_ok = all_ok && !compensation_failed_since_report;
   if (!all_ok && !data.error_code) data.error_code = compensation_error;
@@ -558,6 +580,9 @@ static int do_measurement_locked(void)
         ((uint32_t)data.battery_mv << 16) | (data.is_charging ? 1U : 0U) |
         (stcc_data.has_raw_co2 ? 2U : 0U) | (use_single_shot_mode ? 4U : 0U));
   }
+#if IS_ENABLED(CONFIG_AIRSPOT_STCC4_CONDITION_ON_BOOT)
+  if (stcc_data.valid) conditioning_observe();
+#endif
   recovery_observe(data.valid);
   settling_observe(data.valid && !use_single_shot_mode &&
                    user_settings_get_native_asc_mode() == 2);
@@ -575,6 +600,16 @@ static int do_measurement_locked(void)
              (stcc_data.valid ? 2 : 0) | (data.valid ? 4 : 0),
     .fault = data.error_code,
   };
+
+  data.raw_co2_ppm = stcc_data.raw_co2_ppm;
+  data.sensor_status = stcc_data.status;
+  /* Capture actual cadence under meas_mutex, not a later settings snapshot. */
+  uint8_t sample_mode = !use_single_shot_mode ? 3 :
+      measurement_interval_ms == 0 ? 0 :
+      measurement_interval_ms == POWER_MODE_LOW_INTERVAL_MS ? 1 :
+      measurement_interval_ms == POWER_MODE_MID_INTERVAL_MS ? 2 : UINT8_MAX;
+  data.sample_flags = (sample_mode <= 3 ? 32 | (sample_mode << 6) : 0) | co2_diagnostic.flags |
+      (stcc4_conditioned ? 8 : 0) | (!use_single_shot_mode ? 16 : 0);
 
   /* Store latest data */
   k_mutex_lock(&data_mutex, K_FOREVER);
@@ -684,6 +719,10 @@ void sensor_manager_stop(void)
   k_work_cancel_delayable_sync(&recovery_work, &sync);
   k_work_cancel_delayable_sync(&sensor_work, &sync);
   k_mutex_lock(&meas_mutex, K_FOREVER);
+#if IS_ENABLED(CONFIG_AIRSPOT_STCC4_CONDITION_ON_BOOT)
+  int saved = conditioning_shutdown();
+  if (saved) LOG_ERR("Conditioning timestamp save failed: %d", saved);
+#endif
   int rc = stcc4_enter_sleep_mode();
   if (rc) { LOG_ERR("STCC4 sleep failed: %d", rc); }
   k_mutex_unlock(&meas_mutex);
@@ -733,20 +772,30 @@ int sensor_manager_perform_frc(uint16_t target_ppm, int16_t *applied_correction)
    * The caller is responsible for the >=30 s / >=30-shot operating
    * precondition by running the sensor before calling this. */
   bool was_continuous = !use_single_shot_mode;
-  if (was_continuous)
-  {
-    stcc4_stop();
+  if (target_ppm > 32000) {
+    k_mutex_unlock(&meas_mutex);
+    return -EINVAL;
   }
-
+  int ret = was_continuous ? stcc4_stop() : 0;
   int16_t applied = 0;
-  int ret = stcc4_perform_forced_recalibration(target_ppm, &applied);
+  if (!ret) ret = stcc4_perform_forced_recalibration(target_ppm, &applied);
 
   /* Restore continuous operation if we stopped it; use_single_shot_mode is left
    * unchanged so the sensor_manager mode state stays consistent. */
   if (was_continuous)
   {
-    stcc4_start_continuous();
+    int restore = stcc4_start_continuous();
+    if (restore) {
+      initialized = false;
+      set_sensor_fault(SENSOR_FAULT_CO2);
+      if (!ret) ret = restore;
+    }
   }
+  /* Do not publish the pre-FRC cached sample after calibration. */
+  k_mutex_lock(&data_mutex, K_FOREVER);
+  latest_data.valid = false;
+  k_mutex_unlock(&data_mutex);
+  next_report_ms = 0;
 
   k_mutex_unlock(&meas_mutex);
 
@@ -934,6 +983,9 @@ int sensor_manager_change_power_mode(uint8_t mode)
       k_mutex_unlock(&meas_mutex);
     }
   }
+  if (!rc && previous != mode) {
+    (void)history_event_record(mode, RECORD_TYPE_MEASUREMENT_MODE_CHANGE);
+  }
   k_mutex_unlock(&mode_change_mutex);
   return rc;
 }
@@ -976,9 +1028,64 @@ static bool recovery_due(void)
       k_uptime_get() - failed_since >= 30000 && k_uptime_get() >= recovery_after;
 }
 
+#if IS_ENABLED(CONFIG_AIRSPOT_STCC4_CONDITION_ON_BOOT)
+static void condition_if_due(void)
+{
+  static int64_t retry_after;
+  if (k_uptime_get() < retry_after) return;
+  k_mutex_lock(&meas_mutex, K_FOREVER);
+  bool due = recovery_enabled && initialized && conditioning_due(use_single_shot_mode && (running || conditioning_requested));
+  k_mutex_unlock(&meas_mutex);
+  if (!due) return;
+  k_mutex_lock(&mode_change_mutex, K_FOREVER);
+  int lease = software_asc_begin_manual();
+  if (!lease) {
+    k_mutex_lock(&meas_mutex, K_FOREVER);
+    if (recovery_enabled && initialized && conditioning_due(use_single_shot_mode && (running || conditioning_requested))) {
+      bool continuous = !use_single_shot_mode;
+      set_sensor_fault(SENSOR_FAULT_STARTING);
+      settling_observe(false);
+      health_progress(HEALTH_SENSOR, 35000);
+      int rc = stcc4_exit_sleep_mode();
+      if (!rc) rc = stcc4_stop();
+      if (!rc) {
+        led_indicator_start_flash_pulse(LED_COLOR_WHITE, 1500, 400);
+        rc = stcc4_perform_conditioning(conditioning_keepalive);
+        led_indicator_stop();
+        if (!rc) {
+          conditioning_completed();
+          conditioning_requested = false;
+          stcc4_conditioned = true;
+        }
+      }
+      /* Restore existing measurement mode and native ASC policy. Conditioning
+       * is not FRC and must never erase or replace calibration history. */
+      int restore = continuous ? stcc4_start_continuous() : stcc4_sleep_after_sample();
+      if (!rc) rc = restore;
+      next_report_ms = 0;
+      if (rc) {
+        retry_after = k_uptime_get() + 30000;
+        set_sensor_fault(SENSOR_FAULT_CO2);
+        LOG_ERR("Deferred conditioning/restore failed: %d", rc);
+      } else {
+        /* Publish a fresh reading even in on-demand/slow modes. */
+        (void)do_measurement_locked();
+        LOG_INF("Idle conditioning complete; selected sampling restored");
+      }
+    }
+    k_mutex_unlock(&meas_mutex);
+    software_asc_end_manual();
+  }
+  k_mutex_unlock(&mode_change_mutex);
+}
+#endif
+
 static void recovery_work_handler(struct k_work *work)
 {
   ARG_UNUSED(work);
+#if IS_ENABLED(CONFIG_AIRSPOT_STCC4_CONDITION_ON_BOOT)
+  condition_if_due();
+#endif
   k_mutex_lock(&meas_mutex, K_FOREVER);
   bool due = recovery_due();
   k_mutex_unlock(&meas_mutex);
