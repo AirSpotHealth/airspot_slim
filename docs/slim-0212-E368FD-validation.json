@@ -1,0 +1,21 @@
+{
+  "device": "AirSpot-E368FD",
+  "transport": "Bluetooth SMP DFU",
+  "previous_version": "0.20.1",
+  "installed_version": "0.21.2",
+  "active": true,
+  "confirmed": true,
+  "image_hash": "fa03d6af0a6a7ccd1a830fe1f953bc0c63f4881566efcad8fa47ee83f8652760",
+  "battery_percent": 46,
+  "reporting_mode": "5 sec",
+  "native_asc_enabled": true,
+  "native_asc_verified": true,
+  "valid_co2_observed_ppm": [
+    459,
+    473,
+    474,
+    496
+  ],
+  "physical_amber_colour_verified": false,
+  "current_draw_measured": false
+}
