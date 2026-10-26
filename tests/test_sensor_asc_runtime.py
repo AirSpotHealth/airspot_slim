@@ -8,7 +8,7 @@ from history_support import STUBS
 ROOT=Path(__file__).resolve().parents[1]
 
 class SensorAscTests(unittest.TestCase):
-    def _run_policy(self, native=False, recovery=False, sleep=False, rob=False):
+    def _run_policy(self, native=False, recovery=False, sleep=False, rob=False, all_modes=False):
         source=(ROOT/'application/src/services/sensor_manager.c').read_text()
         source=re.sub(r'^#include .*$', '', source, flags=re.M)
         harness='#include <assert.h>\n' + STUBS + r'''
@@ -54,6 +54,8 @@ static uint16_t self_test_word;
 static int stale_policy_reads;static bool force_paused_status, unknown_status_mapping;
 static int64_t now=1,last_feed;static bool check_watchdog;
 static bool internal_paused, manual, callback_valid, continuous, require_continuous;
+static int ota_samples;
+void ota_service_observe_sample(const sensor_data_t *d) {if(d->valid)ota_samples++;}
 static uint8_t auto_flag, power=2;
 static int16_t correction=123;
 static void k_mutex_lock(int *m,int t) { (*m)++; }
@@ -83,7 +85,8 @@ static int lps22hh_soft_reset(void) {pressure_resets++;if(heal_pressure)pressure
 static int lps22hh_read(lps22hh_data_t *d) {now+=2;d->pressure=1013;return pressure_error;}
 static int battery_init(void) {return 0;}
 static int qi_charger_init(void) {return 0;}
-static uint16_t battery_read_voltage_mv(void) {return 3900;}
+static int battery_reads;
+static uint16_t battery_read_voltage_mv(void) {battery_reads++;return 3900;}
 static uint8_t battery_get_percentage(void) {return 80;}
 static bool battery_is_low(void) {return false;}
 static bool battery_is_critical(void) {return false;}
@@ -422,9 +425,41 @@ int main(void) {
  assert(!initialized && !latest_data.valid);
 }
 '''
+        if all_modes:
+            tests = r'''
+static void observed(const sensor_data_t *d) {callback_valid=d->valid;callbacks++;}
+int main(void) {
+ native_mode=2;
+ assert(!sensor_manager_init());
+ sensor_manager_register_callback(observed);
+ for (int mode=0;mode<4;mode++) {
+  assert(!sensor_manager_set_power_mode(mode));
+  assert(continuous && !use_single_shot_mode && running && scheduled_delay==1000);
+  int count=callbacks, aw=ambient_writes, pw=pressure_writes, br=battery_reads, os=ota_samples;
+  uint32_t seq=co2_diagnostic.sequence;
+  int64_t start=now;
+  for(int i=0;i<4;i++) {now=start+i*1000;sensor_work_handler(NULL);}
+  assert(ambient_writes==aw+4 && pressure_writes==pw+4);
+  assert(battery_reads<=br+1);
+  assert(co2_diagnostic.sequence==seq+4 && callbacks==count && ota_samples==os+4);
+  assert(scheduled_delay>0 && scheduled_delay<=1000 && latest_data.valid);
+  assert((latest_data.sample_flags>>6)==mode && (latest_data.sample_flags&16));
+  if(mode) {now=next_report_ms;sensor_work_handler(NULL);assert(callbacks==count+1);}
+  else {now+=200000;sensor_work_handler(NULL);assert(callbacks==count);}
+  count=callbacks;assert(!sensor_manager_measure_now());assert(callbacks==count+1);
+ }
+ assert(!sensor_manager_set_power_mode(0));
+ int count=callbacks;ambient_error=-EIO;now+=1000;sensor_work_handler(NULL);
+ assert(!latest_data.valid && latest_data.error_code==SENSOR_FAULT_AMBIENT && callbacks==count);
+ ambient_error=0;now+=1000;sensor_work_handler(NULL);assert(latest_data.valid);
+ assert(!sensor_manager_set_power_mode(2));
+ assert(continuous && running);
+ sensor_manager_stop();assert(!running);
+}
+'''
         with tempfile.TemporaryDirectory() as directory:
             p=Path(directory);(p/'test.c').write_text(harness+source+tests)
-            subprocess.run(['cc',*(['-DCONFIG_AIRSPOT_SENSOR_NATIVE_ONLY=1'] if rob else []),*(['-DCONFIG_AIRSPOT_STCC4_SINGLE_SHOT_SLEEP=1'] if sleep else []),*(['-DCONFIG_AIRSPOT_STCC4_INTERNAL_ASC_EXPERIMENT=1'] if native else []),'-std=c11','-fsanitize=address,undefined','-I',str(ROOT/'application/include'),str(p/'test.c'),'-o',str(p/'test')],check=True)
+            subprocess.run(['cc',*(['-DCONFIG_AIRSPOT_CONTINUOUS_ALL_MODES=1'] if all_modes else []),*(['-DCONFIG_AIRSPOT_SENSOR_NATIVE_ONLY=1'] if rob or all_modes else []),*(['-DCONFIG_AIRSPOT_STCC4_SINGLE_SHOT_SLEEP=1'] if sleep else []),*(['-DCONFIG_AIRSPOT_STCC4_INTERNAL_ASC_EXPERIMENT=1'] if native else []),'-std=c11','-fsanitize=address,undefined','-I',str(ROOT/'application/include'),str(p/'test.c'),'-o',str(p/'test')],check=True)
             subprocess.run([str(p/'test')],check=True)
 
     def test_startup_reset_and_measurement_policy(self):
@@ -444,3 +479,6 @@ int main(void) {
 
     def test_rob_native_policy_and_frc_failures(self):
         self._run_policy(rob=True)
+
+    def test_continuous_acquisition_reporting_and_compensation_in_all_modes(self):
+        self._run_policy(all_modes=True)

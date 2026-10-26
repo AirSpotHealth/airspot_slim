@@ -7,9 +7,16 @@ else
 fi
 export AIRSPOT_WORKSPACE="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 export AIRSPOT_PROJECT_DIR="$AIRSPOT_WORKSPACE/application"
-export AIRSPOT_BUILD_DIR="$AIRSPOT_PROJECT_DIR/build_production"
+export AIRSPOT_BUILD_DIR="${AIRSPOT_BUILD_DIR:-$AIRSPOT_PROJECT_DIR/build_production}"
 export AIRSPOT_BOARD="nrf54l15dk/nrf54l15/cpuapp"
 export AIRSPOT_JLINK_DEVICE="nRF54L15_M33"
+# Share a bounded compiler cache across Git worktrees; keep it inside the
+# workspace so builds do not depend on permission to write ~/Library/Caches.
+airspot_common_git="$(git -C "$AIRSPOT_WORKSPACE" rev-parse --path-format=absolute --git-common-dir)"
+export CCACHE_DIR="${CCACHE_DIR:-$(dirname "$airspot_common_git")/.cache/ccache}"
+export CCACHE_MAXSIZE="${CCACHE_MAXSIZE:-256M}"
+export CCACHE_COMPILERCHECK=content
+
 # NCS Toolchain Configuration
 NCS_TOOLCHAIN_DIR="/opt/nordic/ncs/toolchains/322ac893fe"
 export ZEPHYR_TOOLCHAIN_VARIANT=zephyr

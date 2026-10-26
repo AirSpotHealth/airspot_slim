@@ -25,6 +25,9 @@
 #include <services/ble_service.h>
 #include <services/led_indicator.h>
 #include <services/sensor_manager.h>
+#if defined(CONFIG_AIRSPOT_CONTINUOUS_ALL_MODES)
+#include <services/ota_service.h>
+#endif
 #include <services/health_service.h>
 
 LOG_MODULE_REGISTER(sensor_mgr, CONFIG_AIRSPOT_LOG_LEVEL);
@@ -61,6 +64,12 @@ static int64_t next_report_ms;
 static bool compensation_failed_since_report;
 static uint8_t compensation_error;
 static bool initialized = false;
+#if defined(CONFIG_AIRSPOT_CONTINUOUS_ALL_MODES)
+/* Preserve the existing high-mode battery check cadence, not the new 1 Hz
+ * acquisition cadence. The battery driver separately gates OTA with fresh data. */
+static int64_t battery_due_ms;
+static uint16_t sampled_battery_mv;
+#endif
 static bool use_single_shot_mode =
     false; /* Track if using single-shot for STCC4 */
 
@@ -473,7 +482,7 @@ int sensor_manager_init(void)
 }
 
 /* Caller holds meas_mutex, including across callback/correction processing. */
-static int do_measurement_locked(void)
+static int do_acquisition_locked(bool publish)
 {
   sensor_data_t data = {0};
   stcc4_data_t stcc_data = {0};
@@ -555,7 +564,15 @@ static int do_measurement_locked(void)
 #endif
 
   /* 5. Read battery */
+#if defined(CONFIG_AIRSPOT_CONTINUOUS_ALL_MODES)
+  if (!sampled_battery_mv || k_uptime_get() >= battery_due_ms) {
+    sampled_battery_mv = battery_read_voltage_mv();
+    battery_due_ms = k_uptime_get() + 5000;
+  }
+  data.battery_mv = sampled_battery_mv;
+#else
   data.battery_mv = battery_read_voltage_mv();
+#endif
   data.battery_percent = battery_get_percentage();
   data.battery_low = data.battery_mv < 3300;
   data.battery_critical = data.battery_mv < 3000;
@@ -604,10 +621,10 @@ static int do_measurement_locked(void)
   data.raw_co2_ppm = stcc_data.raw_co2_ppm;
   data.sensor_status = stcc_data.status;
   /* Capture actual cadence under meas_mutex, not a later settings snapshot. */
-  uint8_t sample_mode = !use_single_shot_mode ? 3 :
-      measurement_interval_ms == 0 ? 0 :
+  uint8_t sample_mode = measurement_interval_ms == 0 ? 0 :
       measurement_interval_ms == POWER_MODE_LOW_INTERVAL_MS ? 1 :
-      measurement_interval_ms == POWER_MODE_MID_INTERVAL_MS ? 2 : UINT8_MAX;
+      measurement_interval_ms == POWER_MODE_MID_INTERVAL_MS ? 2 :
+      measurement_interval_ms == POWER_MODE_HI_INTERVAL_MS ? 3 : UINT8_MAX;
   data.sample_flags = (sample_mode <= 3 ? 32 | (sample_mode << 6) : 0) | co2_diagnostic.flags |
       (stcc4_conditioned ? 8 : 0) | (!use_single_shot_mode ? 16 : 0);
 
@@ -616,19 +633,29 @@ static int do_measurement_locked(void)
   latest_data = data;
   k_mutex_unlock(&data_mutex);
 
+#if defined(CONFIG_AIRSPOT_CONTINUOUS_ALL_MODES)
+  /* Trial-image health must follow acquisition, even when Now suppresses reports. */
+  ota_service_observe_sample(&data);
+#endif
+
   /* Notify callback */
-  if (user_callback)
+  if (publish && user_callback)
   {
     user_callback(&data);
   }
 
   /* Log summary */
-  LOG_INF("Sensors: CO2=%uppm, T=%.1f°C, H=%.0f%%, P=%.0fhPa, Batt=%u%%",
+  LOG_DBG("Sensors: CO2=%uppm, T=%.1f°C, H=%.0f%%, P=%.0fhPa, Batt=%u%%",
           data.co2_ppm, (double)data.temperature_c, (double)data.humidity_rh,
           (double)data.pressure_hpa, data.battery_percent);
 
   compensation_failed_since_report = false;
   return all_ok ? 0 : -EIO;
+}
+
+static int do_measurement_locked(void)
+{
+  return do_acquisition_locked(true);
 }
 
 static int do_measurement(void)
@@ -649,6 +676,13 @@ static void sensor_work_handler(struct k_work *work)
     return;
   }
   int64_t started = k_uptime_get();
+#if defined(CONFIG_AIRSPOT_CONTINUOUS_ALL_MODES)
+  /* Acquisition and compensation are independent of the reporting preference.
+   * Now mode keeps sensing but publishes only on an explicit request. */
+  bool publish = measurement_interval_ms != 0 && started >= next_report_ms;
+  do_acquisition_locked(publish);
+  if (publish) next_report_ms = started + measurement_interval_ms;
+#else
   if (use_single_shot_mode || started >= next_report_ms) {
     do_measurement_locked();
     next_report_ms = started + measurement_interval_ms;
@@ -658,9 +692,9 @@ static void sensor_work_handler(struct k_work *work)
       set_sensor_fault(ambient.error_code);
     }
   }
-  /* Continuous STCC4 runs at 1 Hz. Updating compensation does not publish a
-   * sample, read the battery, or feed software ASC. Account for I2C duration so
-   * a 1 s target does not drift to 1 s plus the measurement execution time. */
+#endif
+  /* Continuous STCC4 runs at 1 Hz. Account for I2C duration so a 1 s
+   * target does not drift to 1 s plus the measurement execution time. */
   uint32_t period = use_single_shot_mode ? measurement_interval_ms : 1000;
   int64_t delay = period - (k_uptime_get() - started);
   if (running) {
@@ -894,6 +928,10 @@ int sensor_manager_set_power_mode(uint8_t power_mode)
     break;
   }
 
+#if defined(CONFIG_AIRSPOT_CONTINUOUS_ALL_MODES)
+  want_single_shot = false;
+#endif
+
   /* Serialize mode commands with periodic/manual measurements. */
   k_mutex_lock(&meas_mutex, K_FOREVER);
   /* Switch STCC4 mode if needed */
@@ -938,6 +976,7 @@ int sensor_manager_set_power_mode(uint8_t power_mode)
     measurement_interval_ms = new_interval;
     next_report_ms = k_uptime_get() + new_interval;
 
+#if !defined(CONFIG_AIRSPOT_CONTINUOUS_ALL_MODES)
     if (new_interval == 0)
     {
       LOG_INF("Measurement mode: ON DEMAND (manual only)");
@@ -950,6 +989,7 @@ int sensor_manager_set_power_mode(uint8_t power_mode)
       }
     }
     else
+#endif
     {
       LOG_INF("Measurement interval changed to %u ms (power mode %d)",
               new_interval, power_mode);

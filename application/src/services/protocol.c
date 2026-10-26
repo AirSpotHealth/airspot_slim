@@ -454,8 +454,21 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len)
   case CMD_SETTLING:
   {
     int rc = 0;
-    if (frame[3] == 5 && len == 10)
-      rc = settling_action(frame[4], sys_get_be32(frame + 5));
+    if (frame[3] == 5 && len == 10) {
+      if (frame[4] == 3) {
+#if defined(CONFIG_AIRSPOT_CONTINUOUS_ALL_MODES)
+        settling_status_t before;
+        settling_get(&before);
+        if (sys_get_be32(frame + 5) != before.generation) rc = -ESTALE;
+        else if (before.stage != SETTLING_NONE && before.stage != SETTLING_DONE) rc = -EBUSY;
+        else if (before.error) rc = before.error;
+        else rc = sensor_manager_change_native_asc(true);
+#else
+        rc = -ENOTSUP;
+#endif
+      }
+      if (!rc) rc = settling_action(frame[4], sys_get_be32(frame + 5));
+    }
     else if (frame[3] != 0 || len != 5) rc = -EINVAL;
     settling_status_t st;
     settling_get(&st);

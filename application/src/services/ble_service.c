@@ -281,6 +281,12 @@ void ble_service_update_battery_level(uint8_t level) {
     level = 100;
   }
 
+  /* Zephyr BAS notifies even when the value is unchanged. Keep reads current
+   * without waking the radio for identical acquisition samples. */
+  if (bt_bas_get_battery_level() == level) {
+    return;
+  }
+
   /* Update BAS battery level characteristic */
   int err = bt_bas_set_battery_level(level);
   if (err) {

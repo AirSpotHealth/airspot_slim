@@ -129,7 +129,13 @@ int settling_action(uint8_t action, uint32_t generation)
   settling_status_t before = state;
   if (generation != state.generation) rc = -ESTALE;
   else if (state.error) rc = state.error;
-  else if (action == 1 && state.stage == SETTLING_FRESH) {
+  else if (action == 3 && (state.stage == SETTLING_NONE || state.stage == SETTLING_DONE)) {
+    /* Explicit guided recovery; preserve all sensor calibration history. */
+    state = (settling_status_t){.stage = SETTLING_RUN,
+      .generation = before.generation + 1};
+    rc = persist();
+    if (!rc) last_sample = -1;
+  } else if (action == 1 && state.stage == SETTLING_FRESH) {
     state.stage = SETTLING_EXPOSING; state.fresh_seconds = 0; last_sample = -1;
     rc = persist();
   } else if (action == 2 && state.stage == SETTLING_EXPOSING &&

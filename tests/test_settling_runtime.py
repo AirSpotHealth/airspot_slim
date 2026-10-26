@@ -23,6 +23,12 @@ static ssize_t rd(void*arg,void*out,size_t n){memcpy(out,arg,n);return n;}
 static void tick(unsigned seconds){for(unsigned i=0;i<seconds;i+=5){now+=5000;settling_observe(true);}}
 int main(void){
  settling_status_t out;settling_get(&out);assert(out.stage==SETTLING_NONE);
+ confirmed=0;assert(settling_action(3,0)==-EBUSY);assert(state.stage==SETTLING_NONE);
+ confirmed=1;fail=1;assert(settling_action(3,0)==-EIO);assert(state.stage==SETTLING_NONE);fail=0;
+ assert(!settling_action(3,0));assert(state.stage==SETTLING_RUN && state.generation==1);
+ assert(settling_action(3,0)==-ESTALE);
+ assert(settling_action(3,1)==-EAGAIN);
+ state=(settling_status_t){0};
  confirmed=0;assert(settling_prepare_erase(100)==-EBUSY);assert(state.stage==SETTLING_NONE);
  confirmed=1;assert(!settling_prepare_erase(100));assert(state.stage==SETTLING_ERASE_PENDING);
  assert(!load("state",24,rd,saved));assert(state.stage==SETTLING_ERASE_PENDING);

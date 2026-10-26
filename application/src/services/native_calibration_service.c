@@ -30,6 +30,11 @@ bool calibration_service_is_active(void)
 
 int calibration_service_start(uint16_t target_ppm)
 {
+#if defined(CONFIG_AIRSPOT_CONTINUOUS_ALL_MODES)
+  /* Current customer policy is continuous learning followed by fresh air.
+   * An older app must not silently invoke FRC in this qualification build. */
+  return -ENOTSUP;
+#endif
   if (target_ppm > 32000) return -EINVAL;
   k_mutex_lock(&calib_mutex, K_FOREVER);
   if (active || user_settings_get_native_asc_mode() == 2) {

@@ -90,7 +90,7 @@ case "$command" in
         rm -f "$build/firmware-artifact.json"
         west build -b "$AIRSPOT_BOARD" -d "$build" "$AIRSPOT_PROJECT_DIR" \
             --sysbuild --pristine="$pristine" -- \
-            -DUSE_CCACHE=0 -Dapplication_USE_CCACHE=0 -Dmcuboot_USE_CCACHE=0 \
+            -DUSE_CCACHE=1 -Dapplication_USE_CCACHE=1 -Dmcuboot_USE_CCACHE=1 \
             "-DSB_CONFIG_BOOT_SIGNATURE_KEY_FILE=\"$key\""
         "$python" "$validator" record "$build"
         ;;

@@ -4,6 +4,15 @@ mainmenu "AirSpot Slim Configuration"
 
 source "Kconfig.zephyr"
 
+config AIRSPOT_CONTINUOUS_ALL_MODES
+	bool "Continuous STCC4 acquisition in every reporting mode"
+	default n
+	depends on AIRSPOT_SENSOR_NATIVE_ONLY
+	help
+	  Measure CO2 and update temperature/humidity/pressure compensation at
+	  1 Hz. Modes select only reporting cadence (Now, 3min, 1min, 5sec).
+	  This increases power use; battery life requires hardware qualification.
+
 # AirSpot-specific configuration
 menu "AirSpot Configuration"
 

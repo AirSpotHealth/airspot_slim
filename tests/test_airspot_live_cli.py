@@ -93,14 +93,27 @@ class LiveCliTests(unittest.TestCase):
         self.assertEqual(missing, ["AirSpot-123456"])
 
     def test_project_commands_keep_arguments_literal(self):
-        argv, cwd = cli.invocation("slim", ["build", "--serial", "123;touch /tmp/no"])
-        self.assertEqual(argv[-1], "123;touch /tmp/no")
-        self.assertEqual(cwd, ROOT)
-        argv, _ = cli.invocation("screen", ["connect", "AF94D2"])
-        self.assertEqual(argv[1:], ["watch", "--type", "screen", "AF94D2"])
-        argv, _ = cli.invocation("hub-10", ["logs", "/dev/tty;bad"])
-        self.assertEqual(argv[-1], "/dev/tty;bad")
-        self.assertIn('source "$1"', argv[2])
+        # Argument escaping is independent of this checkout's directory layout.
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d)
+            previous = cli.PROJECTS.copy()
+            cli.PROJECTS.update({
+                "slim": (ROOT, "nordic", "scripts/airspot-production"),
+                "screen": (path, "nordic", "scripts/airspot-screen"),
+                "hub-10": (path, "hub", "scripts/airspot"),
+            })
+            try:
+                argv, cwd = cli.invocation("slim", ["build", "--serial", "123;touch /tmp/no"])
+                self.assertEqual(argv[-1], "123;touch /tmp/no")
+                self.assertEqual(cwd, ROOT)
+                argv, _ = cli.invocation("screen", ["connect", "AF94D2"])
+                self.assertEqual(argv[1:], ["watch", "--type", "screen", "AF94D2"])
+                argv, _ = cli.invocation("hub-10", ["logs", "/dev/tty;bad"])
+                self.assertEqual(argv[-1], "/dev/tty;bad")
+                self.assertIn('source "$1"', argv[2])
+            finally:
+                cli.PROJECTS.clear()
+                cli.PROJECTS.update(previous)
 
     def test_web_routes_only_existing_scripts(self):
         with tempfile.TemporaryDirectory() as d:
