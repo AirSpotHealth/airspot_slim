@@ -32,6 +32,9 @@ int main(void) {
  now=200;charging=true;assert(!battery_monitor_poll() && sends==2);
  now=300;charging=false;assert(!battery_monitor_poll() && sends==3);
  now=400;assert(!battery_monitor_poll() && sends==3);
+ /* A dip between minute reports must still trigger protection. */
+ now=1300;voltage=2926;assert(battery_monitor_poll() && sends==3);
+ now=2300;voltage=3900;assert(!battery_monitor_poll() && sends==3);
  now=60300;assert(!battery_monitor_poll() && sends==4);
  /* A reconnect between polls must still send, even if ready never read false. */
  now++;session++;assert(!battery_monitor_poll() && sends==5);
