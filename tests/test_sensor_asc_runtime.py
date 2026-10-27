@@ -116,7 +116,8 @@ int stcc4_init(void) {return 0;}
 int stcc4_exit_sleep_mode(void) {return 0;}
 int stcc4_enable_testing_mode(void) {pause_calls++;if(!pause_error)internal_paused=true;return pause_error;}
 int stcc4_disable_testing_mode(void) {resume_calls++;if(!pause_error)internal_paused=false;return pause_error;}
-int stcc4_trigger_single_shot(void) {continuous=false;return 0;}
+static int shot_calls;
+int stcc4_trigger_single_shot(void) {shot_calls++;continuous=false;return 0;}
 static int16_t mock_raw_co2=800;
 int stcc4_read(stcc4_data_t *d) {
   *d=(stcc4_data_t){.co2_ppm=mock_raw_co2<0?0:(uint16_t)mock_raw_co2,.raw_co2_ppm=mock_raw_co2,.has_raw_co2=!read_error,.valid=true,.status=internal_paused?0x0084:0};
@@ -499,7 +500,16 @@ int main(void) {
   assert(callbacks==count+1 && latest_data.valid);
   assert(ambient_writes>aw && pressure_writes>pw);
   assert((latest_data.sample_flags>>6)==mode);
-  assert(scheduled_delay>0 && scheduled_delay<=(mode==1?10000:1000));
+  assert(scheduled_delay>0 && scheduled_delay<=1000);
+  if(mode==1) {
+   int shots=shot_calls, reports=callbacks, aw=ambient_writes, pw=pressure_writes;
+   int64_t due=next_report_ms;
+   for(int i=9;i>=1;i--) {now=due-i*1000;sensor_work_handler(NULL);}
+   assert(shot_calls==shots && callbacks==reports);
+   assert(ambient_writes==aw+9 && pressure_writes==pw+9);
+   now=due;sensor_work_handler(NULL);
+   assert(shot_calls==shots+1 && callbacks==reports+1);
+  }
   assert(((latest_data.sample_flags&16)!=0)==(mode==3));
  }
  int16_t applied=0;assert(!sensor_manager_perform_frc(426,&applied));

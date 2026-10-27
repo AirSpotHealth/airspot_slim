@@ -2,7 +2,7 @@
 
 This replaces 0.21's four reporting choices with two measurement modes. Both
 report and log every 10 seconds. Wire mode 1 is single shot every 10 seconds;
-wire mode 3 is continuous acquisition and compensation every second. Modes 0
+wire mode 3 is continuous acquisition every second. In 0.22.1, both modes refresh temperature, humidity and pressure compensation every second, including between single shots. Modes 0
 and 2 are rejected and saved obsolete modes migrate to continuous. New devices
 default to continuous. Existing saved mode 1 becomes single shot. Deploy the
 matching mobile controls before installing this candidate: older apps show
@@ -58,3 +58,5 @@ boot and the existing health-based image confirmation. No release has been
 published and no device has been flashed with 0.22.0 during this task.
 
 Validation: final production signed build verified; 121 firmware host/artifact tests passed.
+
+0.22.1 corrects the original 0.22.0 single-shot compensation cadence. The sensor remains awake between shots; this extra compensation work must be included in battery measurements.

@@ -718,7 +718,11 @@ static void sensor_work_handler(struct k_work *work)
    * Now mode keeps sensing but publishes only on an explicit request. */
   bool publish = measurement_interval_ms != 0 && started >= next_report_ms;
 #if defined(CONFIG_AIRSPOT_NATIVE_TEST_MODES)
-  if (use_single_shot_mode) publish = true;
+  if (use_single_shot_mode && !publish) {
+    /* Keep compensation fresh at 1 Hz without starting an extra CO2 shot. */
+    sensor_data_t ambient = {0};
+    if (update_compensation(&ambient)) set_sensor_fault(ambient.error_code);
+  } else
 #endif
   do_acquisition_locked(publish);
   if (publish) next_report_ms = started + measurement_interval_ms;
@@ -735,7 +739,11 @@ static void sensor_work_handler(struct k_work *work)
 #endif
   /* Continuous STCC4 runs at 1 Hz. Account for I2C duration so a 1 s
    * target does not drift to 1 s plus the measurement execution time. */
+#if defined(CONFIG_AIRSPOT_NATIVE_TEST_MODES)
+  uint32_t period = 1000;
+#else
   uint32_t period = use_single_shot_mode ? measurement_interval_ms : 1000;
+#endif
   int64_t delay = period - (k_uptime_get() - started);
   if (running) {
     health_progress(HEALTH_SENSOR, (delay > 0 ? delay : 1) + 35000);
@@ -1048,9 +1056,13 @@ int sensor_manager_set_power_mode(uint8_t power_mode)
       /* A worker may already be running and waiting for meas_mutex. Cancel +
        * schedule can leave it CANCELLING, causing schedule() to do nothing.
        * Reschedule updates its deadline without cancelling that running work. */
-      health_progress(HEALTH_SENSOR, (use_single_shot_mode ? measurement_interval_ms : 1000) + 35000);
-      k_work_reschedule(&sensor_work,
-          K_MSEC(use_single_shot_mode ? measurement_interval_ms : 1000));
+#if defined(CONFIG_AIRSPOT_NATIVE_TEST_MODES)
+      uint32_t period = 1000;
+#else
+      uint32_t period = use_single_shot_mode ? measurement_interval_ms : 1000;
+#endif
+      health_progress(HEALTH_SENSOR, period + 35000);
+      k_work_reschedule(&sensor_work, K_MSEC(period));
     }
   }
   k_mutex_unlock(&meas_mutex);
