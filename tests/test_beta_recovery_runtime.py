@@ -73,6 +73,7 @@ int main(void) {
  assert(history_records[failures].type==RECORD_TYPE_DFU && history_records[failures].value==1);
  assert(history_records[failures+1].type==RECORD_TYPE_DFU_FAIL && history_records[failures+1].value==0);
  now=0;ota_service_init();ota_service_startup_complete(true);
+ ota_service_sensor_ready();
  ota_service_poll();assert(confirms==0);
  unsigned startup_events=history_count;
  sensor_data_t starting={false,SENSOR_FAULT_STARTING};
@@ -85,6 +86,22 @@ int main(void) {
  assert(history_count==before+1 && history_records[before].type==RECORD_TYPE_SENSOR_ERROR);
  ota_service_observe_sample(&good);ota_service_observe_sample(&bad);
  assert(history_count==before+2);
+ /* Recovered sensors can confirm after an initial failed attempt. */
+ confirmed=false;now=0;ota_service_init();ota_service_startup_complete(true);
+ ota_service_observe_sample(&bad);ota_service_poll();assert(confirms==1);
+ ota_service_observe_sample(&good);ota_service_poll();assert(confirms==1);
+ now=60000;ota_service_sensor_ready();ota_service_poll();assert(confirms==1);
+ ota_service_observe_sample(&good);ota_service_poll();assert(confirms==2);
+ /* Non-sensor startup failures cannot be cleared by a recovered sensor. */
+ confirmed=false;now=0;ota_service_init();ota_service_startup_complete(false);
+ ota_service_sensor_ready();ota_service_observe_sample(&good);ota_service_poll();
+ assert(confirms==2);now=120001;ota_service_poll();assert(reboots==2);
+ /* A stale good sample followed by a fault must not confirm. */
+ confirmed=false;now=0;ota_service_init();ota_service_startup_complete(true);
+ ota_service_sensor_ready();ota_service_observe_sample(&good);
+ ota_service_observe_sample(&bad);ota_service_poll();assert(confirms==2);
+ now=120001;ota_service_poll();assert(reboots==3);
+
 }
 ''')
 

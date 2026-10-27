@@ -21,9 +21,9 @@ static int sensor_manager_set_power_mode(uint8_t mode){applied=mode;return 0;}
 /* Startup-result semantics are exercised with real code in test_sensor_callback. */
 static int initial_measurement_result(int rc){return rc;}
 static bool startup_check(uint16_t subsystem,int rc){return rc==0;}
-static void boot(void){int ret;bool startup_healthy=true;
+static void boot(void){int ret;bool sensor_startup_healthy=true;
 '''+s[a:b]+r'''
-assert(startup_healthy);}
+assert(sensor_startup_healthy);}
 int main(void){
  uint32_t intervals[]={0,180000,60000,5000};
  for(saved=0;saved<4;saved++){

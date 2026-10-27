@@ -1120,6 +1120,7 @@ int sensor_manager_set_power_mode(uint8_t power_mode)
       k_work_reschedule(&sensor_work, K_MSEC(period));
     }
   }
+  ota_service_sensor_ready();
   k_mutex_unlock(&meas_mutex);
   return 0;
 }

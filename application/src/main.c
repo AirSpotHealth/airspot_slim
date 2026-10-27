@@ -780,6 +780,9 @@ static bool startup_check(uint16_t subsystem, int rc) {
 int main(void) {
   int ret;
   bool startup_healthy = true;
+  /* Sensor failures remain visible, but verified runtime recovery may satisfy
+   * OTA sensor checks. Failures in other startup services remain blocking. */
+  bool sensor_startup_healthy = true;
   ota_service_init();
   ret = watchdog_init();
   startup_healthy &= startup_check(1, ret);
@@ -975,7 +978,7 @@ int main(void) {
   /* 4. Sensor manager (initializes all sensors) */
   ret = sensor_manager_init();
   sensor_manager_register_callback(sensor_data_callback);
-  startup_healthy &= startup_check(11, ret);
+  sensor_startup_healthy &= startup_check(11, ret);
   if (ret) {
     LOG_ERR("Sensor manager init failed: %d", ret);
   } else {
@@ -1054,10 +1057,10 @@ int main(void) {
     LOG_INF("Sensor mode: ON DEMAND (manual measurements only)");
     /* Do one initial measurement */
     ret = sensor_manager_measure_now();
-    startup_healthy &= startup_check(14, initial_measurement_result(ret));
+    sensor_startup_healthy &= startup_check(14, initial_measurement_result(ret));
   } else {
     ret = sensor_manager_start(interval_ms);
-    startup_healthy &= startup_check(15, ret);
+    sensor_startup_healthy &= startup_check(15, ret);
     if (ret) {
       LOG_ERR("Failed to start sensor measurements: %d", ret);
     } else {
@@ -1068,7 +1071,7 @@ int main(void) {
   /* The interval alone does not select STCC4 continuous operation. Restore
    * the saved hardware mode too, including when its interval is already 5 s. */
   ret = sensor_manager_set_power_mode(power_mode);
-  startup_healthy &= startup_check(16, ret);
+  sensor_startup_healthy &= startup_check(16, ret);
 
   /*
    * ========================================
@@ -1077,7 +1080,7 @@ int main(void) {
    */
 
   LOG_INF("========================================");
-  LOG_INF("System initialized %s", startup_healthy ? "successfully" : "with errors");
+  LOG_INF("System initialized %s", (startup_healthy && sensor_startup_healthy) ? "successfully" : "with errors");
   LOG_INF("BLE advertising as: %s", ble_service_get_device_name());
   LOG_INF("Watchdog: %s", (wdt_channel_id >= 0) ? "ENABLED (5s)" : "DISABLED");
   LOG_INF("Button: 1x status, 2x CO2 readout; on charger: hold 5s power "

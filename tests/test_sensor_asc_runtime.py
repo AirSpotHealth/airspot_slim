@@ -57,6 +57,7 @@ static bool internal_paused, manual, callback_valid, continuous, require_continu
 static bool bypass_active;
 bool stcc4_is_starting(void) {return bypass_active;}
 static int ota_samples;
+void ota_service_sensor_ready(void) {}
 void ota_service_observe_sample(const sensor_data_t *d) {if(d->valid)ota_samples++;}
 static uint8_t auto_flag, power=2;
 static int16_t correction=123;

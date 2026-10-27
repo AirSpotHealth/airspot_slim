@@ -15,6 +15,7 @@ LOG_MODULE_REGISTER(ota_service, CONFIG_AIRSPOT_LOG_LEVEL);
 
 static atomic_t startup_healthy;
 static atomic_t sample_healthy;
+static atomic_t sensor_ready;
 static bool needs_confirmation;
 static int64_t deadline;
 
@@ -84,6 +85,9 @@ static struct mgmt_callback image_callback = {
 
 void ota_service_init(void)
 {
+    atomic_set(&startup_healthy, 0);
+    atomic_set(&sample_healthy, 0);
+    atomic_set(&sensor_ready, 0);
     needs_confirmation = !boot_is_img_confirmed();
     deadline = k_uptime_get() + 120000;
     if (needs_confirmation) diagnostics_record(DIAG_TRIAL, 0);
@@ -102,9 +106,19 @@ void ota_service_startup_complete(bool healthy)
     }
 }
 
+/* Called only after sensor initialization and selected-mode setup succeed.
+ * Discard any sample from before that configuration. Runtime recovery may
+ * satisfy this gate without clearing failures in other startup services. */
+void ota_service_sensor_ready(void)
+{
+    atomic_set(&sample_healthy, 0);
+    atomic_set(&sensor_ready, 1);
+}
+
 void ota_service_observe_sample(const sensor_data_t *data)
 {
     static bool sensor_failed;
+    if (!data->valid) atomic_set(&sample_healthy, 0);
     if (!data->valid && data->error_code == SENSOR_FAULT_STARTING) return;
     if (data->valid) {
         sensor_failed = false;
@@ -123,7 +137,8 @@ void ota_service_poll(void)
     if (!needs_confirmation) {
         return;
     }
-    if (atomic_get(&startup_healthy) && atomic_get(&sample_healthy)) {
+    if (atomic_get(&startup_healthy) && atomic_get(&sensor_ready) &&
+        atomic_get(&sample_healthy)) {
         int err = boot_write_img_confirmed();
         if (!err) {
             needs_confirmation = false;

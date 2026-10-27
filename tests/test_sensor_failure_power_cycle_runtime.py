@@ -90,9 +90,9 @@ static void ble_service_start_advertising(void) {advertising=!suppressed;}
             function(main, 'static void validate_system_off_wake(uint32_t hold_start)') + '\n' +
             function(main, 'static void enter_soft_off(void)') + r'''
 static void finish_boot(void) {
- int ret;bool startup_healthy=true;
+ int ret;bool startup_healthy=true;bool sensor_startup_healthy=true;
 ''' + startup + r'''
- assert(!startup_healthy && advertising);
+ assert(startup_healthy && !sensor_startup_healthy && advertising);
 }
 int main(void) {
  /* Each boot still encounters a broken sensor; two off/on cycles remain usable. */
