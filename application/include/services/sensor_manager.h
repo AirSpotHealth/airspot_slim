@@ -26,6 +26,8 @@ extern "C" {
 
 /* Slim fault codes do not overlap Screen's 0x01-0x0c codes. Wire byte 5
  * remains zero: Slim does not claim Screen's three-attempt recovery policy. */
+void sensor_manager_get_initial_settling(bool *active, uint32_t *remaining_seconds);
+
 enum sensor_fault {
   SENSOR_FAULT_STARTING = 0x40,
   SENSOR_FAULT_I2C = 0x41,

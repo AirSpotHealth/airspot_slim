@@ -58,3 +58,9 @@ void initial_settling_observe(bool valid, bool single_shot, bool paired, bool lo
     if (!low_battery) led_indicator_show_settling_tick();
   }
 }
+
+uint32_t initial_settling_remaining_seconds(void)
+{
+  if (complete || measured_ms >= 3600000) return 0;
+  return (3600000 - measured_ms + 999) / 1000;
+}

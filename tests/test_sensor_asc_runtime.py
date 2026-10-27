@@ -482,12 +482,18 @@ int main(void) {
             harness += r"""
 void calibration_service_process_measurement(uint16_t co2) {}
 void initial_settling_observe(bool valid,bool single,bool paired,bool low) {}
+uint32_t initial_settling_remaining_seconds(void) {return 1800;}
 bool user_settings_is_paired(void) {return true;}
 """
             tests = r"""
 static void observed(const sensor_data_t *d) {callback_valid=d->valid;callbacks++;}
 int main(void) {
  native_mode=2;assert(!sensor_manager_init());
+ assert(sensor_manager_change_native_asc(false)==-ENOTSUP);
+ assert(native_mode==2 && !internal_paused);
+ bool settling_active;uint32_t settling_remaining;
+ sensor_manager_get_initial_settling(&settling_active,&settling_remaining);
+ assert(settling_active && settling_remaining==1800);
  sensor_manager_register_callback(observed);
  assert(sensor_manager_set_power_mode(0)==-EINVAL);
  assert(sensor_manager_set_power_mode(2)==-EINVAL);

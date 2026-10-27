@@ -8,7 +8,7 @@ from native_support import BYTEORDER, CRC
 ROOT = Path(__file__).resolve().parents[1]
 
 class SettingsRuntimeTests(unittest.TestCase):
-    def _run_settings(self, native=False, experiment=False, rob=False):
+    def _run_settings(self, native=False, experiment=False, rob=False, production=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             headers = {
@@ -229,7 +229,22 @@ int main(void) {
 }
 '''
                 source.write_text(text)
-            subprocess.run(['cc', *(['-DCONFIG_AIRSPOT_SENSOR_NATIVE_ONLY=1'] if rob else []), *(['-DCONFIG_AIRSPOT_STCC4_INTERNAL_ASC_EXPERIMENT=1'] if experiment else []), '-std=c11', '-fsanitize=address,undefined',
+            if production:
+                text=source.read_text().split('int main(void) {')[0]+r'''
+int main(void) {
+ settings.native_asc_mode=1;settings.power_mode=1;
+ assert(!user_settings_init());
+ assert(settings.native_asc_mode==2 && user_settings_get_auto_calibrate());
+ assert(user_settings_set_native_asc_mode(0)==-ENOTSUP);
+ assert(user_settings_set_native_asc_mode(1)==-ENOTSUP);
+ assert(user_settings_set_auto_calibrate(0)==-ENOTSUP);
+ assert(settings.native_asc_mode==2);
+ assert(!user_settings_set_native_asc_mode(2));
+ return 0;
+}
+'''
+                source.write_text(text)
+            subprocess.run(['cc', *(['-DCONFIG_AIRSPOT_NATIVE_TEST_MODES=1'] if production else []), *(['-DCONFIG_AIRSPOT_SENSOR_NATIVE_ONLY=1'] if rob else []), *(['-DCONFIG_AIRSPOT_STCC4_INTERNAL_ASC_EXPERIMENT=1'] if experiment else []), '-std=c11', '-fsanitize=address,undefined',
                             '-I', str(root), '-I', str(ROOT / 'application/include'),
                             str(source), '-o', str(root / 'test')], check=True)
             subprocess.run([str(root / 'test')], check=True)
@@ -246,3 +261,6 @@ int main(void) {
 
     def test_rob_defaults_bypass_offsets_and_retain_native_off(self):
         self._run_settings(rob=True)
+
+    def test_production_always_enables_native_asc(self):
+        self._run_settings(rob=True, production=True)

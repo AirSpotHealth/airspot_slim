@@ -238,10 +238,11 @@ int user_settings_init(void)
   }
 
 #if defined(CONFIG_AIRSPOT_SENSOR_NATIVE_ONLY)
-  /* Explicit evaluation build: never revive host learning or a saved offset.
-   * A saved native OFF preference remains OFF. No sensor history is erased. */
+  /* Never revive host learning or a saved offset. No sensor history is erased. */
   if (!settings.native_asc_mode) settings.native_asc_mode = 2;
 #if defined(CONFIG_AIRSPOT_NATIVE_TEST_MODES)
+  /* Product policy: re-enable learning even for an older saved OFF preference. */
+  settings.native_asc_mode = 2;
   if (settings.power_mode != 1 && settings.power_mode != 3) settings.power_mode = 3;
 #endif
   settings.auto_calibrate = 0;
@@ -298,7 +299,7 @@ uint8_t user_settings_get_native_asc_mode(void) { return settings.native_asc_mod
 int user_settings_set_native_asc_mode(uint8_t mode)
 {
 #if defined(CONFIG_AIRSPOT_NATIVE_TEST_MODES)
-  if (mode == 0) return -ENOTSUP;
+  if (mode != 2) return -ENOTSUP;
 #endif
   if (mode > 2) return -EINVAL;
   k_mutex_lock(&settings_mutex, K_FOREVER);

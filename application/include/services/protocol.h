@@ -57,6 +57,7 @@ extern "C" {
 #define CMD_RESET_NATIVE_CALIBRATION 0x3A /* Explicit RST payload; erases FRC/ASC history */
 #define CMD_CO2_READ_DIAGNOSTIC 0x39 /* Read-only last signed CO2/driver outcome */
 #define CMD_SENSOR_RECOVERY_DIAGNOSTIC 0x3B /* Read-only automatic recovery status */
+#define CMD_INITIAL_SETTLING 0x3E /* Read-only first-hour white-blink status */
 #define CMD_SETTLING 0x3C /* Read guidance; guarded fresh-air actions */
 #define CMD_RESET_PREFERENCES 0x3D /* Preserve sensor calibration and readings */
 #define CMD_NATIVE_ASC 0x38 /* Get/set STCC4 native learning policy */

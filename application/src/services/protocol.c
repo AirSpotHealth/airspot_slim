@@ -451,6 +451,20 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len)
     break;
   }
 
+  case CMD_INITIAL_SETTLING:
+  {
+    if (frame[3] != 0 || len != 5) break;
+    bool active;
+    uint32_t remaining;
+    sensor_manager_get_initial_settling(&active, &remaining);
+    uint8_t response[11] = {CMD_FIRST_BYTE, CMD_SECOND_BYTE,
+      CMD_INITIAL_SETTLING, 6, 1, active};
+    sys_put_be32(remaining, response + 6);
+    set_frame_checksum(response, sizeof(response));
+    send_frame(response, sizeof(response));
+    break;
+  }
+
   case CMD_SETTLING:
   {
     int rc = 0;

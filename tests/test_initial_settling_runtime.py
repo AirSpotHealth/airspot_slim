@@ -22,11 +22,14 @@ static int settings_save_one(const char *key,const void *value,size_t len){write
 static void led_indicator_show_settling_tick(void){blinks++;}
 """+source+r"""
 int main(void){
+ assert(initial_settling_remaining_seconds()==3600);
  initial_settling_observe(true,false,false,false);assert(blinks==0 && writes==0);
  for(int i=0;i<=360;i++){clock_ms=i*10000LL;initial_settling_observe(true,true,true,false);}
+ assert(initial_settling_remaining_seconds()==0);
  assert(complete && stored==1 && writes==1 && blinks==360);
  int old=blinks;clock_ms+=10000;initial_settling_observe(true,true,true,false);assert(blinks==old);
  assert(!initial_settling_reset() && !complete && stored==0);
+ assert(initial_settling_remaining_seconds()==3600);
  initial_settling_observe(true,false,true,true);assert(blinks==old);
  clock_ms+=50000;initial_settling_observe(true,false,true,false);assert(measured_ms==0);
  confirmed=false;measured_ms=3600000;initial_settling_observe(true,false,true,false);assert(!complete);

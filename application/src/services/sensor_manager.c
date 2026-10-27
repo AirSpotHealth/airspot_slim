@@ -294,6 +294,9 @@ static int configure_stcc4_asc(bool enabled)
  * the prior policy; a failed restoration invalidates the sensor pipeline. */
 int sensor_manager_change_native_asc(bool enabled)
 {
+#if defined(CONFIG_AIRSPOT_NATIVE_TEST_MODES)
+  if (!enabled) return -ENOTSUP; /* Production policy: learning stays enabled. */
+#endif
   int rc = software_asc_begin_manual(); /* Shared lease excludes manual calibration. */
   if (rc) return rc;
   k_mutex_lock(&meas_mutex, K_FOREVER);
@@ -829,6 +832,20 @@ int sensor_manager_measure_now(void)
   LOG_INF("Manual measurement triggered");
   return do_measurement();
 }
+
+void sensor_manager_get_initial_settling(bool *active, uint32_t *remaining_seconds)
+{
+  k_mutex_lock(&meas_mutex, K_FOREVER);
+#if defined(CONFIG_AIRSPOT_NATIVE_TEST_MODES)
+  *remaining_seconds = initial_settling_remaining_seconds();
+  *active = user_settings_is_paired() && *remaining_seconds > 0;
+#else
+  *remaining_seconds = 0;
+  *active = false;
+#endif
+  k_mutex_unlock(&meas_mutex);
+}
+
 
 int sensor_manager_perform_frc(uint16_t target_ppm, int16_t *applied_correction)
 {
