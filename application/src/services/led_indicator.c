@@ -86,18 +86,22 @@ bool led_indicator_is_active(void) { return state.pattern != LED_PATTERN_OFF; }
  * ======================================== */
 
 /* Rev3A LEDs are on P2, outside PWM20/21/22's P1 routing. Use a
- * short timer interrupt to give green 25% duty only while amber is visible.
+ * short timer interrupt to give green 6% duty only while amber is visible.
  * No busy-wait or workqueue dependency; stop it during flash gaps and off. */
 static struct k_spinlock color_lock;
 static bool amber_pwm_active;
-static uint8_t amber_phase;
+static bool amber_green_on;
+#define AMBER_GREEN_ON_US 192
+#define AMBER_GREEN_OFF_US 3008
 
 static void amber_pwm_tick(struct k_timer *timer) {
-  ARG_UNUSED(timer);
   k_spinlock_key_t key = k_spin_lock(&color_lock);
   if (amber_pwm_active) {
-    amber_phase = (amber_phase + 1) % 4;
-    led_driver_set_brightness(LED_GREEN, amber_phase == 0 ? 100 : 0);
+    amber_green_on = !amber_green_on;
+    led_driver_set_brightness(LED_GREEN, amber_green_on ? 100 : 0);
+    k_timer_start(timer,
+                  K_USEC(amber_green_on ? AMBER_GREEN_ON_US : AMBER_GREEN_OFF_US),
+                  K_NO_WAIT);
   }
   k_spin_unlock(&color_lock, key);
 }
@@ -112,10 +116,12 @@ static void set_color(led_color_t color, uint8_t brightness) {
     led_driver_set_brightness(LED_BLUE, 0);
     if (!amber_pwm_active) {
       amber_pwm_active = true;
-      amber_phase = 0;
+      amber_green_on = true;
       led_driver_set_brightness(LED_GREEN, 100);
-      /* 1 ms on + 3 ms off = 250 Hz, 25% green duty. */
-      k_timer_start(&amber_pwm_timer, K_MSEC(1), K_MSEC(1));
+      /* 192 us on + 3008 us off: 312.5 Hz, 6% green.
+       * Both intervals align with the production 32 us kernel tick.
+       * Two callbacks per cycle, with no timer running between LED flashes. */
+      k_timer_start(&amber_pwm_timer, K_USEC(AMBER_GREEN_ON_US), K_NO_WAIT);
     }
     k_spin_unlock(&color_lock, key);
     return;

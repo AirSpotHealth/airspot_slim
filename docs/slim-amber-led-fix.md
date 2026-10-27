@@ -35,3 +35,23 @@ background timer is introduced. This is a colour-tuning candidate, not a verifie
 optical result. Confirm the affected device/version and compare red, green and
 amber on that device before declaring the colour fixed. Includes the 0.22.1
 one-second compensation correction in both measurement modes.
+
+## 0.22.3 visually selected amber
+
+On 27 October 2026 the wired Slim (D30E3C) displayed correct individual
+red/green/blue channels, but 25% green still appeared greenish. A temporary
+500 Hz bench comparison showed full red with 12%, 6%, and 3% green; the
+user selected the second mix (6%). The original 0.20.1 firmware and settings
+were restored afterward with a complete RRAM byte-for-byte verification.
+
+Production amber now uses full red, blue off, and nominal 6% green:
+192 microseconds on / 3008 microseconds off. Both durations are exact multiples
+of the production 32 microsecond kernel tick. A one-shot timer alternates
+these intervals at 312.5 Hz, requiring 625 callbacks per second only while
+amber is lit (previously 1000). Flash gaps, cancellation and colour changes
+stop the timer. No busy-wait is added to the normal indicator.
+
+The selected optical ratio is hardware-tested; the production timer waveform
+and its appearance in normal flashes still require on-device confirmation.
+Battery consumption has not been measured. Slim T/E368FD remains on 0.22.2
+until a separate successful firmware transfer is recorded.
