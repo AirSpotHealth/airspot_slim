@@ -123,10 +123,6 @@ static int stcc4_write_cmd(uint8_t msb, uint8_t lsb) {
 }
 
 int stcc4_init(void) {
-  if (initialized) {
-    return 0;
-  }
-
   if (!i2c_bus_is_ready()) {
     LOG_ERR("I2C bus not ready");
     return -ENODEV;
@@ -136,12 +132,12 @@ int stcc4_init(void) {
    * The first measurement happens after init, so we don't check here.
    * Compensation data will be provided when sensor_manager reads sensors. */
 
-  /* STCC4 initialization: No special initialization needed */
-  /* The sensor works directly after power-up - no ExitSleepMode or reset
-   * required */
-  /* Per working minimal uart code: sensor can be used directly */
-
+  /* MCU reset does not remove sensor power. In particular, low-battery
+   * shutdown leaves STCC4 asleep while the driver's RAM flag is lost.
+   * Always wake before initialization commands, including recovery retries.
+   * Wake's NACK is expected; subsequent commands verify communication. */
   initialized = true;
+  stcc4_exit_sleep_mode();
   LOG_INF("STCC4 CO2 sensor initialized");
   return 0;
 }
