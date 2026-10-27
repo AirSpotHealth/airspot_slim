@@ -24,6 +24,11 @@ Target: Slim X / AirSpot-81A9DC, J-Link 603003276, PPK2 D29683E23A07.
 - The driver regression test fails before the fix and passes after it.
   All 125 firmware tests pass. Signed production and diagnostic builds verify
   as 0.22.8. Diagnostic logging is not enabled in the production image.
+- Production 0.22.8 was then installed with full readback verification and
+  preserved settings. Two J-Link RAM snapshots, 2000 ms apart by the sensor
+  timestamps, showed valid readings, error=0, CO2 548 then 545 ppm and
+  pressure 1011.308 then 1011.323 hPa. Bluetooth discovery timed out, so the
+  final live check used J-Link; post-flash SMP confirmation was not observed.
 
 Production image hash:
 `03f0a1d6ae03174a85c7a3a3b29da0eb0cc2efe5dc30e388adc9eb92b146b446`.
