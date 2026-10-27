@@ -1,0 +1,14 @@
+{
+  "date": "2026-10-27",
+  "device": "AirSpot-D30E3C",
+  "probe": "603003276",
+  "version": "0.22.4",
+  "image_hash": "5ffbe85fffe32ad3b8abf055e5ab6b52de6177f2ba2a1d660a095a3f76cbf44c",
+  "backup": "production-603003276-20261027T025640508760Z",
+  "before_sha256": "9c0e15b50f5356e8c29726effb53675d78e3c1eb6a04a2c18adb6e2169098813",
+  "after_sha256": "ce184806147076a4a05ab83002ce0a824e2462c7e1d9547c75fedd03dcdefe87",
+  "full_readback_verified": true,
+  "settings_preserved": true,
+  "post_reset_header_bytes": "00 16 04 00 00 00 00 00",
+  "bluetooth_check": "No advertisement found; active/confirmed status and live sensing not verified over BLE"
+}
