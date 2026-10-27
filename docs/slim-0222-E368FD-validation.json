@@ -1,0 +1,13 @@
+{
+  "device": "AirSpot-E368FD",
+  "user_alias": "Slim T",
+  "transport": "Bluetooth SMP DFU",
+  "previous_version": "0.21.2",
+  "installed_version": "0.22.2",
+  "active": true,
+  "confirmed": true,
+  "image_hash": "48138a5935b78df7c3db7bd668cd2db64846ab0501eccb9de75079040c36b2d9",
+  "amber_green_duty_percent": 25,
+  "physical_amber_colour_verified": false,
+  "current_draw_measured": false
+}
