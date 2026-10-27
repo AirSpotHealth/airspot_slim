@@ -25,3 +25,13 @@ Validation: host C regression covers default/custom threshold boundaries,
 and late interrupts after cancellation. Production signed build and complete
 firmware suite are checked before committing. No device was flashed and the
 previous release packages have not been replaced.
+
+## 0.22.2 warmer amber candidate
+
+Following a report that amber still appears greenish, reduce green from 50% to
+25% duty: 1 ms on / 3 ms off, while keeping red continuously on and blue off.
+The timer interrupt rate remains 1 kHz and stops during off periods; no extra
+background timer is introduced. This is a colour-tuning candidate, not a verified
+optical result. Confirm the affected device/version and compare red, green and
+amber on that device before declaring the colour fixed. Includes the 0.22.1
+one-second compensation correction in both measurement modes.

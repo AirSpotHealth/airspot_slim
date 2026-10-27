@@ -52,7 +52,7 @@ int main(void) {
    /* Repeated pattern updates must not restart the PWM phase. */
    set_color(LED_COLOR_AMBER,100);
  }
- assert(green_ticks==10 && amber_pwm_timer.running);
+ assert(green_ticks==5 && amber_pwm_timer.running);
  set_color(LED_COLOR_AMBER,0); /* flash gap */
  amber_pwm_tick(NULL); /* late interrupt must not relight green */
  assert(!pins[0] && !pins[1] && !pins[2] && !amber_pwm_timer.running);
