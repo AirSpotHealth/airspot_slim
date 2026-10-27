@@ -48,9 +48,10 @@ typedef struct {
   /* Diagnostic evidence from this attempt; raw/status require flag bit 0. */
   int16_t raw_co2_ppm;
   uint16_t sensor_status;
-  uint8_t sample_flags; /* 1=raw valid, 2=driver valid, 4=accepted,
+  uint16_t sample_flags; /* 1=raw valid, 2=driver valid, 4=accepted,
                           8=conditioning complete, 16=continuous mode,
-                          32=mode present, bits 6-7=selected mode (0..3) */
+                          32=mode present, bits 6-8=selected mode (0..4),
+                          512=native measurement mode labels */
 
   /* Power */
   uint16_t battery_mv;     /* mV */

@@ -497,27 +497,36 @@ int main(void) {
  sensor_manager_register_callback(observed);
  assert(sensor_manager_set_power_mode(0)==-EINVAL);
  assert(sensor_manager_set_power_mode(2)==-EINVAL);
- for(int mode=1;mode<=3;mode+=2) {
+ for(int mode=1;mode<=4;mode++) {
+  if(mode==2) continue;
   assert(!sensor_manager_set_power_mode(mode));
   assert(measurement_interval_ms==10000 && running);
-  assert(use_single_shot_mode==(mode==1));
+  assert(use_single_shot_mode==(mode!=3));
   int aw=ambient_writes,pw=pressure_writes,count=callbacks;
   now=next_report_ms;sensor_work_handler(NULL);
   assert(callbacks==count+1 && latest_data.valid);
   assert(ambient_writes>aw && pressure_writes>pw);
-  assert((latest_data.sample_flags>>6)==mode);
+  assert(((latest_data.sample_flags>>6)&7)==mode && (latest_data.sample_flags&512));
   assert(scheduled_delay>0 && scheduled_delay<=1000);
-  if(mode==1) {
+  if(mode!=3) {
    int shots=shot_calls, reports=callbacks, aw=ambient_writes, pw=pressure_writes;
    int64_t due=next_report_ms;
+   int before_sleep=sleep_calls;
    for(int i=9;i>=1;i--) {now=due-i*1000;sensor_work_handler(NULL);}
    assert(shot_calls==shots && callbacks==reports);
    assert(ambient_writes==aw+9 && pressure_writes==pw+9);
+   assert(sleep_calls==before_sleep+(mode==4 ? 9 : 0));
    now=due;sensor_work_handler(NULL);
    assert(shot_calls==shots+1 && callbacks==reports+1);
   }
   assert(((latest_data.sample_flags&16)!=0)==(mode==3));
  }
+ assert(!sensor_manager_change_power_mode(4) && single_shot_sleep_enabled());
+ save_error=-EIO;
+ assert(sensor_manager_change_power_mode(1)==-EIO && single_shot_sleep_enabled() && power==4);
+ save_error=0;
+ assert(!sensor_manager_change_power_mode(1) && !single_shot_sleep_enabled());
+ assert(!sensor_manager_set_power_mode(3));
  int16_t applied=0;assert(!sensor_manager_perform_frc(426,&applied));
  assert(applied==-100 && continuous && native_mode==2);
 }
@@ -550,3 +559,6 @@ int main(void) {
 
     def test_native_test_modes_cadence_compensation_and_frc(self):
         self._run_policy(all_modes=True, native_test=True)
+
+    def test_native_sleep_after_each_compensation_update(self):
+        self._run_policy(all_modes=True, native_test=True, sleep=True)

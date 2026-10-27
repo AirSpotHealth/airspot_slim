@@ -105,3 +105,82 @@ Raw PPK2 files, mode acknowledgements and machine-readable results are in
 `local_backups/battery-comparison-20261027/`. Both captures contain 180 seconds
 at 100,000 samples/second. Original continuous mode was restored and verified;
 PPK2 was returned to 4.2 V, output enabled, sampling stopped.
+
+## Single-shot sleep qualification, 27 October 2026
+
+The original production build has `CONFIG_AIRSPOT_STCC4_SINGLE_SHOT_SLEEP`
+disabled. The candidate enables this existing flag and returns the sensor to
+sleep after successful compensation-only updates, as well as completed shots.
+Temperature/humidity and pressure compensation still update at 1 Hz; CO2 is
+measured/reported every ten seconds. Sleep retains compensation and ASC state
+according to the STCC4 D1 datasheet section 3.4.7.
+
+Five-minute captures at 3.7 V, 100 kHz, on Slim D / AirSpot-C58CC9 with the same
+BLE notification client and 30-second status queries. The initial-settling
+indicator was inactive in both captures. J-Link was closed, and the board was
+cold-power-cycled after each flash. The sleep candidate was tested first, then
+the preserved original production image was restored and measured. The original
+image and candidate use version 0.22.6; exact image hashes/configurations and the
+candidate patch are saved with the evidence to distinguish them.
+
+| Single-shot configuration | Average current | Peak | Charge / 300 s | Estimated 75 mAh runtime | Assumed 60 mAh runtime |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Original, sleep disabled | 275.29 uA | 16.91 mA | 82.59 mC | 11.35 days | 9.08 days |
+| Candidate, sleep between updates | 166.22 uA | 16.53 mA | 49.87 mC | 18.80 days | 15.04 days |
+
+Measured current fell 39.62%; calculated runtime increased 65.62%. These are
+short fixed-voltage projections, not a full battery discharge or release claim.
+Use this matched baseline rather than the earlier 303.33 uA connected capture,
+which had the initial-settling indicator active.
+
+Both captures contained 30 valid CO2 reports, no invalid reports and no BLE
+disconnects; maximum report interval was 10.044 seconds. Sleep readings ranged
+385–528 ppm (mean 464.6), baseline 390–485 ppm (mean 446.0). Both showed post-restart
+settling; sequential room-air measurements without a reference do not establish
+accuracy equivalence or a fixed sleep-related offset. Longer stable-environment
+and ASC qualification remains necessary before enabling sleep in production.
+
+A regression test failed on the previous compensation-only path and passed with
+the candidate. All 124 host tests passed using the Nordic toolchain Python; the
+signed build passed artifact validation and physical flash readback verification.
+Evidence: `local_backups/sleep-behaviour-20261027/` (PPK2 traces, BLE logs,
+results.json, artifact hashes, configs, candidate.patch and tests.log).
+
+Final state: original production 0.22.6 restored, continuous mode acknowledged,
+4.2 V output enabled, sampling stopped, test BLE client disconnected. Production
+sleep remains disabled; the guarded candidate source change is local and unreleased.
+
+## Firmware 0.22.7: three selectable measurement modes
+
+The app can now select continuous (wire value 3), single shot without sleep (1),
+or single shot with sleep (4). The new value avoids reinterpreting legacy mode 2.
+All three report every ten seconds and update temperature/humidity/pressure
+compensation every second. Only mode 4 sleeps after healthy compensation updates
+and completed measurements. The setting persists across restart; failed settings
+writes restore the previous mode. Automatic calibration remains enabled.
+
+Forced recalibration temporarily uses the existing continuous qualification
+workflow and restores the selected mode afterward; direct FRC in sleeping mode
+is rejected. Sensor sleep retains compensation and ASC state, not a factory reset.
+
+History sample flags now use their existing 16-bit record value: bits 6–8 hold
+the selected mode and bit 9 marks native labels. Mode-change events use 0x100 OR
+the selected mode. This distinguishes the new ten-second modes from legacy
+reading rates without changing the eight-byte history-record layout. The app
+adds enum value 4 without changing existing persisted enum indices; the sleep
+option is disabled on firmware before 0.22.7.
+
+The earlier sleep qualification remains preliminary: sequential ambient CO2
+measurements cannot establish accuracy equivalence. No measured runtime estimate
+is presented as a battery-life promise in the app.
+
+Validation: 124 firmware tests and 197 Flutter tests passed (one Flutter test
+skipped); targeted Flutter static analysis passed. The full Flutter suite used
+the bundled macOS Isar library via ISAR_LIBRARY_PATH. Actual controls were
+rendered and checked, including a narrow layout with increased text size.
+
+Wired Slim C58CC9 was flashed with 0.22.7, settings preserved and full image
+readback verified. BLE confirmed version 0.22.7 and modes 1 → 4 → 1 → 3, each
+followed by a valid CO2 report. Final mode is continuous, the test central is
+disconnected, and PPK2 remains at 4.2 V with sampling stopped. Hardware logs and
+artifact hashes are in `local_backups/three-modes-0227-20261027/`.

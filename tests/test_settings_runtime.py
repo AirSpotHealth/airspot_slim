@@ -240,6 +240,12 @@ int main(void) {
  assert(user_settings_set_auto_calibrate(0)==-ENOTSUP);
  assert(settings.native_asc_mode==2);
  assert(!user_settings_set_native_asc_mode(2));
+ assert(!user_settings_set_power_mode(4));
+ user_settings_t restored;uint8_t saved[49];encode_settings(&settings,saved);
+ assert(!decode_settings(saved,&restored) && restored.power_mode==4);
+ settings=restored;initialized=false;assert(!user_settings_init());
+ assert(settings.power_mode==4);
+ assert(user_settings_set_power_mode(2)==-EINVAL);
  return 0;
 }
 '''

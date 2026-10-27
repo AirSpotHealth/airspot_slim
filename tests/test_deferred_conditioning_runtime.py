@@ -36,6 +36,7 @@ static int stcc4_stop(void){stops++;return 0;}
 static void conditioning_keepalive(void){}
 static int stcc4_perform_conditioning(void(*f)(void)){assert(meas_mutex&&mode_change_mutex);commands++;now+=22000;return command_error;}
 static int stcc4_start_continuous(void){starts++;return restore_error;}
+static bool single_shot_sleep_enabled(void){return use_single_shot_mode;}
 static int stcc4_sleep_after_sample(void){sleeps++;return restore_error;}
 static void led_indicator_start_flash_pulse(int a,int b,int c){}
 static void led_indicator_stop(void){}

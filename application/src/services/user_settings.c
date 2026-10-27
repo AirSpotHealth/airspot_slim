@@ -34,8 +34,10 @@ K_MUTEX_DEFINE(settings_mutex);
 
 #if defined(CONFIG_AIRSPOT_NATIVE_TEST_MODES)
 #define DEFAULT_POWER_MODE 3
+#define MAX_POWER_MODE 4
 #else
 #define DEFAULT_POWER_MODE 1
+#define MAX_POWER_MODE 3
 #endif
 /* Default settings */
 static user_settings_t settings = {
@@ -115,7 +117,7 @@ static int decode_settings(const uint8_t *in, user_settings_t *value)
     value->co2_yellow_start = (uint16_t)sys_get_le16(in + i); i += 2;
     value->co2_red_start = (uint16_t)sys_get_le16(in + i); i += 2;
     value->paired = in[i++];
-    if (!memchr(value->device_name, 0, 21) || value->power_mode > 3 ||
+    if (!memchr(value->device_name, 0, 21) || value->power_mode > MAX_POWER_MODE ||
         value->native_asc_mode > 2 || value->auto_calibrate > 1 || value->paired > 1 ||
         value->co2_yellow_start < 400 || value->co2_red_start > 5000 ||
         value->co2_yellow_start >= value->co2_red_start) return -EINVAL;
@@ -184,7 +186,7 @@ static int load_value(const char *name, size_t len, settings_read_cb read_cb,
   int rc = read_cb(cb_arg, destination, expected);
   if (rc < 0) { return rc; }
   if ((size_t)rc != expected) { return -EIO; }
-  if (candidate.power_mode > 3 || candidate.auto_calibrate > 1 ||
+  if (candidate.power_mode > MAX_POWER_MODE || candidate.auto_calibrate > 1 ||
       candidate.paired > 1) { return -EINVAL; }
   settings = candidate;
   return 0;
@@ -243,7 +245,7 @@ int user_settings_init(void)
 #if defined(CONFIG_AIRSPOT_NATIVE_TEST_MODES)
   /* Product policy: re-enable learning even for an older saved OFF preference. */
   settings.native_asc_mode = 2;
-  if (settings.power_mode != 1 && settings.power_mode != 3) settings.power_mode = 3;
+  if (settings.power_mode != 1 && settings.power_mode != 3 && settings.power_mode != 4) settings.power_mode = 3;
 #endif
   settings.auto_calibrate = 0;
   settings.co2_correction = 0;
@@ -333,9 +335,9 @@ uint8_t user_settings_get_power_mode(void) { return settings.power_mode; }
 int user_settings_set_power_mode(uint8_t mode)
 {
 #if defined(CONFIG_AIRSPOT_NATIVE_TEST_MODES)
-  if (mode != 1 && mode != 3) return -EINVAL;
+  if (mode != 1 && mode != 3 && mode != 4) return -EINVAL;
 #endif
-  if (mode > 3) { return -EINVAL; }
+  if (mode > MAX_POWER_MODE) { return -EINVAL; }
   uint8_t value = mode;
   return save_value(SETTINGS_KEY "/power", &settings.power_mode, &value, sizeof(value));
 }
