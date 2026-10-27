@@ -542,7 +542,9 @@ static void sensor_data_callback(const sensor_data_t *data) {
 
   /* Calibration must never accumulate a cached failed sensor reading. */
   software_asc_process_measurement(data->co2_ppm);
+#if !defined(CONFIG_AIRSPOT_NATIVE_TEST_MODES)
   calibration_service_process_measurement(data->co2_ppm);
+#endif
 
   uint16_t corrected_co2 = user_settings_apply_co2_correction(data->co2_ppm);
   queue_co2_data(data);

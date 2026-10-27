@@ -436,6 +436,15 @@ static void start_pattern(led_pattern_t pattern, led_color_t color,
  * Public API - Timed Patterns
  * ======================================== */
 
+void led_indicator_show_settling_tick(void) {
+  k_mutex_lock(&state_mutex, K_FOREVER);
+  if (state.pattern == LED_PATTERN_OFF) {
+    /* Zephyr mutexes are recursive: keep the idle check and start atomic. */
+    start_pattern(LED_PATTERN_SOLID, LED_COLOR_WHITE, 0, 100, false);
+  }
+  k_mutex_unlock(&state_mutex);
+}
+
 void led_indicator_show_color(led_color_t color, uint32_t duration_ms) {
   start_pattern(LED_PATTERN_SOLID, color, 0, duration_ms, duration_ms == 0);
 }

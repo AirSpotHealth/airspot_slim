@@ -6,7 +6,7 @@ import tempfile
 import unittest
 ROOT=Path(__file__).resolve().parents[1]
 class Stcc4StatusTests(unittest.TestCase):
-    def _run_status_policy(self, native=False, frc=False):
+    def _run_status_policy(self, native=False, frc=False, test_modes=False):
         source=re.sub(r'^#include .*$', '', (ROOT/'application/src/drivers/stcc4.c').read_text(), flags=re.M)
         prefix=r'''
 #include <assert.h>
@@ -118,6 +118,10 @@ int main(void) {
  assert(stcc4_perform_forced_recalibration(426,&correction)==-EIO);
 }
 '''
+        if test_modes:
+            prefix = '#define CONFIG_AIRSPOT_NATIVE_TEST_MODES 1\n' + prefix
+            tests = tests.replace('assert(!stcc4_stop() && !stcc4_is_starting());', 'assert(!stcc4_stop() && stcc4_is_starting());')
+            tests = tests.replace('  sample(0x0080);assert', '  assert(!stcc4_trigger_single_shot() && stcc4_is_starting()); sample(0);assert(!stcc4_read(&d) && stcc4_is_starting()); assert(!stcc4_trigger_single_shot()); sample(0);assert(!stcc4_read(&d) && stcc4_is_starting()); assert(!stcc4_trigger_single_shot()); sample(0);assert(!stcc4_read(&d) && !stcc4_is_starting());\n  sample(0x0080);assert')
         with tempfile.TemporaryDirectory() as directory:
             p=Path(directory);(p/'test.c').write_text(prefix+source+tests)
             subprocess.run(['cc',*(['-DCONFIG_AIRSPOT_STCC4_INTERNAL_ASC_EXPERIMENT=1'] if native else []),'-std=c11','-fsanitize=address,undefined','-I',str(ROOT/'application/include'),str(p/'test.c'),'-o',str(p/'test')],check=True)
@@ -131,3 +135,6 @@ int main(void) {
 
     def test_native_frc_correction_crc_and_rejection(self):
         self._run_status_policy(frc=True)
+
+    def test_native_first_two_single_shots_are_bypass(self):
+        self._run_status_policy(native=True, test_modes=True)

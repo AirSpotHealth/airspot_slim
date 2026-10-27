@@ -25,6 +25,10 @@
 #include <services/ble_service.h>
 #include <services/led_indicator.h>
 #include <services/sensor_manager.h>
+#if defined(CONFIG_AIRSPOT_NATIVE_TEST_MODES)
+#include <services/calibration_service.h>
+#include <services/initial_settling.h>
+#endif
 #if defined(CONFIG_AIRSPOT_CONTINUOUS_ALL_MODES)
 #include <services/ota_service.h>
 #endif
@@ -614,6 +618,10 @@ static int do_acquisition_locked(bool publish)
 #if IS_ENABLED(CONFIG_AIRSPOT_STCC4_CONDITION_ON_BOOT)
   if (stcc_data.valid) conditioning_observe();
 #endif
+#if defined(CONFIG_AIRSPOT_NATIVE_TEST_MODES)
+  initial_settling_observe(data.valid, use_single_shot_mode,
+      user_settings_is_paired(), data.battery_low);
+#endif
   if (!starting) recovery_observe(data.valid);
   settling_observe(data.valid && !use_single_shot_mode &&
                    user_settings_get_native_asc_mode() == 2);
@@ -639,6 +647,10 @@ static int do_acquisition_locked(bool publish)
       measurement_interval_ms == POWER_MODE_LOW_INTERVAL_MS ? 1 :
       measurement_interval_ms == POWER_MODE_MID_INTERVAL_MS ? 2 :
       measurement_interval_ms == POWER_MODE_HI_INTERVAL_MS ? 3 : UINT8_MAX;
+#if defined(CONFIG_AIRSPOT_NATIVE_TEST_MODES)
+  sample_mode = use_single_shot_mode ? 1 : 3;
+  if (!starting) calibration_service_process_measurement(data.valid ? data.co2_ppm : 0);
+#endif
   data.sample_flags = (sample_mode <= 3 ? 32 | (sample_mode << 6) : 0) | co2_diagnostic.flags |
       (stcc4_conditioned ? 8 : 0) | (!use_single_shot_mode ? 16 : 0);
 
@@ -705,6 +717,9 @@ static void sensor_work_handler(struct k_work *work)
   /* Acquisition and compensation are independent of the reporting preference.
    * Now mode keeps sensing but publishes only on an explicit request. */
   bool publish = measurement_interval_ms != 0 && started >= next_report_ms;
+#if defined(CONFIG_AIRSPOT_NATIVE_TEST_MODES)
+  if (use_single_shot_mode) publish = true;
+#endif
   do_acquisition_locked(publish);
   if (publish) next_report_ms = started + measurement_interval_ms;
 #else
@@ -748,6 +763,9 @@ int sensor_manager_start(uint32_t interval_ms)
   }
 
   k_mutex_lock(&meas_mutex, K_FOREVER);
+#if defined(CONFIG_AIRSPOT_NATIVE_TEST_MODES)
+  interval_ms = 10000;
+#endif
   measurement_interval_ms = interval_ms;
   next_report_ms = 0;
   running = true;
@@ -821,10 +839,12 @@ int sensor_manager_perform_frc(uint16_t target_ppm, int16_t *applied_correction)
     return -EBUSY;
   }
 #endif
+#if !defined(CONFIG_AIRSPOT_NATIVE_TEST_MODES)
   if (user_settings_get_native_asc_mode() == 2) {
     k_mutex_unlock(&meas_mutex);
     return -EBUSY;
   }
+#endif
 
   /* Datasheet FRC sequence: a running continuous measurement must be stopped
    * first (single-shot leaves the sensor idle between shots, which is fine).
@@ -953,7 +973,11 @@ int sensor_manager_set_power_mode(uint8_t power_mode)
     break;
   }
 
-#if defined(CONFIG_AIRSPOT_CONTINUOUS_ALL_MODES)
+#if defined(CONFIG_AIRSPOT_NATIVE_TEST_MODES)
+  if (power_mode != 1 && power_mode != 3) return -EINVAL;
+  new_interval = 10000;
+  want_single_shot = power_mode == 1;
+#elif defined(CONFIG_AIRSPOT_CONTINUOUS_ALL_MODES)
   want_single_shot = false;
 #endif
 
@@ -1036,6 +1060,10 @@ int sensor_manager_set_power_mode(uint8_t power_mode)
 K_MUTEX_DEFINE(mode_change_mutex);
 int sensor_manager_change_power_mode(uint8_t mode)
 {
+#if defined(CONFIG_AIRSPOT_NATIVE_TEST_MODES)
+  int lease = software_asc_begin_manual();
+  if (lease) return lease;
+#endif
   k_mutex_lock(&mode_change_mutex, K_FOREVER);
   uint8_t previous = user_settings_get_power_mode();
   int rc = sensor_manager_set_power_mode(mode);
@@ -1052,6 +1080,9 @@ int sensor_manager_change_power_mode(uint8_t mode)
     (void)history_event_record(mode, RECORD_TYPE_MEASUREMENT_MODE_CHANGE);
   }
   k_mutex_unlock(&mode_change_mutex);
+#if defined(CONFIG_AIRSPOT_NATIVE_TEST_MODES)
+  software_asc_end_manual();
+#endif
   return rc;
 }
 

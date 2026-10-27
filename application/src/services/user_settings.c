@@ -32,10 +32,15 @@ K_MUTEX_DEFINE(settings_mutex);
 #define DEFAULT_NATIVE_ASC_MODE 0
 #endif
 
+#if defined(CONFIG_AIRSPOT_NATIVE_TEST_MODES)
+#define DEFAULT_POWER_MODE 3
+#else
+#define DEFAULT_POWER_MODE 1
+#endif
 /* Default settings */
 static user_settings_t settings = {
     .device_name = "AirSpot Slim",
-    .power_mode = 1,  /* Low power (3 min interval) */
+    .power_mode = DEFAULT_POWER_MODE,
     .co2_correction = 0,
     .calib_target = 426,
     .auto_calibrate = 0, /* ASC off by default - manual recalibration is used */
@@ -46,7 +51,7 @@ static user_settings_t settings = {
     .paired = 0};
 static const user_settings_t defaults = {
     .device_name = "AirSpot Slim",
-    .power_mode = 1,  /* Low power (3 min interval) */
+    .power_mode = DEFAULT_POWER_MODE,
     .co2_correction = 0,
     .calib_target = 426,
     .auto_calibrate = 0, /* ASC off by default - manual recalibration is used */
@@ -236,6 +241,9 @@ int user_settings_init(void)
   /* Explicit evaluation build: never revive host learning or a saved offset.
    * A saved native OFF preference remains OFF. No sensor history is erased. */
   if (!settings.native_asc_mode) settings.native_asc_mode = 2;
+#if defined(CONFIG_AIRSPOT_NATIVE_TEST_MODES)
+  if (settings.power_mode != 1 && settings.power_mode != 3) settings.power_mode = 3;
+#endif
   settings.auto_calibrate = 0;
   settings.co2_correction = 0;
 #endif
@@ -264,7 +272,9 @@ void user_settings_get_snapshot(user_settings_t *out) {
   if (settings.native_asc_mode) {
     out->co2_correction = 0;
     out->auto_calibrate = settings.native_asc_mode == 2;
+#if !defined(CONFIG_AIRSPOT_NATIVE_TEST_MODES)
     out->calib_target = settings.native_asc_mode == 2 ? 400 : settings.calib_target;
+#endif
   }
   k_mutex_unlock(&settings_mutex);
 }
@@ -287,6 +297,9 @@ uint8_t user_settings_get_native_asc_mode(void) { return settings.native_asc_mod
 
 int user_settings_set_native_asc_mode(uint8_t mode)
 {
+#if defined(CONFIG_AIRSPOT_NATIVE_TEST_MODES)
+  if (mode == 0) return -ENOTSUP;
+#endif
   if (mode > 2) return -EINVAL;
   k_mutex_lock(&settings_mutex, K_FOREVER);
   user_settings_t candidate = settings;
@@ -299,6 +312,9 @@ int user_settings_set_native_asc_mode(uint8_t mode)
 
 int user_settings_commit_manual_correction(int16_t correction)
 {
+#if defined(CONFIG_AIRSPOT_NATIVE_TEST_MODES)
+  return -ENOTSUP;
+#endif
   k_mutex_lock(&settings_mutex, K_FOREVER);
   int rc = -EBUSY;
   if (settings.native_asc_mode != 2) {
@@ -315,6 +331,9 @@ uint8_t user_settings_get_power_mode(void) { return settings.power_mode; }
 
 int user_settings_set_power_mode(uint8_t mode)
 {
+#if defined(CONFIG_AIRSPOT_NATIVE_TEST_MODES)
+  if (mode != 1 && mode != 3) return -EINVAL;
+#endif
   if (mode > 3) { return -EINVAL; }
   uint8_t value = mode;
   return save_value(SETTINGS_KEY "/power", &settings.power_mode, &value, sizeof(value));
@@ -327,12 +346,19 @@ int16_t user_settings_get_co2_correction(void)
 
 int user_settings_set_co2_correction(int16_t correction)
 {
+#if defined(CONFIG_AIRSPOT_NATIVE_TEST_MODES)
+  return -ENOTSUP;
+#endif
   int16_t value = correction;
   return save_value(SETTINGS_KEY "/co2_cc", &settings.co2_correction, &value, sizeof(value));
 }
 
 uint16_t user_settings_get_calib_target(void) {
+#if defined(CONFIG_AIRSPOT_NATIVE_TEST_MODES)
+  return settings.calib_target;
+#else
   return settings.native_asc_mode == 2 ? 400 : settings.calib_target;
+#endif
 }
 
 int user_settings_set_calib_target(uint16_t target)
@@ -371,6 +397,9 @@ uint8_t user_settings_get_auto_calibrate(void)
 
 int user_settings_set_auto_calibrate(uint8_t enabled)
 {
+#if defined(CONFIG_AIRSPOT_NATIVE_TEST_MODES)
+  return -ENOTSUP;
+#endif
   uint8_t value = enabled ? 1 : 0;
   return save_value(SETTINGS_KEY "/auto_calib", &settings.auto_calibrate, &value, sizeof(value));
 }
@@ -401,6 +430,9 @@ int user_settings_set_paired(bool paired)
 
 uint16_t user_settings_apply_co2_correction(uint16_t raw_ppm)
 {
+#if defined(CONFIG_AIRSPOT_NATIVE_TEST_MODES)
+  return raw_ppm;
+#endif
   if (settings.native_asc_mode) return raw_ppm; /* Retain baseline when learning is paused. */
   int32_t corrected = (int32_t)raw_ppm + settings.co2_correction;
   if (corrected < 0)

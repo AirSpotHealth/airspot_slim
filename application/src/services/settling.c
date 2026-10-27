@@ -7,6 +7,9 @@
 #include <zephyr/sys/byteorder.h>
 #include <zephyr/sys/crc.h>
 #include <services/settling.h>
+#if defined(CONFIG_AIRSPOT_NATIVE_TEST_MODES)
+#include <services/initial_settling.h>
+#endif
 
 K_MUTEX_DEFINE(settling_mutex);
 static settling_status_t state;
@@ -68,6 +71,10 @@ int settling_prepare_erase(uint32_t reset_time)
 }
 int settling_erased(void)
 {
+#if defined(CONFIG_AIRSPOT_NATIVE_TEST_MODES)
+  int reset_rc = initial_settling_reset();
+  if (reset_rc) return reset_rc;
+#endif
   k_mutex_lock(&settling_mutex, K_FOREVER);
   state.stage = SETTLING_RUN;
   state.seconds = state.fresh_seconds = 0;

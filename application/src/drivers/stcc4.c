@@ -146,6 +146,10 @@ int stcc4_init(void) {
   return 0;
 }
 
+#if defined(CONFIG_AIRSPOT_NATIVE_TEST_MODES)
+static uint8_t single_shots_started;
+#endif
+
 int stcc4_reset(void) {
   if (!initialized) {
     return -ENODEV;
@@ -162,6 +166,9 @@ int stcc4_reset(void) {
   last_data.valid = false;
   current_mode = STCC4_MODE_SINGLE_SHOT;
 
+#if defined(CONFIG_AIRSPOT_NATIVE_TEST_MODES)
+  single_shots_started = 0;
+#endif
   LOG_INF("STCC4 reset (sleep/wake cycle)");
   return 0;
 }
@@ -172,6 +179,7 @@ void stcc4_get_reset_diagnostic(stcc4_reset_diagnostic_t *diagnostic) {
 }
 
 /* Caller must stop measurement before explicitly erasing native history. */
+
 int stcc4_factory_reset(void) {
   reset_diagnostic = (stcc4_reset_diagnostic_t){.stage = 1};
   if (!initialized) return -ENODEV;
@@ -191,6 +199,9 @@ int stcc4_factory_reset(void) {
   last_data = (stcc4_data_t){0};
   current_mode = STCC4_MODE_SINGLE_SHOT;
   continuous_start_ms = 0;
+#if defined(CONFIG_AIRSPOT_NATIVE_TEST_MODES)
+  single_shots_started = 0;
+#endif
   return 0;
 }
 
@@ -227,6 +238,9 @@ int stcc4_start_continuous(void) {
 }
 
 bool stcc4_is_starting(void) {
+#if defined(CONFIG_AIRSPOT_NATIVE_TEST_MODES)
+  if (current_mode == STCC4_MODE_SINGLE_SHOT) return single_shots_started <= 2;
+#endif
   return current_mode == STCC4_MODE_CONTINUOUS &&
       k_uptime_get() - continuous_start_ms <= 20000;
 }
@@ -240,6 +254,9 @@ int stcc4_stop(void) {
   if (ret == 0) {
     current_mode = STCC4_MODE_SINGLE_SHOT;
     continuous_start_ms = 0;
+#if defined(CONFIG_AIRSPOT_NATIVE_TEST_MODES)
+  single_shots_started = 0;
+#endif
     k_msleep(STCC4_STOP_TIME_MS);
     LOG_INF("STCC4 measurement stopped");
   }
@@ -262,7 +279,11 @@ int stcc4_trigger_single_shot(void) {
     }
   }
 
-  return stcc4_write_cmd(STCC4_CMD_SINGLE_SHOT_MSB, STCC4_CMD_SINGLE_SHOT_LSB);
+  int ret = stcc4_write_cmd(STCC4_CMD_SINGLE_SHOT_MSB, STCC4_CMD_SINGLE_SHOT_LSB);
+#if defined(CONFIG_AIRSPOT_NATIVE_TEST_MODES)
+  if (!ret && single_shots_started < 3) single_shots_started++;
+#endif
+  return ret;
 }
 
 int stcc4_read(stcc4_data_t *data) {

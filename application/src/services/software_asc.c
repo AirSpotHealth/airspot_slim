@@ -70,7 +70,11 @@ int software_asc_set_enabled(uint8_t enabled) {
 }
 int software_asc_set_target(uint16_t target) {
   k_mutex_lock(&asc_mutex, K_FOREVER);
-  if (asc.manual || user_settings_get_native_asc_mode() == 2) {
+  if (asc.manual
+#if !defined(CONFIG_AIRSPOT_NATIVE_TEST_MODES)
+      || user_settings_get_native_asc_mode() == 2
+#endif
+  ) {
     k_mutex_unlock(&asc_mutex);
     return -EBUSY;
   }

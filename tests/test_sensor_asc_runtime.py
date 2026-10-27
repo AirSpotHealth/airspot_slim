@@ -8,7 +8,7 @@ from history_support import STUBS
 ROOT=Path(__file__).resolve().parents[1]
 
 class SensorAscTests(unittest.TestCase):
-    def _run_policy(self, native=False, recovery=False, sleep=False, rob=False, all_modes=False):
+    def _run_policy(self, native=False, recovery=False, sleep=False, rob=False, all_modes=False, native_test=False):
         source=(ROOT/'application/src/services/sensor_manager.c').read_text()
         source=re.sub(r'^#include .*$', '', source, flags=re.M)
         harness='#include <assert.h>\n' + STUBS + r'''
@@ -477,9 +477,38 @@ int main(void) {
  sensor_manager_stop();assert(!running);
 }
 '''
+        if native_test:
+            harness += r"""
+void calibration_service_process_measurement(uint16_t co2) {}
+void initial_settling_observe(bool valid,bool single,bool paired,bool low) {}
+bool user_settings_is_paired(void) {return true;}
+"""
+            tests = r"""
+static void observed(const sensor_data_t *d) {callback_valid=d->valid;callbacks++;}
+int main(void) {
+ native_mode=2;assert(!sensor_manager_init());
+ sensor_manager_register_callback(observed);
+ assert(sensor_manager_set_power_mode(0)==-EINVAL);
+ assert(sensor_manager_set_power_mode(2)==-EINVAL);
+ for(int mode=1;mode<=3;mode+=2) {
+  assert(!sensor_manager_set_power_mode(mode));
+  assert(measurement_interval_ms==10000 && running);
+  assert(use_single_shot_mode==(mode==1));
+  int aw=ambient_writes,pw=pressure_writes,count=callbacks;
+  now=next_report_ms;sensor_work_handler(NULL);
+  assert(callbacks==count+1 && latest_data.valid);
+  assert(ambient_writes>aw && pressure_writes>pw);
+  assert((latest_data.sample_flags>>6)==mode);
+  assert(scheduled_delay>0 && scheduled_delay<=(mode==1?10000:1000));
+  assert(((latest_data.sample_flags&16)!=0)==(mode==3));
+ }
+ int16_t applied=0;assert(!sensor_manager_perform_frc(426,&applied));
+ assert(applied==-100 && continuous && native_mode==2);
+}
+"""
         with tempfile.TemporaryDirectory() as directory:
             p=Path(directory);(p/'test.c').write_text(harness+source+tests)
-            subprocess.run(['cc',*(['-DCONFIG_AIRSPOT_CONTINUOUS_ALL_MODES=1'] if all_modes else []),*(['-DCONFIG_AIRSPOT_SENSOR_NATIVE_ONLY=1'] if rob or all_modes else []),*(['-DCONFIG_AIRSPOT_STCC4_SINGLE_SHOT_SLEEP=1'] if sleep else []),*(['-DCONFIG_AIRSPOT_STCC4_INTERNAL_ASC_EXPERIMENT=1'] if native else []),'-std=c11','-fsanitize=address,undefined','-I',str(ROOT/'application/include'),str(p/'test.c'),'-o',str(p/'test')],check=True)
+            subprocess.run(['cc',*(['-DCONFIG_AIRSPOT_NATIVE_TEST_MODES=1'] if native_test else []),*(['-DCONFIG_AIRSPOT_CONTINUOUS_ALL_MODES=1'] if all_modes else []),*(['-DCONFIG_AIRSPOT_SENSOR_NATIVE_ONLY=1'] if rob or all_modes else []),*(['-DCONFIG_AIRSPOT_STCC4_SINGLE_SHOT_SLEEP=1'] if sleep else []),*(['-DCONFIG_AIRSPOT_STCC4_INTERNAL_ASC_EXPERIMENT=1'] if native else []),'-std=c11','-fsanitize=address,undefined','-I',str(ROOT/'application/include'),str(p/'test.c'),'-o',str(p/'test')],check=True)
             subprocess.run([str(p/'test')],check=True)
 
     def test_startup_reset_and_measurement_policy(self):
@@ -502,3 +531,6 @@ int main(void) {
 
     def test_continuous_acquisition_reporting_and_compensation_in_all_modes(self):
         self._run_policy(all_modes=True)
+
+    def test_native_test_modes_cadence_compensation_and_frc(self):
+        self._run_policy(all_modes=True, native_test=True)

@@ -108,6 +108,8 @@ void led_indicator_stop(void);
  * @return true if an LED pattern is running
  */
 bool led_indicator_is_active(void);
+/* Low-priority 100 ms white tick; never replaces another pattern. */
+void led_indicator_show_settling_tick(void);
 
 /* ========================================
  * Blocking Software-PWM Ramp (one-shot transitions)

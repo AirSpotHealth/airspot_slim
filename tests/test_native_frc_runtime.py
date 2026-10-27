@@ -3,7 +3,7 @@ from pathlib import Path
 import subprocess, tempfile, unittest
 ROOT = Path(__file__).resolve().parents[1]
 class NativeFrcTests(unittest.TestCase):
- def test_frc_timing_errors_and_restoration(self):
+ def _run(self, native=False):
   headers = {'zephyr/kernel.h': '''#pragma once
 #include <stdint.h>
 #include <stddef.h>
@@ -67,6 +67,13 @@ int main(void) {
  assert(frc_calls==2 && error_calls==3 && !lease);
 }
 '''
+  if native:
+   code = '#define CONFIG_AIRSPOT_NATIVE_TEST_MODES 1\n#define CONFIG_AIRSPOT_CONTINUOUS_ALL_MODES 1\n' + code
+   code = code.replace('int software_asc_begin_calibration(void)', 'int software_asc_begin_manual(void)')
+   code = code.replace('s<=180', 's<=60').replace('s<180', 's<60').replace('now+=180000', 'now+=60000')
+   code = code.replace('s%5==0', 's>20')
+   code = code.replace('native_mode=2;assert(calibration_service_start(426)==-EBUSY && !lease);', 'native_mode=2;')
+   code = code.replace('native_mode=1;assert', 'native_mode=2;assert')
   with tempfile.TemporaryDirectory() as d:
    p=Path(d)
    for name,value in headers.items():
@@ -74,3 +81,8 @@ int main(void) {
    (p/'test.c').write_text(code)
    subprocess.run(['cc','-std=c11','-fsanitize=address,undefined','-I',str(p),'-I',str(ROOT/'application/include'),'-I',str(ROOT/'application/src'),str(p/'test.c'),'-o',str(p/'test')],check=True)
    subprocess.run([str(p/'test')],check=True)
+
+ def test_frc_timing_errors_and_restoration(self):
+  self._run()
+ def test_native_frc_with_asc_enabled_and_startup_bypass(self):
+  self._run(native=True)

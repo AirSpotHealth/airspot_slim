@@ -463,6 +463,9 @@ static void frame_received_handler(const uint8_t *frame, uint16_t len)
         else if (before.stage != SETTLING_NONE && before.stage != SETTLING_DONE) rc = -EBUSY;
         else if (before.error) rc = before.error;
         else rc = sensor_manager_change_native_asc(true);
+#if defined(CONFIG_AIRSPOT_NATIVE_TEST_MODES)
+        if (!rc) rc = sensor_manager_change_power_mode(3);
+#endif
 #else
         rc = -ENOTSUP;
 #endif

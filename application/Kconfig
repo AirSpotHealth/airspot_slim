@@ -95,3 +95,8 @@ config AIRSPOT_POWER_OFF_ENABLED
 	  regardless of Qi detection. Holding beyond the window cancels.
 
 endmenu
+
+config AIRSPOT_NATIVE_TEST_MODES
+	bool "Native STCC4 single-shot/continuous battery comparison"
+	depends on AIRSPOT_CONTINUOUS_ALL_MODES && AIRSPOT_SENSOR_NATIVE_ONLY
+	default n

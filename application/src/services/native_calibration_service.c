@@ -7,8 +7,16 @@
 #include <services/sensor_manager.h>
 #include <services/user_settings.h>
 
+#if defined(CONFIG_AIRSPOT_NATIVE_TEST_MODES)
+#define FRC_PREPARE_SECONDS 60
+#else
 #define FRC_PREPARE_SECONDS 180
+#endif
+#if defined(CONFIG_AIRSPOT_NATIVE_TEST_MODES)
+#define MAX_SAMPLE_GAP_MS 2500
+#else
 #define MAX_SAMPLE_GAP_MS 12000
+#endif
 K_MUTEX_DEFINE(calib_mutex);
 static calibration_callbacks_t callbacks;
 static bool active, collecting, sampling_failed;
@@ -30,19 +38,29 @@ bool calibration_service_is_active(void)
 
 int calibration_service_start(uint16_t target_ppm)
 {
-#if defined(CONFIG_AIRSPOT_CONTINUOUS_ALL_MODES)
+#if defined(CONFIG_AIRSPOT_CONTINUOUS_ALL_MODES) && !defined(CONFIG_AIRSPOT_NATIVE_TEST_MODES)
   /* Current customer policy is continuous learning followed by fresh air.
    * An older app must not silently invoke FRC in this qualification build. */
   return -ENOTSUP;
 #endif
   if (target_ppm > 32000) return -EINVAL;
   k_mutex_lock(&calib_mutex, K_FOREVER);
-  if (active || user_settings_get_native_asc_mode() == 2) {
+  if (active
+#if !defined(CONFIG_AIRSPOT_NATIVE_TEST_MODES)
+      || user_settings_get_native_asc_mode() == 2
+#endif
+  ) {
     k_mutex_unlock(&calib_mutex);
     return -EBUSY;
   }
   int rc = software_asc_set_target(target_ppm);
-  if (!rc) rc = software_asc_begin_calibration();
+  if (!rc) {
+#if defined(CONFIG_AIRSPOT_NATIVE_TEST_MODES)
+    rc = software_asc_begin_manual();
+#else
+    rc = software_asc_begin_calibration();
+#endif
+  }
   if (rc) { k_mutex_unlock(&calib_mutex); return rc; }
   active = true;
   collecting = false;
@@ -73,7 +91,7 @@ void calibration_service_process_measurement(uint16_t co2_ppm)
   if (active && collecting) {
     int64_t now = k_uptime_get();
     if (co2_ppm == 0 || co2_ppm > 32000 ||
-        now - last_sample_ms > MAX_SAMPLE_GAP_MS) sampling_failed = true;
+        (samples && now - last_sample_ms > MAX_SAMPLE_GAP_MS)) sampling_failed = true;
     last_sample_ms = now;
     if (samples < UINT16_MAX) samples++;
   }
