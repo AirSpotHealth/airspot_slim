@@ -1,6 +1,8 @@
 # Slim pressure and low-voltage validation — 27 October 2026
 
-Target: wired Slim D / AirSpot-D30E3C, nRF54L15, J-Link 603003276.
+Target: wired Slim D, nRF54L15, J-Link 603003276. Its own RTT logs and BLE
+verification identify the advertised name as **AirSpot-C58CC9** (the earlier
+D30E3C label was inferred incorrectly from a chip identifier).
 The battery was disconnected. User initially controlled a bench supply, then
 connected Power Profiler Kit II D29683E23A07 in Source Meter mode. Tests used
 0.22.5 with AirSpot debug logging; kernel/library logging remained at error level.
@@ -75,3 +77,31 @@ RAM snapshots after startup confirmed valid CO2 and pressure, zero sensor fault,
 and advancing measurement timestamps (117167 → 119167 ms). Pressure was
 1011.79 → 1011.80 hPa, CO2 was 477 → 485 ppm, and battery ADC was 4099 mV.
 The snapshots and J-Link output are preserved with the other local evidence.
+
+## Battery-current comparison on production 0.22.6
+
+PPK2 source at 3.7 V, battery disconnected, 100 kHz capture for 180 seconds per
+mode. Both modes report every ten seconds and update compensation every second.
+BLE mode acknowledgements were verified, then the central disconnected before
+capture. The device advertised normally. No J-Link session was active; a cold
+power cycle cleared debugger state before these measurements. Initial startup
+and mode-transition periods were excluded. The first-hour white indicator was
+active in both captures (2595 seconds remaining before single-shot capture).
+
+| Mode | Average current | Peak current | Integrated charge | 75 mAh estimate | Assumed 60 mAh usable estimate |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Continuous | 0.97382 mA | 17.81 mA | 175.29 mC | 77.0 h / 3.21 days | 61.6 h / 2.57 days |
+| Single shot | 0.29244 mA | 17.38 mA | 52.64 mC | 256.5 h / 10.69 days | 205.2 h / 8.55 days |
+
+Runtime calculation: capacity in mAh divided by average current in mA.
+Single-shot used 69.97% less current, giving a calculated 3.33× runtime at the
+same usable capacity. The Rev3A schematic specifies a nominal 75 mAh cell;
+60 mAh is an illustrative usable-capacity assumption, not a measured capacity.
+These are fixed-voltage, short-capture estimates, not observed full-discharge
+lifetimes. Actual capacity, cutoff, voltage-dependent load, temperature and
+Bluetooth/LED workload affect endurance. They are not a qualified customer claim.
+
+Raw PPK2 files, mode acknowledgements and machine-readable results are in
+`local_backups/battery-comparison-20261027/`. Both captures contain 180 seconds
+at 100,000 samples/second. Original continuous mode was restored and verified;
+PPK2 was returned to 4.2 V, output enabled, sampling stopped.
