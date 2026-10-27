@@ -13,6 +13,11 @@ K_MUTEX_DEFINE(conditioning_mutex);
 static uint32_t saved_time, anchor_time;
 static int64_t anchor_ms, resume_ms, last_sample_ms = -1, conditioned_ms = -1;
 static bool begun, waiting, needed;
+static int64_t next_checkpoint;
+#define CHECKPOINT_MS 60000
+
+/* Called with conditioning_mutex held. */
+static int checkpoint(void);
 
 static int load(const char *name, size_t len, settings_read_cb read, void *arg)
 {
@@ -40,20 +45,17 @@ int conditioning_begin(void)
   k_mutex_lock(&conditioning_mutex, K_FOREVER);
   int rc = 0;
   if (!begun) {
-    /* Invalidate BEFORE measuring: an abrupt loss must never reuse stale time.
-     * This independent key is safe even in an unconfirmed OTA image. */
-    rc = save(0);
-    if (!rc) {
-      begun = true;
-      resume_ms = k_uptime_get();
-      waiting = saved_time != 0;
-      needed = !waiting;
-      if (waiting && anchor_time) {
-        int64_t current = (int64_t)anchor_time + (resume_ms - anchor_ms) / 1000;
-        if (current >= saved_time) {
-          needed = current - saved_time > IDLE_MS / 1000;
-          waiting = false;
-        }
+    /* Keep the last known sample across OTA, reset and abrupt power loss.
+     * Until phone time arrives, the previous off-time remains unknown. */
+    begun = true;
+    resume_ms = k_uptime_get();
+    waiting = saved_time != 0;
+    needed = !waiting;
+    if (waiting && anchor_time) {
+      int64_t current = (int64_t)anchor_time + (resume_ms - anchor_ms) / 1000;
+      if (current >= saved_time) {
+        needed = current - saved_time > IDLE_MS / 1000;
+        waiting = false;
       }
     }
   }
@@ -97,17 +99,29 @@ void conditioning_observe(void)
 {
   k_mutex_lock(&conditioning_mutex, K_FOREVER);
   last_sample_ms = k_uptime_get();
+  if (last_sample_ms >= next_checkpoint && !waiting && !needed && anchor_time) {
+    /* Bound writes to once a minute; retry failures on the same schedule. */
+    next_checkpoint = last_sample_ms + CHECKPOINT_MS;
+    (void)checkpoint();
+  }
   k_mutex_unlock(&conditioning_mutex);
 }
-int conditioning_shutdown(void)
+static int checkpoint(void)
 {
-  k_mutex_lock(&conditioning_mutex, K_FOREVER);
-  uint32_t timestamp = 0;
+  uint32_t timestamp = saved_time;
   if (begun && !waiting && !needed && anchor_time && last_sample_ms >= 0) {
     int64_t value = (int64_t)anchor_time + (last_sample_ms - anchor_ms) / 1000;
     if (value >= MIN_EPOCH && value <= UINT32_MAX) timestamp = value;
   }
-  int rc = begun ? save(timestamp) : 0;
+  if (!begun || timestamp == saved_time) return 0;
+  int rc = save(timestamp);
+  if (!rc) saved_time = timestamp;
+  return rc;
+}
+int conditioning_shutdown(void)
+{
+  k_mutex_lock(&conditioning_mutex, K_FOREVER);
+  int rc = checkpoint();
   k_mutex_unlock(&conditioning_mutex);
   return rc;
 }

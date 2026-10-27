@@ -22,8 +22,8 @@ int settings_save_one(const char*k,const void*v,size_t n){assert(n==12);saves++;
 static ssize_t rd(void*arg,void*out,size_t n){memcpy(out,arg,n);return n;}
 static void boot(uint32_t stamp){
  saved_time=stamp;anchor_time=0;anchor_ms=resume_ms=0;
- last_sample_ms=conditioned_ms=-1;begun=waiting=needed=false;now=1000;
- assert(!conditioning_begin());assert(sys_get_be32(saved+4)==0);
+ last_sample_ms=conditioned_ms=-1;next_checkpoint=0;begun=waiting=needed=false;now=1000;
+ assert(!conditioning_begin());assert(saved_time==stamp);
 }
 int main(void){
  const uint32_t t=1800000000;
@@ -34,7 +34,7 @@ int main(void){
  now+=10000;conditioning_observe();assert(!conditioning_shutdown());
  assert(sys_get_be32(saved+4)==t+10);
  assert(!load("last",12,rd,saved));assert(saved_time==t+10);
- // Prior timestamp survives only in RAM while awaiting time; flash is invalidated.
+ // Prior timestamp survives boot; awaiting phone time does not erase it.
  boot(t);assert(waiting&&!conditioning_due(false));
  now+=7200000;conditioning_observe();conditioning_time_sync(t+7200+10800);
  assert(!waiting&&!conditioning_due(false)); // exactly 3h at resume: skip, despite 2h sync delay
@@ -51,9 +51,19 @@ int main(void){
  conditioning_observe();now+=10800000;assert(!conditioning_due(true));
  now+=1;assert(conditioning_due(true));assert(!conditioning_due(false));
  conditioning_completed();assert(!conditioning_due(true));
- // Failed invalidation prevents any sample startup; retry is possible.
- begun=false;fail=1;assert(conditioning_begin()==-EIO);assert(!begun);
- fail=0;assert(!conditioning_begin());
+ // A normal reboot retains the minute checkpoint without requiring clean shutdown.
+ boot(t);conditioning_time_sync(t+30);conditioning_observe();
+ assert(saved_time==t+30);int count=saves;
+ now+=10000;conditioning_observe();assert(saves==count);
+ now+=50000;conditioning_observe();assert(saved_time==t+90 && saves==count+1);
+ uint32_t recent=saved_time;boot(recent);assert(!conditioning_due(false));
+ conditioning_time_sync(recent+30);assert(!waiting&&!conditioning_due(false));
+ // Storage failure preserves the older reference and never prevents startup.
+ fail=1;conditioning_observe();assert(saved_time==recent);
+ now+=60000;fail=0;conditioning_observe();assert(saved_time==recent+90);
+ // Shutdown while the clock is unknown must not destroy the prior reference.
+ boot(t);count=saves;assert(!conditioning_shutdown());assert(saved_time==t && saves==count);
+
  // Corrupt/old timestamp is treated as missing, never used for arithmetic.
  saved[4]^=1;assert(load("last",12,rd,saved)==0);assert(saved_time==0);
  assert(load("last",1,rd,saved)==0);
